@@ -1,0 +1,59 @@
+name: Deploy documentation
+
+on:
+    push:
+        tags:
+            - 'v*'
+    workflow_dispatch:
+
+permissions:
+    contents: read
+    pages: write
+    id-token: write
+
+concurrency:
+    group: zynohosting-pages
+    cancel-in-progress: false
+
+jobs:
+    build:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Check out the release
+              uses: actions/checkout@v6
+              with:
+                  fetch-depth: 0
+
+            - name: Set up Node.js
+              uses: actions/setup-node@v6
+              with:
+                  node-version: '24'
+                  package-manager-cache: false
+
+            - name: Configure GitHub Pages
+              uses: actions/configure-pages@v5
+
+            - name: Build the VitePress site
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  corepack enable
+                  yarn --immutable
+                  yarn docs:build
+
+            - name: Upload the Pages artifact
+              uses: actions/upload-pages-artifact@v4
+              with:
+                  path: docs/.vitepress/dist
+
+    deploy:
+        name: Deploy
+        needs: build
+        runs-on: ubuntu-latest
+        environment:
+            name: github-pages
+            url: ${{ steps.deployment.outputs.page_url }}
+        steps:
+            - name: Deploy to GitHub Pages
+              id: deployment
+              uses: actions/deploy-pages@v4

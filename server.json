@@ -1,0 +1,43 @@
+{
+    "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+    "name": "io.github.zyno-io/zynohosting",
+    "title": "ZynoHosting",
+    "description": "Manage authorized ZynoHosting sites, files, deployments, and downloads through local stdio.",
+    "repository": {
+        "url": "https://github.com/zyno-io/zynohosting-cli",
+        "source": "github"
+    },
+    "version": "0.2.1",
+    "packages": [
+        {
+            "registryType": "npm",
+            "identifier": "@zyno-io/zynohosting",
+            "version": "0.2.1",
+            "transport": {
+                "type": "stdio"
+            },
+            "packageArguments": [
+                {
+                    "type": "positional",
+                    "value": "mcp"
+                }
+            ],
+            "environmentVariables": [
+                {
+                    "description": "Absolute local roots the MCP server may read and write, separated by the platform path delimiter.",
+                    "isRequired": true,
+                    "format": "string",
+                    "isSecret": false,
+                    "name": "ZYNO_HOSTING_MCP_ROOTS"
+                },
+                {
+                    "description": "Optional tenant API key. Omit it when using credentials saved by zynohosting login.",
+                    "isRequired": false,
+                    "format": "string",
+                    "isSecret": true,
+                    "name": "ZYNO_HOSTING_API_KEY"
+                }
+            ]
+        }
+    ]
+}

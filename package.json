@@ -1,0 +1,68 @@
+{
+    "name": "@zyno-io/zynohosting",
+    "version": "0.2.1",
+    "description": "CLI and local MCP server for managing ZynoHosting sites",
+    "license": "UNLICENSED",
+    "mcpName": "io.github.zyno-io/zynohosting",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/zyno-io/zynohosting-cli.git"
+    },
+    "homepage": "https://zyno-io.github.io/zynohosting-cli/",
+    "bugs": {
+        "url": "https://github.com/zyno-io/zynohosting-cli/issues"
+    },
+    "bin": {
+        "zynohosting": "dist/index.js",
+        "zynohosting-mcp": "dist/mcp.js"
+    },
+    "files": [
+        "dist",
+        "README.md",
+        "server.json"
+    ],
+    "type": "module",
+    "publishConfig": {
+        "access": "public",
+        "registry": "https://registry.npmjs.org/"
+    },
+    "scripts": {
+        "clean": "rm -rf dist",
+        "build": "tsc -p tsconfig.build.json && node scripts/make-executable.mjs",
+        "docs:dev": "vitepress docs",
+        "docs:build": "vitepress build docs",
+        "docs:preview": "vitepress preview docs",
+        "format": "oxfmt --write src test scripts docs .github *.md .oxfmtrc.json tsconfig.json tsconfig.build.json",
+        "test": "tsx --test test/**/*.test.ts",
+        "typecheck": "tsc -p tsconfig.json --noEmit",
+        "verify-package": "node scripts/verify-package.mjs",
+        "prepack": "yarn clean && yarn build && yarn verify-package"
+    },
+    "dependencies": {
+        "@modelcontextprotocol/sdk": "^1.29.0",
+        "commander": "^15.0.0",
+        "hash-wasm": "^4.12.0",
+        "ignore": "^7.0.6",
+        "tar-stream": "^3.2.0",
+        "zod": "^4.4.3"
+    },
+    "devDependencies": {
+        "@types/node": "^24.0.0",
+        "@types/tar-stream": "^3.1.4",
+        "oxfmt": "^0.56.0",
+        "tsx": "^4.20.6",
+        "typescript": "~6.0.0",
+        "vitepress": "1.6.4"
+    },
+    "engines": {
+        "node": ">=24 <25"
+    },
+    "keywords": [
+        "zynohosting",
+        "hosting",
+        "deployment",
+        "cli",
+        "mcp"
+    ],
+    "packageManager": "yarn@4.13.0"
+}
