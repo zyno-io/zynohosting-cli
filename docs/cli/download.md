@@ -1,6 +1,6 @@
 # Complete downloads
 
-Complete downloads produce a gzip-compressed site archive on the node and safely extract it into a new or empty local directory.
+Complete downloads stream a gzip-compressed site archive directly from the hosting node and safely extract it into a new or empty local directory without staging a second archive on either side.
 
 ## Download the deployable scope
 
@@ -35,7 +35,7 @@ The destination must be either:
 - a path that does not exist; or
 - an empty directory.
 
-Extraction happens in a temporary sibling directory. The CLI validates the complete archive before atomically moving the staged tree into place. Existing non-empty directories are never overlaid.
+Extraction happens in a temporary sibling directory. The CLI requires a complete transport, gzip stream, tar stream, and server completion marker before atomically moving the staged tree into place. Existing non-empty directories are never overlaid.
 
 ## Archive safety
 
@@ -56,7 +56,7 @@ The node agent also omits links and special files without following them and rep
 | `--sensitive`         | Include protected configuration and user-generated content. |
 | `-y`, `--yes`         | Download without prompting.                                 |
 | `--json`              | Emit one JSON result; requires `--yes`.                     |
-| `--timeout <seconds>` | Set the request timeout; default `600`.                     |
+| `--timeout <seconds>` | Set the streamed-body inactivity timeout; default `600`.    |
 
 ## Permissions
 

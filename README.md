@@ -129,7 +129,7 @@ Downloading protected configuration and user-generated content requires the sepa
 zynohosting download example.com ./complete-copy --sensitive
 ```
 
-The destination must be new or empty. Archives are extracted through a staging directory and reject absolute paths, traversal, links, devices, and other unsupported entries.
+The destination must be new or empty. Archive bytes are extracted as the hosting node generates them; the CLI validates the transport completion, gzip stream, and tar entries before atomically installing the staged tree. Absolute paths, traversal, links, devices, and other unsupported entries are rejected.
 
 ## Local MCP server
 

@@ -1,6 +1,6 @@
 import { CliError } from '../errors.js';
 import { FileDeleteResult, FileListResponse, FilePutResult, parseFileDeleteResult, parseFileList, parseFilePutResult } from '../protocol.js';
-import { request, requestJson } from './http.js';
+import { request, requestJson, requestStream, StreamingResponse } from './http.js';
 
 export class FileClient {
     private readonly baseUrl: string;
@@ -63,17 +63,27 @@ export class FileClient {
         return result;
     }
 
-    async archive(scope: 'deployable' | 'sensitive'): Promise<Response> {
-        const response = await request(`${this.baseUrl}/archives`, {
+    async archive(scope: 'deployable' | 'sensitive'): Promise<StreamingResponse> {
+        const body = JSON.stringify({ scope });
+        const response = await requestStream(`${this.baseUrl}/archives`, {
             method: 'POST',
-            headers: this.headers({ 'Content-Type': 'application/json', Accept: 'application/gzip' }),
-            body: JSON.stringify({ scope }),
-            timeoutMs: Math.max(this.timeoutMs, 45 * 60_000)
+            headers: this.headers({
+                'Content-Type': 'application/json',
+                'Content-Length': String(Buffer.byteLength(body)),
+                Accept: 'application/gzip',
+                Connection: 'TE',
+                TE: 'trailers'
+            }),
+            body,
+            timeoutMs: Math.max(this.timeoutMs, 45 * 60_000),
+            bodyTimeoutMs: this.timeoutMs
         });
-        if (response.headers.get('x-zh-archive-scope') !== scope) {
+        if (responseHeader(response, 'x-zh-archive-scope') !== scope) {
+            response.abort();
             throw new CliError('Agent returned a mismatched archive scope', 5, 'invalid_agent_response');
         }
-        if (!response.headers.get('content-type')?.toLowerCase().startsWith('application/gzip')) {
+        if (!responseHeader(response, 'content-type')?.toLowerCase().startsWith('application/gzip')) {
+            response.abort();
             throw new CliError('Agent returned an invalid archive content type', 5, 'invalid_agent_response');
         }
         return response;
@@ -92,4 +102,9 @@ export class FileClient {
             ...additional
         };
     }
+}
+
+export function responseHeader(response: Pick<StreamingResponse, 'headers'>, name: string): string | undefined {
+    const value = response.headers[name.toLowerCase()];
+    return Array.isArray(value) ? value[0] : value;
 }

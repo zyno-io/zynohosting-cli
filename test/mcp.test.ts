@@ -84,12 +84,18 @@ test('serves site metadata and downloads files only inside allowed roots', async
             return;
         }
         if (request.url === '/files/archives' && request.method === 'POST') {
+            assert.equal(request.headers.connection, 'TE');
+            assert.equal(request.headers.te, 'trailers');
             const body = JSON.parse(await requestText(request)) as { scope: string };
             response.setHeader('Content-Type', 'application/gzip');
+            response.setHeader('Trailer', 'X-ZH-Archive-Status, X-ZH-Archive-Error-Code');
+            response.setHeader('X-ZH-Archive-Protocol', 'stream-v1');
             response.setHeader('X-ZH-Archive-Scope', body.scope);
             response.setHeader('X-ZH-Archive-Entries', '1');
             response.setHeader('X-ZH-Archive-Skipped-Entries', '0');
-            response.end(snapshot);
+            response.write(snapshot);
+            response.addTrailers({ 'X-ZH-Archive-Status': 'complete' });
+            response.end();
             return;
         }
         if (request.url === '/deploy/capabilities' && request.method === 'GET') {

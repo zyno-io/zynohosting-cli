@@ -7,7 +7,8 @@ import { pipeline } from 'node:stream/promises';
 import { createGunzip } from 'node:zlib';
 import tar from 'tar-stream';
 
-import { FileClient } from '../api/file-client.js';
+import { FileClient, responseHeader } from '../api/file-client.js';
+import { StreamingResponse } from '../api/http.js';
 import { ConfigOverrides } from '../config.js';
 import { validateRelativePath } from '../deploy/inventory.js';
 import { CliError } from '../errors.js';
@@ -54,10 +55,10 @@ export async function applyDownload(plan: PreparedDownload): Promise<{ target: s
     if (Date.parse(plan.expiresAt) <= Date.now()) throw new CliError('The download authorization expired; create a new plan', 6, 'plan_expired');
     const response = await plan.client.archive(plan.scope);
     await extractArchiveResponse(response, plan.target);
-    const entriesHeader = response.headers.get('x-zh-archive-entries');
-    const entries = entriesHeader === null ? undefined : Number(entriesHeader);
-    const skippedHeader = response.headers.get('x-zh-archive-skipped-entries');
-    const skippedEntries = skippedHeader === null ? undefined : Number(skippedHeader);
+    const entriesHeader = responseHeader(response, 'x-zh-archive-entries');
+    const entries = entriesHeader === undefined ? undefined : Number(entriesHeader);
+    const skippedHeader = responseHeader(response, 'x-zh-archive-skipped-entries');
+    const skippedEntries = skippedHeader === undefined ? undefined : Number(skippedHeader);
     const result: { target: string; scope: string; entries?: number; skippedEntries?: number } = {
         target: plan.target,
         scope: plan.scope
@@ -84,8 +85,7 @@ export async function downloadSite(siteRef: string, directory: string, options: 
     }
 }
 
-export async function extractArchiveResponse(response: Response, target: string): Promise<void> {
-    if (!response.body) throw new CliError('Server returned an empty archive stream', 5, 'invalid_agent_response');
+export async function extractArchiveResponse(response: StreamingResponse, target: string): Promise<void> {
     await assertDownloadTarget(target);
     const parent = dirname(target);
     await mkdir(parent, { recursive: true });
@@ -108,7 +108,13 @@ export async function extractArchiveResponse(response: Response, target: string)
         })().catch(error => extract.destroy(error instanceof Error ? error : new Error(String(error))));
     });
     try {
-        await pipeline(Readable.from(response.body as unknown as AsyncIterable<Uint8Array>), createGunzip(), extract);
+        let extractionError: unknown;
+        try {
+            await pipeline(Readable.from(response.body), createGunzip(), extract);
+        } catch (error) {
+            extractionError = error;
+        }
+        await assertArchiveCompletion(response, extractionError);
         await assertDownloadTarget(target);
         const existing = await lstat(target).catch(error => {
             if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
@@ -119,6 +125,31 @@ export async function extractArchiveResponse(response: Response, target: string)
     } catch (error) {
         await rm(staging, { recursive: true, force: true }).catch(() => {});
         throw error;
+    }
+}
+
+async function assertArchiveCompletion(response: StreamingResponse, extractionError: unknown): Promise<void> {
+    let trailers: Awaited<StreamingResponse['trailers']> | undefined;
+    let trailerError: unknown;
+    try {
+        trailers = await response.trailers;
+    } catch (error) {
+        trailerError = error;
+    }
+    const protocol = responseHeader(response, 'x-zh-archive-protocol');
+    if (protocol === 'stream-v1' && trailers) {
+        const status = responseHeader({ headers: trailers }, 'x-zh-archive-status');
+        if (status === 'error') {
+            const candidate = responseHeader({ headers: trailers }, 'x-zh-archive-error-code');
+            const code = candidate && /^[a-z0-9_]{1,64}$/.test(candidate) ? candidate : 'archive_stream_error';
+            throw new CliError(`Archive stream failed: ${code}`, 4, code);
+        }
+    }
+    if (extractionError instanceof CliError) throw extractionError;
+    if (trailerError) throw trailerError;
+    if (extractionError) throw extractionError;
+    if (protocol === 'stream-v1' && responseHeader({ headers: trailers ?? {} }, 'x-zh-archive-status') !== 'complete') {
+        throw new CliError('Archive stream ended without a completion trailer', 4, 'incomplete_archive');
     }
 }
 

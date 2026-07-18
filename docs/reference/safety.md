@@ -74,7 +74,7 @@ An empty local deployable tree cannot delete the remote deployable scope unless 
 
 ## Archive extraction
 
-Complete downloads are extracted into a temporary sibling directory. The CLI rejects traversal, absolute paths, links, devices, special entries, and duplicates before moving the staged tree into the requested destination.
+Complete downloads are streamed into a temporary sibling directory. The CLI rejects traversal, absolute paths, links, devices, special entries, duplicates, interrupted transports, invalid gzip/tar completion, and missing server completion markers before moving the staged tree into the requested destination.
 
 ## Cache invalidation
 
