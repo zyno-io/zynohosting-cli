@@ -33,7 +33,7 @@ npx -y @zyno-io/zynohosting sites list
 Interactive users can sign in through Zyno:
 
 ```bash
-zynohosting login
+zynohosting login --permission hosting.sitesRead
 ```
 
 CI jobs should inject a tenant API key rather than save a browser session:
@@ -94,13 +94,15 @@ Continue with [Configure MCP](../mcp/).
 
 These options apply to the CLI and may be placed before a command:
 
-| Option                 | Purpose                                                                 |
-| ---------------------- | ----------------------------------------------------------------------- |
-| `-V`, `--version`      | Print the installed package version.                                    |
-| `--api-url <url>`      | Override the Hosting Manager API URL.                                   |
-| `--environment <name>` | Select `production`, `alpha`, or `dev`.                                 |
-| `--api-key <key>`      | Supply a tenant API key. Prefer the environment variable in automation. |
-| `--json`               | Emit machine-readable output where the command supports it.             |
+| Option                  | Purpose                                                                 |
+| ----------------------- | ----------------------------------------------------------------------- |
+| `-V`, `--version`       | Print the installed package version.                                    |
+| `--api-url <url>`       | Override the Hosting Manager API URL.                                   |
+| `--suite-api-url <url>` | Override the ZynoSuite API URL.                                         |
+| `--auth-api-url <url>`  | Override the Zyno Auth API URL.                                         |
+| `--environment <name>`  | Select `production`, `alpha`, or `dev`.                                 |
+| `--api-key <key>`       | Supply a tenant API key. Prefer the environment variable in automation. |
+| `--json`                | Emit machine-readable output where the command supports it.             |
 
 ::: tip
 Run `zynohosting <command> --help` to see command-specific options for the installed release.

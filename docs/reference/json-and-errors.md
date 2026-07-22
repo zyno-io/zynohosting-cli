@@ -71,7 +71,11 @@ The remote mutation already succeeded. Do not blindly retry the deployment as th
 | Code                        | Typical resolution                                                |
 | --------------------------- | ----------------------------------------------------------------- |
 | `missing_config`            | Run `zynohosting login` or provide an API key.                    |
-| `login_expired`             | Run interactive login again.                                      |
+| `login_expired`             | Log in again, or use `--renewable` for a long-running client.     |
+| `renewal_invalid`           | The one-time renewal token is invalid/used; log in again.         |
+| `renewal_forbidden`         | Tenant policy prohibits renewal; contact a tenant administrator.  |
+| `renewal_missing`           | The OS credential entry is unavailable; log in again.             |
+| `credential_store_failed`   | Unlock or repair the operating system credential store.           |
 | `invalid_environment`       | Use `production`, `alpha`, or `dev`.                              |
 | `confirmation_required`     | Use a terminal, `--dry-run`, or reviewed `--yes`.                 |
 | `precondition_failed`       | Refresh the file listing and review the new ETag/content.         |

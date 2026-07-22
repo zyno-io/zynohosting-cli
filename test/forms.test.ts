@@ -1,0 +1,310 @@
+import assert from 'node:assert/strict';
+import { createServer } from 'node:http';
+import { test } from 'node:test';
+
+import { DetailedForm, FormsClient } from '../src/api/forms-client.js';
+import { buildBasicFormDefinition, buildFormIntegration, EMBEDDING_GUIDE, normalizeWebOrigin } from '../src/mcp/forms.js';
+
+const FORM_ID = '11111111-1111-4111-8111-111111111111';
+const DEFINITION_ID = '22222222-2222-4222-8222-222222222222';
+
+test('builds a published-form definition with stable aliases, generated UUIDs, and basic field mappings', () => {
+    const definition = buildBasicFormDefinition({
+        name: 'Contact us',
+        title: 'Talk to us',
+        slug: 'contact-us',
+        submit_label: 'Send',
+        success_message: 'Received!',
+        notification_emails: [],
+        origins: [],
+        origin_sites: [],
+        fields: [
+            { key: 'message', label: 'Message', type: 'textarea', required: true, min_length: 10, max_length: 1000 },
+            { key: 'email', label: 'Email', type: 'email', required: false },
+            {
+                key: 'contact',
+                type: 'contact',
+                required: true,
+                fields: ['first_name', 'last_name', 'email', 'phone_cell', 'address']
+            },
+            { key: 'department', label: 'Department', type: 'radio', required: true, options: ['Sales', { title: 'Help', value: 'support' }] },
+            { key: 'terms', label: 'I agree', type: 'checkbox', required: true }
+        ]
+    });
+
+    assert.deepEqual(definition.header, { title: 'Talk to us' });
+    assert.deepEqual(definition.submit, { title: 'Send', successMessage: 'Received!' });
+    assert.equal(definition.pages.length, 1);
+    const fields = definition.pages[0]!.fields;
+    assert.equal(new Set(fields.map(field => field.id)).size, fields.length);
+    assert(fields.every(field => /^[0-9a-f-]{36}$/.test(field.id)));
+    assert.deepEqual(definition.fieldIdsByAlias, Object.fromEntries(fields.map(field => [field.alias, field.id])));
+    assert.deepEqual(fields[0], {
+        id: fields[0]!.id,
+        alias: 'message',
+        type: 'text',
+        label: 'Message',
+        format: 'large',
+        minLength: 10,
+        maxLength: 1000
+    });
+    assert.deepEqual(fields[1], {
+        id: fields[1]!.id,
+        alias: 'email',
+        optional: true,
+        type: 'text',
+        label: 'Email',
+        inputType: 'email'
+    });
+    assert.deepEqual(fields[2]!.fields, { firstName: true, lastName: true, email: true, phoneCell: true, address: true });
+    assert.deepEqual(fields[3]!.options, [{ title: 'Sales' }, { title: 'Help', value: 'support' }]);
+});
+
+test('maps every basic scalar field type and its constraints to the Suite definition model', () => {
+    const definition = buildBasicFormDefinition({
+        name: 'All fields',
+        submit_label: 'Submit',
+        success_message: 'Done',
+        notification_emails: [],
+        origins: [],
+        origin_sites: [],
+        fields: [
+            { key: 'plain', label: 'Plain', type: 'text', required: true, placeholder: 'Type here' },
+            { key: 'phone', label: 'Phone', type: 'phone', required: true },
+            { key: 'website', label: 'Website', type: 'url', required: true },
+            { key: 'amount', label: 'Amount', type: 'number', required: true, min: 0, max: 10, step: 0.5 },
+            { key: 'day', label: 'Day', type: 'date', required: true, min: '2026-01-01', max: '2026-12-31' },
+            { key: 'choice', label: 'Choice', type: 'select', required: true, options: ['One', 'Two'], enable_other: true }
+        ]
+    });
+    const fields = definition.pages[0]!.fields;
+
+    assert.equal(fields[0]!.type, 'text');
+    assert.equal(fields[0]!.placeholder, 'Type here');
+    assert.equal(fields[1]!.inputType, 'tel');
+    assert.equal(fields[2]!.inputType, 'url');
+    assert.deepEqual({ min: fields[3]!.min, max: fields[3]!.max, step: fields[3]!.step }, { min: 0, max: 10, step: 0.5 });
+    assert.deepEqual({ min: fields[4]!.min, max: fields[4]!.max }, { min: '2026-01-01', max: '2026-12-31' });
+    assert.deepEqual(fields[5]!.options, ['One', 'Two']);
+    assert.equal(fields[5]!.enableOther, true);
+});
+
+test('normalizes exact web origins and rejects paths, credentials, and non-web schemes', () => {
+    assert.equal(normalizeWebOrigin('https://EXAMPLE.com:443'), 'https://example.com');
+    assert.equal(normalizeWebOrigin('http://localhost:8080/'), 'http://localhost:8080');
+    assert.throws(() => normalizeWebOrigin('https://example.com/path'), /scheme and host/);
+    assert.throws(() => normalizeWebOrigin('https://user@example.com'), /scheme and host/);
+    assert.throws(() => normalizeWebOrigin('ftp://example.com'), /scheme and host/);
+});
+
+test('builds live endpoints and alias-keyed examples without credentials', () => {
+    const integration = buildFormIntegration(detailedForm(), 'https://suite.api.zyno.app');
+    const summary = integration.form as Record<string, unknown>;
+    assert.equal(Object.hasOwn(summary, 'activeDefinition'), false);
+    assert.equal(Object.hasOwn(summary, 'draftDefinition'), false);
+    assert.deepEqual(integration.liveDefinition, { id: DEFINITION_ID, version: 1, revision: 0, published: true });
+    assert.deepEqual(integration.endpoints, {
+        direct: 'https://zyno.app/f/acme/contact-us',
+        iframe: '<iframe src="https://zyno.app/f/acme/contact-us" title="Contact us" style="width:100%;min-height:720px;border:0" loading="lazy"></iframe>',
+        definition: `https://suite.api.zyno.app/public/forms/acme/${FORM_ID}?definitionId=${DEFINITION_ID}`,
+        currentDefinition: `https://suite.api.zyno.app/public/forms/acme/${FORM_ID}`,
+        submission: `https://suite.api.zyno.app/public/forms/acme/${FORM_ID}/${DEFINITION_ID}/submissions`
+    });
+    const submission = integration.submission as Record<string, unknown>;
+    assert.deepEqual(submission.openApiContentTypes, ['application/json']);
+    assert.deepEqual(submission.acceptedContentTypes, ['application/json', 'application/x-www-form-urlencoded', 'multipart/form-data']);
+    const examples = submission.examples as { json: unknown; urlencodedFields: Record<string, string>; html: string };
+    assert.deepEqual(examples.json, {
+        responses: {
+            email: 'person@example.com',
+            contact: {
+                firstName: 'Alex',
+                lastName: 'Example',
+                street1: '123 Main St',
+                zip: '10001',
+                city: 'Example',
+                state: 'NY'
+            }
+        }
+    });
+    assert.equal(examples.urlencodedFields['responses[contact][firstName]'], 'Alex');
+    assert.equal(examples.urlencodedFields['responses[contact][street1]'], '123 Main St');
+    assert.equal(examples.urlencodedFields['responses[contact][state]'], 'NY');
+    assert.equal(examples.urlencodedFields['responses[contact][street2]'], undefined);
+    assert.equal(examples.urlencodedFields['responses[contact][phoneHome]'], undefined);
+    assert.match(examples.html, /name="responses\[email\]"/);
+    assert.doesNotMatch(JSON.stringify(integration), /api-secret|Authorization|Bearer/);
+    assert.match(EMBEDDING_GUIDE, /OpenAPI-advertised/);
+    assert.match(EMBEDDING_GUIDE, /application\/x-www-form-urlencoded/);
+});
+
+test('describes repeatable-section aliases as arrays in generated integration examples', () => {
+    const form = detailedForm();
+    form.activeDefinition!.content.fieldIdsByAlias!.guestName = '55555555-5555-4555-8555-555555555555';
+    form.activeDefinition!.content.pages.push({
+        fields: [
+            {
+                id: '66666666-6666-4666-8666-666666666666',
+                type: 'section',
+                repeat: { min: 1, max: 3 },
+                fields: [
+                    {
+                        id: '55555555-5555-4555-8555-555555555555',
+                        alias: 'guestName',
+                        type: 'text',
+                        label: 'Guest name'
+                    }
+                ]
+            }
+        ]
+    });
+
+    const integration = buildFormIntegration(form, 'https://suite.api.zyno.app');
+    const submission = integration.submission as {
+        fieldsByAlias: Record<string, Record<string, unknown>>;
+        examples: { json: { responses: Record<string, unknown> }; urlencodedFields: Record<string, string>; html: string };
+    };
+    assert.deepEqual(submission.examples.json.responses.guestName, ['example response']);
+    assert.equal(submission.examples.urlencodedFields['responses[guestName][0]'], 'example response');
+    assert.equal(submission.fieldsByAlias.guestName!.repeated, true);
+    assert.match(submission.examples.html, /name="responses\[guestName\]\[0\]"/);
+});
+
+test('falls back to a field UUID when a legacy alias is unsafe for bracket notation', () => {
+    const form = detailedForm();
+    const fieldId = '77777777-7777-4777-8777-777777777777';
+    form.activeDefinition!.content.fieldIdsByAlias = Object.fromEntries([
+        ...Object.entries(form.activeDefinition!.content.fieldIdsByAlias!),
+        ['__proto__', fieldId]
+    ]);
+    form.activeDefinition!.content.pages[0]!.fields.push({ id: fieldId, alias: '__proto__', type: 'text', label: 'Legacy field' });
+
+    const integration = buildFormIntegration(form, 'https://suite.api.zyno.app');
+    const submission = integration.submission as {
+        fieldsByAlias: Record<string, { submissionKey: string }>;
+        examples: { json: { responses: Record<string, unknown> }; html: string };
+    };
+    assert.equal(submission.fieldsByAlias['__proto__']!.submissionKey, fieldId);
+    assert.equal(submission.examples.json.responses[fieldId], 'example response');
+    assert.equal(Object.hasOwn(submission.examples.json.responses, '__proto__'), false);
+    assert.match(submission.examples.html, new RegExp(`responses\\[${fieldId}\\]`));
+    assert.match((integration.warnings as string[]).join(' '), /reserved/);
+});
+
+test('FormsClient sends shared credentials to exact Suite paths and rejects malformed responses', async () => {
+    const seen: Array<{ method: string; url: string; authorization: string | undefined; body: unknown }> = [];
+    let malformed = false;
+    const server = createServer(async (request, response) => {
+        const bodyText = await requestText(request);
+        seen.push({
+            method: request.method ?? '',
+            url: request.url ?? '',
+            authorization: request.headers.authorization,
+            body: bodyText ? JSON.parse(bodyText) : undefined
+        });
+        response.setHeader('Content-Type', 'application/json');
+        if (malformed) {
+            response.end(JSON.stringify({ unexpected: true }));
+            return;
+        }
+        if (request.url === '/forms') response.end(JSON.stringify([formSummary()]));
+        else if (request.url === `/forms/manage/${FORM_ID}` && request.method === 'GET') response.end(JSON.stringify(detailedForm()));
+        else if (request.url === '/forms/manage' && request.method === 'POST') response.end(JSON.stringify(detailedForm()));
+        else if (request.url === `/forms/manage/${FORM_ID}` && request.method === 'PUT') response.end(JSON.stringify(detailedForm()));
+        else {
+            response.statusCode = 404;
+            response.end(JSON.stringify({ message: 'not found' }));
+        }
+    });
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    assert(address && typeof address === 'object');
+    const client = new FormsClient(`http://127.0.0.1:${address.port}`, { type: 'api-key', apiKey: 'api-secret' });
+
+    try {
+        assert.equal((await client.listForms())[0]!.id, FORM_ID);
+        assert.equal((await client.getForm(FORM_ID)).activeDefinition?.id, DEFINITION_ID);
+        await client.createForm({ name: 'Contact us', content: detailedForm().activeDefinition!.content });
+        await client.updateForm(FORM_ID, { corsOrigins: ['https://example.com'] });
+        assert.deepEqual(
+            seen.map(request => [request.method, request.url]),
+            [
+                ['GET', '/forms'],
+                ['GET', `/forms/manage/${FORM_ID}`],
+                ['POST', '/forms/manage'],
+                ['PUT', `/forms/manage/${FORM_ID}`]
+            ]
+        );
+        assert(seen.every(request => request.authorization === `Basic ${Buffer.from('api:api-secret').toString('base64')}`));
+        assert.deepEqual(seen[3]!.body, { corsOrigins: ['https://example.com'] });
+
+        malformed = true;
+        await assert.rejects(client.listForms(), (error: unknown) => error instanceof Error && /invalid forms response/.test(error.message));
+        await assert.rejects(
+            new FormsClient(undefined, { type: 'api-key', apiKey: 'api-secret' }).listForms(),
+            (error: unknown) => error instanceof Error && /Suite API URL is not configured/.test(error.message)
+        );
+    } finally {
+        await new Promise<void>((resolve, reject) => server.close(error => (error ? reject(error) : resolve())));
+    }
+});
+
+function formSummary() {
+    return {
+        id: FORM_ID,
+        name: 'Contact us',
+        slug: 'contact-us',
+        emailTo: ['ops@example.com'],
+        corsOrigins: ['https://old.example.com'],
+        activeDefinitionId: DEFINITION_ID,
+        createdAt: '2026-07-21T12:00:00.000Z',
+        updatedAt: '2026-07-21T12:00:00.000Z',
+        publicUrl: 'https://zyno.app/f/acme/contact-us',
+        hasDraft: false,
+        submissionCount: 2
+    };
+}
+
+function detailedForm(): DetailedForm {
+    return {
+        ...formSummary(),
+        activeDefinition: {
+            id: DEFINITION_ID,
+            version: 1,
+            isDraft: false,
+            revision: 0,
+            renderTemplate: null,
+            content: {
+                fieldIdsByAlias: {
+                    email: '33333333-3333-4333-8333-333333333333',
+                    contact: '44444444-4444-4444-8444-444444444444'
+                },
+                pages: [
+                    {
+                        fields: [
+                            {
+                                id: '33333333-3333-4333-8333-333333333333',
+                                alias: 'email',
+                                type: 'text',
+                                label: 'Email',
+                                inputType: 'email'
+                            },
+                            {
+                                id: '44444444-4444-4444-8444-444444444444',
+                                alias: 'contact',
+                                type: 'contact',
+                                fields: { firstName: true, lastName: true, address: true, phoneHome: true, phoneWork: true }
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+    };
+}
+
+async function requestText(request: AsyncIterable<unknown>): Promise<string> {
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.from(chunk as Buffer));
+    return Buffer.concat(chunks).toString('utf8');
+}

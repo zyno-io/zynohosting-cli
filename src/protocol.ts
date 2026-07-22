@@ -204,12 +204,12 @@ export function parseAutomationSite(value: unknown): AutomationSite {
                   const item = record(hostname, `hostnames[${index}]`);
                   return {
                       name: string(item.name, `hostnames[${index}].name`),
-                      type: string(item.type, `hostnames[${index}].type`)
+                      type: string(item.type ?? item.kind, `hostnames[${index}].type`)
                   };
               });
     return {
         id: uuid(object.id, 'site.id'),
-        fqdn: string(object.fqdn, 'site.fqdn'),
+        fqdn: string(object.fqdn ?? object.primaryHostname, 'site.fqdn'),
         status: string(object.status, 'site.status'),
         phpVersion: object.phpVersion === null ? null : string(object.phpVersion, 'site.phpVersion'),
         ...(hostnames === undefined ? {} : { hostnames })

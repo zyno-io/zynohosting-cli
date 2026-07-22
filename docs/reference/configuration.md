@@ -10,7 +10,7 @@ Credentials are selected in this order:
 2. environment variables;
 3. the saved configuration file.
 
-The API URL is selected from an explicit option, environment variable, selected environment, saved URL, or the production default.
+The Hosting API URL is selected from an explicit option, environment variable, selected environment, saved URL, or the production default. Form tools resolve the ZynoSuite API URL from `--suite-api-url` or `ZYNO_SUITE_API_URL`; token renewal resolves Zyno Auth from `--auth-api-url` or `ZYNO_AUTH_API_URL`. Standard environments and recognized Hosting API URLs select matching companion endpoints.
 
 ## Environment variables
 
@@ -18,9 +18,11 @@ The API URL is selected from an explicit option, environment variable, selected 
 | ------------------------------- | --------- | ------------------------------------------------------------ |
 | `ZYNO_HOSTING_API_KEY`          | yes       | Tenant API key for CLI, CI, or MCP.                          |
 | `ZYNO_HOSTING_ACCESS_TOKEN`     | yes       | Advanced user bearer-token injection.                        |
-| `ZYNO_HOSTING_TENANT_ID`        | no        | Required with an injected user access token.                 |
+| `ZYNO_HOSTING_TENANT_ID`        | no        | Optional tenant metadata for an injected scoped token.       |
 | `ZYNO_HOSTING_TOKEN_EXPIRES_AT` | no        | Optional bearer expiry as epoch milliseconds.                |
 | `ZYNO_HOSTING_API_URL`          | no        | Override the Hosting Manager base URL.                       |
+| `ZYNO_SUITE_API_URL`            | no        | Override the ZynoSuite base URL used by MCP form tools.      |
+| `ZYNO_AUTH_API_URL`             | no        | Override the Zyno Auth base URL used for renew and revoke.   |
 | `ZYNO_HOSTING_ENVIRONMENT`      | no        | Select `production`, `alpha`, or `dev`.                      |
 | `ZYNO_HOSTING_CONFIG`           | no        | Override the saved configuration path.                       |
 | `ZYNO_HOSTING_LOGIN_URL`        | no        | Override the browser-login SPA URL.                          |
@@ -43,9 +45,13 @@ The file is JSON and contains one credential form:
 ```json
 {
     "apiUrl": "https://hosting.api.zyno.app",
+    "suiteApiUrl": "https://suite.api.zyno.app",
+    "authApiUrl": "https://auth.api.zyno.app",
     "accessToken": "...",
     "tenantId": "...",
-    "expiresAt": 1784246400000
+    "expiresAt": 1784246400000,
+    "scopedToken": true,
+    "renewalKey": "11111111-1111-4111-8111-111111111111"
 }
 ```
 
@@ -54,11 +60,15 @@ Or:
 ```json
 {
     "apiUrl": "https://hosting.api.zyno.app",
+    "suiteApiUrl": "https://suite.api.zyno.app",
+    "authApiUrl": "https://auth.api.zyno.app",
     "apiKey": "..."
 }
 ```
 
-Do not combine `apiKey` and `accessToken`. User access tokens also require `tenantId`.
+Do not combine `apiKey` and `accessToken`. `tenantId` records the tenant resolved by the authorization page, but request authentication relies on the tenant-bound JWT and does not send that value as a header.
+
+`renewalKey` is only an opaque reference. The renewal token itself is stored in the operating system credential store and must never appear in this file. Removing or copying the JSON file does not copy the renewable credential. On Linux, renewable login requires a working Secret Service and the `secret-tool` command.
 
 ## Paths
 

@@ -3,17 +3,20 @@
 import { Command, Option } from 'commander';
 import { readFileSync } from 'node:fs';
 
-import { HostingEnvironment } from './config.js';
+import type { HostingEnvironment } from './config.js';
+
 import { CliError, errorMessage } from './errors.js';
 import { startHostingMcp } from './mcp/start.js';
 
 const version = readPackageVersion();
 const program = new Command()
     .name('zynohosting-mcp')
-    .description('Local stdio MCP server for ZynoHosting')
+    .description('Local stdio MCP server for ZynoHosting and ZynoForms')
     .version(version)
     .option('--root <path>', 'allow agents to access this local root (repeatable)', collect, [])
     .option('--api-url <url>', 'Hosting Manager API URL')
+    .option('--suite-api-url <url>', 'ZynoSuite API URL')
+    .option('--auth-api-url <url>', 'Zyno Auth API URL')
     .addOption(new Option('--environment <name>', 'Hosting environment').choices(['production', 'alpha', 'dev']))
     .option('--api-key <key>', 'tenant API key (prefer ZYNO_HOSTING_API_KEY)');
 
@@ -22,6 +25,8 @@ try {
     const args = program.opts<{
         root: string[];
         apiUrl?: string;
+        suiteApiUrl?: string;
+        authApiUrl?: string;
         apiKey?: string;
         environment?: HostingEnvironment;
     }>();
@@ -29,6 +34,8 @@ try {
         roots: args.root,
         version,
         ...(args.apiUrl ? { apiUrl: args.apiUrl } : {}),
+        ...(args.suiteApiUrl ? { suiteApiUrl: args.suiteApiUrl } : {}),
+        ...(args.authApiUrl ? { authApiUrl: args.authApiUrl } : {}),
         ...(args.apiKey ? { apiKey: args.apiKey } : {}),
         ...(args.environment ? { environment: args.environment } : {})
     });

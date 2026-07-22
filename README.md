@@ -6,6 +6,7 @@
 - inspect, download, upload, and delete individual files;
 - preview and apply complete manifest-driven deployments;
 - download a complete deployable snapshot or, with the extra permission, all user content;
+- discover, create, embed, and configure published ZynoForms;
 - expose the same operations to agents through a local stdio MCP server.
 
 The package requires Node.js 24.
@@ -35,8 +36,19 @@ npx -y @zyno-io/zynohosting sites list
 For an interactive user:
 
 ```bash
-zynohosting login
+zynohosting login --permission hosting.sitesRead
+zynohosting login \
+  --name "Claude MCP — work laptop" \
+  --permission hosting.sitesRead \
+  --permission hosting.deploy \
+  --permission forms.create \
+  --permission forms.edit \
+  --renewable
 ```
+
+Browser login creates a tenant-bound scoped CLI token. `hosting.sitesRead` is requested when no `--permission` is supplied; repeat the option to request the narrowest complete set for your workflow. Access tokens always expire after 60 minutes. `--renewable` stores the rotating renewal credential in the operating system credential store and lets long-running CLI/MCP processes refresh automatically. While MCP remains alive, it renews in the background even when no tools are being called; each request also checks freshness as a backstop. The renewal secret is never written to the JSON config file.
+
+Revoke the saved scoped grant and remove its local credentials with `zynohosting logout`.
 
 For CI or another non-interactive environment, inject a tenant API key:
 
@@ -57,6 +69,8 @@ Relevant environment variables are:
 - `ZYNO_HOSTING_TENANT_ID`
 - `ZYNO_HOSTING_TOKEN_EXPIRES_AT`
 - `ZYNO_HOSTING_API_URL`
+- `ZYNO_SUITE_API_URL`
+- `ZYNO_AUTH_API_URL`
 - `ZYNO_HOSTING_ENVIRONMENT`
 - `ZYNO_HOSTING_CONFIG`
 - `ZYNO_HOSTING_LOGIN_URL`
@@ -171,6 +185,10 @@ The MCP tools are:
 
 - `list_sites`
 - `get_site`
+- `list_forms`
+- `get_form_integration`
+- `create_basic_form`
+- `update_form_origins`
 - `list_files`
 - `get_file`
 - `put_file`
@@ -184,7 +202,7 @@ Full deploys and downloads intentionally use separate plan/apply calls. Plans ar
 
 ## Permissions
 
-The manager maps every access session to explicit hosting permissions:
+The tenant credential is limited by explicit Hosting and Forms permissions:
 
 | Permission                  | Capability                                   |
 | --------------------------- | -------------------------------------------- |
@@ -197,8 +215,14 @@ The manager maps every access session to explicit hosting permissions:
 | `hosting.downloadSensitive` | Include protected and user-generated content |
 | `hosting.analyticsRead`     | Read hosting analytics                       |
 | `hosting.analyticsManage`   | Change analytics configuration               |
+| `forms.create`              | Create and immediately publish a basic form  |
+| `forms.edit`                | Add or remove a form’s allowed CORS origins  |
 
-Tenant admins receive all hosting permissions by default. Non-admin credentials receive only the operations explicitly granted to them.
+The form discovery and integration tools use the same tenant credential against the ZynoSuite API. Adding origins from a hosting-site reference also requires `hosting.sitesRead`.
+
+Tenant admins receive the normal administrative defaults. Non-admin credentials receive only the operations explicitly granted to them.
+
+CLI-token requests cannot include `msp.login`, `msp.impersonate`, `core.changePassword`, or `core.manageFingerprints`. The browser also refuses unknown permissions and permissions the current user does not possess; it never partially grants a request.
 
 ## JSON output
 

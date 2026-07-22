@@ -1,6 +1,6 @@
 # Permissions
 
-ZynoHosting automation uses tenant permissions at the manager and short-lived capability scopes at the site’s cluster.
+ZynoHosting and ZynoForms automation use tenant permissions at their APIs. Hosting file, deploy, and download operations additionally use short-lived capability scopes at the site’s cluster.
 
 ## Tenant permissions
 
@@ -15,8 +15,14 @@ ZynoHosting automation uses tenant permissions at the manager and short-lived ca
 | `hosting.downloadSensitive` | Include protected and user-generated content in a snapshot. |
 | `hosting.analyticsRead`     | Read hosting analytics.                                     |
 | `hosting.analyticsManage`   | Change analytics configuration.                             |
+| `forms.create`              | Create and immediately publish a basic form.                |
+| `forms.edit`                | Change a form’s exact allowed CORS origins.                 |
 
-Tenant administrators receive all hosting permissions through their normal admin grant. Non-admin credentials receive only explicitly assigned operations.
+Browser login can issue a token only for permissions currently resolved for that user. A tenant may disable CLI-token minting and renewal for non-admin users. The browser rejects the whole request if any key is unknown, unavailable, malformed, or non-delegable; it does not partially grant the remainder.
+
+Never request `msp.login`, `msp.impersonate`, `core.changePassword`, or `core.manageFingerprints`. Those capabilities cannot be delegated to scoped CLI tokens.
+
+Listing forms and reading their integration details require an authenticated tenant identity. Expanding form origins from a ZynoHosting site additionally requires `hosting.sitesRead` because the tool reads that site’s primary, alias, and vanity hostnames.
 
 ## Cluster capability scopes
 
@@ -73,6 +79,7 @@ Check:
 2. that the site is granted to that tenant or principal;
 3. that the matching hosting permission is assigned;
 4. that a sensitive download has both required permissions;
-5. that an old interactive login has not expired.
+5. that a non-renewable login has not reached its fixed 60-minute expiration;
+6. that tenant policy still permits renewal for a renewable login.
 
 Do not solve a narrow authorization failure by broadly granting tenant-admin access. Add the smallest permission set that supports the workflow.

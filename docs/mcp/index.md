@@ -34,7 +34,19 @@ At least one existing local directory is required. Every local source, destinati
 }
 ```
 
-The MCP process inherits the normal saved login unless the client replaces `HOME` or `ZYNO_HOSTING_CONFIG`. For unattended agents, inject `ZYNO_HOSTING_API_KEY` through the client’s secret configuration.
+The MCP process inherits the normal saved login unless the client replaces `HOME` or `ZYNO_HOSTING_CONFIG`. For a personal, long-running MCP, authorize only its required permissions and opt into secure renewal:
+
+```bash
+zynohosting login \
+  --name "Claude MCP — work laptop" \
+  --permission hosting.sitesRead \
+  --permission hosting.deploy \
+  --permission forms.create \
+  --permission forms.edit \
+  --renewable
+```
+
+The MCP automatically rotates the one-time renewal credential through the operating system credential store. It schedules renewal in the background before the access token expires even if no tools are called, and it checks again before every authenticated request. The background timer does not keep the MCP process alive after its host closes the stdio session. For unattended service agents, inject `ZYNO_HOSTING_API_KEY` through the client’s secret configuration instead.
 
 ::: warning
 MCP client configuration frequently lives in a user profile. Do not commit API keys or access tokens in project configuration.
@@ -70,12 +82,14 @@ zynohosting-mcp --environment alpha --root /absolute/path/to/project
 
 The MCP binary accepts:
 
-| Option                 | Purpose                                                |
-| ---------------------- | ------------------------------------------------------ |
-| `--root <path>`        | Add an allowed local root; repeatable.                 |
-| `--api-url <url>`      | Override the Hosting Manager URL.                      |
-| `--environment <name>` | Select `production`, `alpha`, or `dev`.                |
-| `--api-key <key>`      | Supply a tenant API key. Prefer environment injection. |
+| Option                  | Purpose                                                |
+| ----------------------- | ------------------------------------------------------ |
+| `--root <path>`         | Add an allowed local root; repeatable.                 |
+| `--api-url <url>`       | Override the Hosting Manager URL.                      |
+| `--suite-api-url <url>` | Override the ZynoSuite API URL used by form tools.     |
+| `--auth-api-url <url>`  | Override the Zyno Auth URL used for token renewal.     |
+| `--environment <name>`  | Select `production`, `alpha`, or `dev`.                |
+| `--api-key <key>`       | Supply a tenant API key. Prefer environment injection. |
 
 It also honors the normal [configuration environment variables](../reference/configuration#environment-variables).
 
@@ -104,10 +118,14 @@ Plans:
 
 ## Available tools
 
-The server exposes ten tools:
+The server exposes fourteen tools:
 
 - `list_sites`
 - `get_site`
+- `list_forms`
+- `get_form_integration`
+- `create_basic_form`
+- `update_form_origins`
 - `list_files`
 - `get_file`
 - `put_file`
@@ -118,3 +136,5 @@ The server exposes ten tools:
 - `apply_download`
 
 See the [MCP tool reference](./tools) for arguments, effects, and permissions.
+
+It also publishes the `zynoforms://guides/embedding` resource. Agents can read it for a compact description of direct links, iframes, public submission formats, alias-keyed fields, versioned endpoints, body limits, and CORS.

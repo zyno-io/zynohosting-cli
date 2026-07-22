@@ -1,7 +1,8 @@
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { delimiter } from 'node:path';
 
-import { ConfigOverrides } from '../config.js';
+import type { ConfigOverrides } from '../config.js';
+
 import { AllowedLocalRoots } from './local-paths.js';
 import { createHostingMcpServer } from './server.js';
 
@@ -19,6 +20,8 @@ export async function startHostingMcp(options: StartMcpOptions): Promise<void> {
         roots,
         version: options.version,
         ...(options.apiUrl ? { apiUrl: options.apiUrl } : {}),
+        ...(options.suiteApiUrl ? { suiteApiUrl: options.suiteApiUrl } : {}),
+        ...(options.authApiUrl ? { authApiUrl: options.authApiUrl } : {}),
         ...(options.apiKey ? { apiKey: options.apiKey } : {}),
         ...(options.environment ? { environment: options.environment } : {})
     });

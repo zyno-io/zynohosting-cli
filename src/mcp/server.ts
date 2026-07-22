@@ -3,12 +3,15 @@ import { createReadStream } from 'node:fs';
 import { lstat } from 'node:fs/promises';
 import { z } from 'zod';
 
+import { FormsClient } from '../api/forms-client.js';
 import { ManagerClient } from '../api/manager-client.js';
+import { startCredentialRefreshLoop } from '../auth/credential-refresh.js';
 import { applyPreparedDeployment, prepareDeployment, PreparedDeployment } from '../commands/deploy-site.js';
 import { applyDownload, prepareDownload, PreparedDownload } from '../commands/download-site.js';
 import { createFileClient, purgeSiteCacheAfterMutation, writeResponseAtomically } from '../commands/files.js';
 import { ConfigOverrides, resolveConfig } from '../config.js';
-import { CliError } from '../errors.js';
+import { CliError, errorMessage } from '../errors.js';
+import { registerFormsMcp } from './forms.js';
 import { AllowedLocalRoots } from './local-paths.js';
 
 export interface McpServerOptions extends ConfigOverrides {
@@ -21,9 +24,23 @@ const MAX_PENDING_PLANS = 16;
 export async function createHostingMcpServer(options: McpServerOptions): Promise<McpServer> {
     const config = await resolveConfig(options);
     const manager = new ManagerClient(config.apiUrl, config.credential);
+    const forms = new FormsClient(config.suiteApiUrl, config.credential);
     const deployments = new Map<string, PreparedDeployment>();
     const downloads = new Map<string, PreparedDownload>();
     const server = new McpServer({ name: 'io.github.zyno-io/zynohosting', version: options.version }, { capabilities: { logging: {} } });
+    const stopCredentialRefresh = startCredentialRefreshLoop(config.credential, {
+        onError: async error => {
+            if (!server.isConnected()) return;
+            await server.sendLoggingMessage({
+                level: 'warning',
+                logger: 'zynohosting.auth',
+                data: `Background credential renewal failed: ${errorMessage(error)}`
+            });
+        }
+    });
+    server.server.onclose = stopCredentialRefresh;
+
+    registerFormsMcp(server, forms, manager, config.suiteApiUrl);
 
     server.registerTool(
         'list_sites',

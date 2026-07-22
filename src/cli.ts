@@ -1,12 +1,14 @@
 import { Command, Option } from 'commander';
 import { readFileSync } from 'node:fs';
 
+import type { HostingEnvironment } from './config.js';
+
 import { deploySite, DeploySiteOptions } from './commands/deploy-site.js';
 import { downloadSite, DownloadSiteOptions } from './commands/download-site.js';
 import { deleteFile, getFile, listFiles, putFile } from './commands/files.js';
 import { login, LoginOptions } from './commands/login.js';
+import { logout, LogoutOptions } from './commands/logout.js';
 import { getSite, listSites } from './commands/sites.js';
-import { HostingEnvironment } from './config.js';
 import { startHostingMcp } from './mcp/start.js';
 
 const PACKAGE_VERSION = readPackageVersion();
@@ -18,6 +20,8 @@ export function createProgram(): Command {
         .description('Manage and deploy ZynoHosting sites')
         .version(PACKAGE_VERSION)
         .option('--api-url <url>', 'Hosting Manager API URL')
+        .option('--suite-api-url <url>', 'ZynoSuite API URL')
+        .option('--auth-api-url <url>', 'Zyno Auth API URL')
         .addOption(environmentOption())
         .option('--api-key <key>', 'tenant API key (prefer ZYNO_HOSTING_API_KEY)')
         .option('--json', 'emit machine-readable JSON');
@@ -26,20 +30,53 @@ export function createProgram(): Command {
         .command('login')
         .description('sign in through Zyno or save a CI API key')
         .option('--api-url <url>', 'Hosting Manager API URL')
+        .option('--suite-api-url <url>', 'ZynoSuite API URL')
+        .option('--auth-api-url <url>', 'Zyno Auth API URL')
         .addOption(environmentOption())
         .option('--api-key <key>', 'tenant API key instead of browser login')
         .option('--login-url <url>', 'Zyno SPA login page URL')
+        .option('--name <description>', 'name shown on the authorization screen')
+        .option('--permission <key>', 'permission to request (repeatable)', collect, [])
+        .option('--renewable', 'securely store a renewable credential in the system credential store')
         .option('--no-open', 'print the login URL instead of opening a browser')
         .addOption(new Option('--timeout <seconds>', 'browser login timeout').argParser(positiveInteger).default(300))
-        .action(async (commandOptions: LoginOptions & { timeout: number }) => {
-            const global = program.opts<{ apiUrl?: string; apiKey?: string; environment?: HostingEnvironment }>();
+        .action(async (commandOptions: LoginOptions & { timeout: number; permission: string[] }) => {
+            const global = program.opts<{
+                apiUrl?: string;
+                suiteApiUrl?: string;
+                authApiUrl?: string;
+                apiKey?: string;
+                environment?: HostingEnvironment;
+            }>();
             await login({
                 ...((commandOptions.apiUrl ?? global.apiUrl) ? { apiUrl: commandOptions.apiUrl ?? global.apiUrl } : {}),
+                ...((commandOptions.suiteApiUrl ?? global.suiteApiUrl) ? { suiteApiUrl: commandOptions.suiteApiUrl ?? global.suiteApiUrl } : {}),
+                ...((commandOptions.authApiUrl ?? global.authApiUrl) ? { authApiUrl: commandOptions.authApiUrl ?? global.authApiUrl } : {}),
                 ...((commandOptions.environment ?? global.environment) ? { environment: commandOptions.environment ?? global.environment } : {}),
                 ...((commandOptions.apiKey ?? global.apiKey) ? { apiKey: commandOptions.apiKey ?? global.apiKey } : {}),
                 ...(commandOptions.loginUrl ? { loginUrl: commandOptions.loginUrl } : {}),
+                ...(commandOptions.name ? { name: commandOptions.name } : {}),
+                ...(commandOptions.permission.length ? { permissionKeys: commandOptions.permission } : {}),
+                ...(commandOptions.renewable ? { renewable: true } : {}),
                 timeoutSeconds: commandOptions.timeout,
                 ...(commandOptions.open === undefined ? {} : { open: commandOptions.open })
+            });
+        });
+
+    program
+        .command('logout')
+        .description('revoke the saved scoped token and remove local credentials')
+        .option('--api-url <url>', 'Hosting Manager API URL')
+        .option('--suite-api-url <url>', 'ZynoSuite API URL')
+        .option('--auth-api-url <url>', 'Zyno Auth API URL')
+        .addOption(environmentOption())
+        .action(async (commandOptions: LogoutOptions) => {
+            const context = commandContext(program, commandOptions);
+            await logout({
+                ...(context.apiUrl ? { apiUrl: context.apiUrl } : {}),
+                ...(context.suiteApiUrl ? { suiteApiUrl: context.suiteApiUrl } : {}),
+                ...(context.authApiUrl ? { authApiUrl: context.authApiUrl } : {}),
+                ...(context.environment ? { environment: context.environment } : {})
             });
         });
 
@@ -182,7 +219,7 @@ export function createProgram(): Command {
 
     program
         .command('mcp')
-        .description('run the local stdio MCP server')
+        .description('run the local ZynoHosting and ZynoForms MCP server')
         .option('--root <path>', 'allow agents to access this local root (repeatable)', collect, [])
         .action(async (commandOptions: { root: string[] }) => {
             const context = commandContext(program, {});
@@ -190,6 +227,8 @@ export function createProgram(): Command {
                 roots: commandOptions.root,
                 version: PACKAGE_VERSION,
                 ...(context.apiUrl ? { apiUrl: context.apiUrl } : {}),
+                ...(context.suiteApiUrl ? { suiteApiUrl: context.suiteApiUrl } : {}),
+                ...(context.authApiUrl ? { authApiUrl: context.authApiUrl } : {}),
                 ...(context.apiKey ? { apiKey: context.apiKey } : {}),
                 ...(context.environment ? { environment: context.environment } : {})
             });
@@ -200,16 +239,34 @@ export function createProgram(): Command {
 
 function commandContext(
     program: Command,
-    commandOptions: { apiUrl?: string; apiKey?: string; environment?: HostingEnvironment; json?: boolean }
+    commandOptions: {
+        apiUrl?: string;
+        suiteApiUrl?: string;
+        authApiUrl?: string;
+        apiKey?: string;
+        environment?: HostingEnvironment;
+        json?: boolean;
+    }
 ): {
     apiUrl?: string;
+    suiteApiUrl?: string;
+    authApiUrl?: string;
     apiKey?: string;
     environment?: HostingEnvironment;
     json: boolean;
 } {
-    const global = program.opts<{ apiUrl?: string; apiKey?: string; environment?: HostingEnvironment; json?: boolean }>();
+    const global = program.opts<{
+        apiUrl?: string;
+        suiteApiUrl?: string;
+        authApiUrl?: string;
+        apiKey?: string;
+        environment?: HostingEnvironment;
+        json?: boolean;
+    }>();
     return {
         ...((commandOptions.apiUrl ?? global.apiUrl) ? { apiUrl: commandOptions.apiUrl ?? global.apiUrl } : {}),
+        ...((commandOptions.suiteApiUrl ?? global.suiteApiUrl) ? { suiteApiUrl: commandOptions.suiteApiUrl ?? global.suiteApiUrl } : {}),
+        ...((commandOptions.authApiUrl ?? global.authApiUrl) ? { authApiUrl: commandOptions.authApiUrl ?? global.authApiUrl } : {}),
         ...((commandOptions.apiKey ?? global.apiKey) ? { apiKey: commandOptions.apiKey ?? global.apiKey } : {}),
         ...((commandOptions.environment ?? global.environment) ? { environment: commandOptions.environment ?? global.environment } : {}),
         json: commandOptions.json ?? global.json ?? false

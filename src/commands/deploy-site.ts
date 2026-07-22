@@ -89,6 +89,7 @@ export async function prepareDeployment(
     const timeoutMs = Math.max(1, options.timeoutSeconds ?? 600) * 1000;
     const config = await resolveConfig({
         ...(options.apiUrl ? { apiUrl: options.apiUrl } : {}),
+        ...(options.authApiUrl ? { authApiUrl: options.authApiUrl } : {}),
         ...(options.apiKey ? { apiKey: options.apiKey } : {}),
         ...(options.environment ? { environment: options.environment } : {})
     });

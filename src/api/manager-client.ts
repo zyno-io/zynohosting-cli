@@ -1,4 +1,6 @@
-import { ManagerCredential } from '../config.js';
+import type { ManagerCredential } from '../config.js';
+
+import { ensureFreshCredential } from '../auth/credential-refresh.js';
 import { CliError } from '../errors.js';
 import {
     AccessSession,
@@ -24,7 +26,7 @@ export class ManagerClient {
             await requestJson(`${this.apiUrl}/v1/sites`, {
                 timeoutMs: this.timeoutMs,
                 headers: {
-                    ...authorizationHeaders(this.credential),
+                    ...(await authorizationHeaders(this.credential)),
                     Accept: 'application/json'
                 }
             })
@@ -36,7 +38,7 @@ export class ManagerClient {
             await requestJson(`${this.apiUrl}/v1/sites/${encodeURIComponent(siteRef)}`, {
                 timeoutMs: this.timeoutMs,
                 headers: {
-                    ...authorizationHeaders(this.credential),
+                    ...(await authorizationHeaders(this.credential)),
                     Accept: 'application/json'
                 }
             })
@@ -49,7 +51,7 @@ export class ManagerClient {
             method: 'POST',
             timeoutMs: this.timeoutMs,
             headers: {
-                ...authorizationHeaders(this.credential),
+                ...(await authorizationHeaders(this.credential)),
                 'Content-Type': 'application/json',
                 Accept: 'application/json'
             },
@@ -78,19 +80,17 @@ export class ManagerClient {
             method: 'POST',
             timeoutMs: this.timeoutMs,
             headers: {
-                ...authorizationHeaders(this.credential),
+                ...(await authorizationHeaders(this.credential)),
                 Accept: 'application/json'
             }
         });
     }
 }
 
-export function authorizationHeaders(credential: ManagerCredential): Record<string, string> {
+export async function authorizationHeaders(credential: ManagerCredential): Promise<Record<string, string>> {
+    await ensureFreshCredential(credential);
     if (credential.type === 'api-key') {
         return { Authorization: `Basic ${Buffer.from(`api:${credential.apiKey}`, 'utf8').toString('base64')}` };
     }
-    return {
-        Authorization: `Bearer ${credential.accessToken}`,
-        'x-zs-tid': credential.tenantId
-    };
+    return { Authorization: `Bearer ${credential.accessToken}` };
 }

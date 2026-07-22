@@ -6,12 +6,15 @@ import { CliError } from '../errors.js';
 const CALLBACK_PATH = '/callback';
 const MAX_BODY_BYTES = 16 * 1024;
 const TOKEN_MAX_LENGTH = 12 * 1024;
+const RENEWAL_TOKEN_MAX_LENGTH = 16 * 1024;
+const MAX_ACCESS_LIFETIME_MS = 2 * 60 * 60 * 1000;
 const TENANT_ID_PATTERN = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 
 export interface UserCredential {
     accessToken: string;
     tenantId: string;
     expiresAt: number;
+    renewalToken?: string;
 }
 
 export interface LoopbackLogin {
@@ -21,19 +24,32 @@ export interface LoopbackLogin {
     close(): Promise<void>;
 }
 
-export async function startLoopbackLogin(options: { timeoutMs: number }): Promise<LoopbackLogin> {
+export async function startLoopbackLogin(options: {
+    timeoutMs: number;
+    renewable?: boolean;
+    onCredential?: (credential: UserCredential) => Promise<void>;
+}): Promise<LoopbackLogin> {
     const state = randomBytes(32).toString('base64url');
     let resolveResult!: (credential: UserCredential) => void;
     let rejectResult!: (error: Error) => void;
     let settled = false;
+    let processing = false;
     let timer: NodeJS.Timeout | undefined;
     const result = new Promise<UserCredential>((resolve, reject) => {
         resolveResult = resolve;
         rejectResult = reject;
     });
+    // Browser launch/storage may still be in progress when the listener rejects; keep Node from
+    // treating that short gap before the caller awaits `result` as an unhandled rejection.
+    void result.catch(() => {});
 
     const server = createServer((request, response) => {
-        void handleCallback(request, response, state)
+        void handleCallback(request, response, state, options.renewable ?? false, options.onCredential, () => {
+            if (processing || settled) return false;
+            processing = true;
+            if (timer) clearTimeout(timer);
+            return true;
+        })
             .then(outcome => {
                 if (!outcome || settled) return;
                 settled = true;
@@ -82,7 +98,10 @@ export async function startLoopbackLogin(options: { timeoutMs: number }): Promis
 async function handleCallback(
     request: IncomingMessage,
     response: ServerResponse,
-    expectedState: string
+    expectedState: string,
+    renewable: boolean,
+    onCredential: ((credential: UserCredential) => Promise<void>) | undefined,
+    acceptCallback: () => boolean
 ): Promise<UserCredential | Error | undefined> {
     setResponseSecurityHeaders(response);
     if (request.socket.remoteAddress !== '127.0.0.1') {
@@ -106,24 +125,45 @@ async function handleCallback(
         const tooLarge = error instanceof CliError && error.code === 'callback_too_large';
         return rejectRequest(response, tooLarge ? 413 : 400, tooLarge ? 'Callback body is too large' : 'Could not read callback body');
     }
-    if (!safeEqual(form.get('state') ?? '', expectedState)) {
+    if (!hasSingleValue(form, 'state') || !safeEqual(form.get('state') ?? '', expectedState)) {
         return rejectRequest(response, 400, 'Invalid login state');
     }
+    if (hasRepeatedValue(form, 'error')) return rejectRequest(response, 400, 'Invalid login response');
     const loginError = form.get('error');
     if (loginError) {
         successResponse(response, 'Zyno login was not completed. You can close this window.');
-        return new CliError(`Zyno login failed: ${loginError.slice(0, 500)}`, 3, 'login_failed');
+        return new CliError(`Zyno login failed: ${loginError.slice(0, 500).replace(/[\u0000-\u001f\u007f]/g, ' ')}`, 3, 'login_failed');
     }
 
-    const accessToken = form.get('jwt') ?? '';
-    const tenantId = form.get('tenantId') ?? '';
+    if (!['jwt', 'tenantId', 'expiresAt'].every(key => hasSingleValue(form, key))) {
+        return rejectRequest(response, 400, 'Invalid login response');
+    }
+    const accessToken = form.get('jwt')!;
+    const tenantId = form.get('tenantId')!;
     const expiresAt = Number(form.get('expiresAt'));
+    const renewalValues = form.getAll('renewalToken');
+    if ((renewable && renewalValues.length !== 1) || (!renewable && renewalValues.length !== 0)) {
+        return rejectRequest(response, 400, 'Invalid renewal credential');
+    }
+    const renewalToken = renewalValues[0];
     if (!isJwt(accessToken)) return rejectRequest(response, 400, 'Invalid access token');
     if (!TENANT_ID_PATTERN.test(tenantId)) return rejectRequest(response, 400, 'Invalid tenant ID');
-    if (!Number.isSafeInteger(expiresAt) || expiresAt <= Date.now()) return rejectRequest(response, 400, 'Invalid token expiration');
+    if (!Number.isSafeInteger(expiresAt) || expiresAt <= Date.now() || expiresAt > Date.now() + MAX_ACCESS_LIFETIME_MS) {
+        return rejectRequest(response, 400, 'Invalid token expiration');
+    }
+    if (renewalToken !== undefined && !isRenewalToken(renewalToken)) return rejectRequest(response, 400, 'Invalid renewal credential');
+    if (!acceptCallback()) return rejectRequest(response, 409, 'A login callback is already being processed');
+
+    const credential = { accessToken, tenantId, expiresAt, ...(renewalToken === undefined ? {} : { renewalToken }) };
+    try {
+        await onCredential?.(credential);
+    } catch (error) {
+        failureResponse(response, 'ZynoHosting could not save this login. Return to the terminal for details.');
+        return error instanceof Error ? error : new CliError('Could not save the Zyno login', 1, 'login_save_failed');
+    }
 
     successResponse(response, 'ZynoHosting login complete. You can close this window.');
-    return { accessToken, tenantId, expiresAt };
+    return credential;
 }
 
 async function readBody(request: IncomingMessage): Promise<string> {
@@ -149,6 +189,18 @@ function isJwt(value: string): boolean {
     return parts.length === 3 && parts.every(part => /^[A-Za-z0-9_-]+$/.test(part));
 }
 
+function isRenewalToken(value: string): boolean {
+    return value.length <= RENEWAL_TOKEN_MAX_LENGTH && /^zrt_[A-Za-z0-9_-]+$/.test(value);
+}
+
+function hasSingleValue(form: URLSearchParams, key: string): boolean {
+    return form.getAll(key).length === 1;
+}
+
+function hasRepeatedValue(form: URLSearchParams, key: string): boolean {
+    return form.getAll(key).length > 1;
+}
+
 function safeEqual(actual: string, expected: string): boolean {
     const actualHash = createHash('sha256').update(actual).digest();
     const expectedHash = createHash('sha256').update(expected).digest();
@@ -167,6 +219,14 @@ function successResponse(response: ServerResponse, message: string): void {
     response.setHeader('Content-Type', 'text/html; charset=utf-8');
     response.end(
         `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>ZynoHosting CLI</title><p>${message}</p><script>window.close()</script>`
+    );
+}
+
+function failureResponse(response: ServerResponse, message: string): void {
+    response.statusCode = 500;
+    response.setHeader('Content-Type', 'text/html; charset=utf-8');
+    response.end(
+        `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>ZynoHosting CLI</title><p>${message}</p>`
     );
 }
 

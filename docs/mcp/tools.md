@@ -24,6 +24,107 @@ Gets one authorized site by UUID or hostname.
 - Mutates remote state: no
 - Permission: `hosting.sitesRead`
 
+## ZynoForms
+
+### `list_forms`
+
+Lists the tenant’s existing forms. Each item includes form metadata, the customer-facing direct URL, and a ready-to-use iframe snippet.
+
+- Arguments: none
+- Mutates remote state: no
+- Permission: authenticated tenant access
+
+### `get_form_integration`
+
+Returns everything needed to connect a site to the current live version of one form:
+
+```json
+{ "form": "contact-us" }
+```
+
+`form` is a form UUID or exact slug; names are intentionally not accepted. The result includes:
+
+- direct and iframe embed code;
+- stable form-UUID public definition and submission URLs, version-pinned to the live definition, plus the current-definition URL;
+- the live definition ID, version, and revision;
+- the response contract keyed by stable field alias;
+- JSON, URL-encoded, multipart-text, and native HTML examples;
+- accepted content types and the 5 MiB body limit;
+- a warning when an unpublished draft exists.
+
+JSON is the recommended and OpenAPI-advertised submission format. The runtime also accepts `application/x-www-form-urlencoded` and multipart text fields using names such as `responses[email]` and `responses[contact][firstName]`. Public definition and submission endpoints require no credential.
+
+The native HTML example posts successfully without JavaScript, then navigates to the API’s JSON success response. Intercept the submit event and render an in-page confirmation when that user experience is preferred; cross-origin `fetch` requires the page’s exact origin to be allowed.
+
+- Mutates remote state: no
+- Permission: authenticated tenant access
+
+### `create_basic_form`
+
+Creates a one-page form and immediately publishes version 1. This is deliberately a simple creator rather than the complete ZynoForms authoring model.
+
+```json
+{
+    "name": "Request a quote",
+    "slug": "request-quote",
+    "title": "Tell us about your project",
+    "submit_label": "Send request",
+    "success_message": "Thanks—we’ll be in touch.",
+    "notification_emails": ["sales@example.com"],
+    "origins": ["https://www.example.com"],
+    "origin_sites": ["example.com"],
+    "fields": [
+        { "key": "name", "label": "Name", "type": "text" },
+        { "key": "email", "label": "Email", "type": "email" },
+        { "key": "message", "label": "Message", "type": "textarea" }
+    ]
+}
+```
+
+`fields` accepts `text`, `textarea`, `email`, `phone`, `url`, `number`, `date`, `select`, `radio`, `checkbox`, and one `contact` field. Every field has a unique JavaScript-identifier `key`; that becomes its stable submission alias. `required` defaults to `true`.
+
+The rendered form and generated HTML enforce required fields in the browser. Custom JavaScript integrations should enforce the returned `required` contract before submitting; the public API cannot generally require conditionally visible fields.
+
+For `select`, supply string `options`. Radio options may be strings or `{ "title": "Shown label", "value": "submitted-value" }`. A contact field has no overall label—the selected details label themselves—and uses this shape:
+
+```json
+{
+    "key": "contact",
+    "type": "contact",
+    "fields": ["first_name", "last_name", "email", "phone_cell", "address"]
+}
+```
+
+Its `fields` may contain `display_name`, `first_name`, `last_name`, `company`, `birthdate`, `phone_cell`, `email`, `address`, and `zip`. Use `zip` for ZIP-only collection; `address` already includes street, ZIP, city, and state.
+
+Exact `origins` are normalized and deduplicated. Each `origin_sites` reference expands through `get_site` to HTTPS origins for its current primary, alias, and vanity hostnames. The result contains the same integration package as `get_form_integration`.
+
+- Mutates remote state: yes; creates and publishes
+- Idempotent: no
+- Permission: `forms.create`; `hosting.sitesRead` when `origin_sites` is used
+
+### `update_form_origins`
+
+Idempotently adds or removes exact form CORS origins:
+
+```json
+{
+    "form": "contact-us",
+    "add_origins": ["https://app.example.org"],
+    "remove_origins": ["https://old.example.org"],
+    "add_sites": ["example.com"],
+    "remove_sites": []
+}
+```
+
+At least one add/remove list must be non-empty. An origin contains only an HTTP(S) scheme, host, and optional port. Site references expand to all current HTTPS hostnames. Adding and removing the same normalized origin in one request is rejected. A request that produces no change skips the update call.
+
+- Mutates remote state: yes; additions and removals apply immediately
+- Idempotent: yes
+- Permission: `forms.edit`; `hosting.sitesRead` when a site reference is used
+
+For a static integration overview, read the MCP resource `zynoforms://guides/embedding`.
+
 ## Individual files
 
 ### `list_files`
@@ -177,11 +278,11 @@ The plan must come from `plan_download` in the same MCP process. A successful ap
 
 Treat these tools as follows:
 
-| Category        | Tools                                     | Review expectation                                      |
-| --------------- | ----------------------------------------- | ------------------------------------------------------- |
-| Remote read     | `list_sites`, `get_site`, `list_files`    | Safe for routine discovery.                             |
-| Local write     | `get_file`, `apply_download`              | Confirm the destination and overwrite behavior.         |
-| Remote mutation | `put_file`, `delete_file`, `apply_deploy` | Review path, site, preconditions, and exact plan.       |
-| Plan only       | `plan_deploy`, `plan_download`            | Inspect the returned scope and operations before apply. |
+| Category        | Tools                                                               | Review expectation                                      |
+| --------------- | ------------------------------------------------------------------- | ------------------------------------------------------- |
+| Remote read     | `list_sites`, `get_site`, `list_forms`, `get_form_integration`      | Safe for routine discovery.                             |
+| Local write     | `get_file`, `apply_download`                                        | Confirm the destination and overwrite behavior.         |
+| Remote mutation | `create_basic_form`, `update_form_origins`, file/deploy apply tools | Review form/site, fields, origins, paths, and plans.    |
+| Plan only       | `plan_deploy`, `plan_download`                                      | Inspect the returned scope and operations before apply. |
 
 The MCP server enforces technical boundaries, but the calling agent or user remains responsible for choosing the intended site and reviewing destructive operations.

@@ -2,17 +2,17 @@
     "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
     "name": "io.github.zyno-io/zynohosting",
     "title": "ZynoHosting",
-    "description": "Manage authorized ZynoHosting sites, files, deployments, and downloads through local stdio.",
+    "description": "Manage ZynoHosting sites and create, discover, embed, and configure ZynoForms through local stdio.",
     "repository": {
         "url": "https://github.com/zyno-io/zynohosting-cli",
         "source": "github"
     },
-    "version": "0.2.3",
+    "version": "0.3.0",
     "packages": [
         {
             "registryType": "npm",
             "identifier": "@zyno-io/zynohosting",
-            "version": "0.2.3",
+            "version": "0.3.0",
             "transport": {
                 "type": "stdio"
             },
@@ -36,6 +36,20 @@
                     "format": "string",
                     "isSecret": true,
                     "name": "ZYNO_HOSTING_API_KEY"
+                },
+                {
+                    "description": "Optional ZynoSuite API URL override for form tools. Standard production, alpha, and dev environments are inferred automatically.",
+                    "isRequired": false,
+                    "format": "string",
+                    "isSecret": false,
+                    "name": "ZYNO_SUITE_API_URL"
+                },
+                {
+                    "description": "Optional Zyno Auth API URL override for scoped-token renewal. Standard production, alpha, and dev environments are inferred automatically.",
+                    "isRequired": false,
+                    "format": "string",
+                    "isSecret": false,
+                    "name": "ZYNO_AUTH_API_URL"
                 }
             ]
         }

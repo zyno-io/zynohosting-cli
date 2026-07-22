@@ -184,14 +184,18 @@ test('serves site metadata and downloads files only inside allowed roots', async
         assert.deepEqual(tools.tools.map(tool => tool.name).sort(), [
             'apply_deploy',
             'apply_download',
+            'create_basic_form',
             'delete_file',
             'get_file',
+            'get_form_integration',
             'get_site',
             'list_files',
+            'list_forms',
             'list_sites',
             'plan_deploy',
             'plan_download',
-            'put_file'
+            'put_file',
+            'update_form_origins'
         ]);
         const sites = await client.callTool({ name: 'list_sites', arguments: {} });
         assert.match(JSON.stringify(sites.structuredContent), /example\.com/);

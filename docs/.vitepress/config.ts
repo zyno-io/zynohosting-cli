@@ -4,7 +4,7 @@ export default defineConfig({
     lang: 'en-US',
     title: 'ZynoHosting CLI & MCP',
     titleTemplate: ':title · ZynoHosting',
-    description: 'Deploy and manage authorized ZynoHosting sites from the command line or a local MCP server.',
+    description: 'Deploy ZynoHosting sites and connect ZynoForms from the command line or a local MCP server.',
     base: '/zynohosting-cli/',
     lastUpdated: true,
     sitemap: {

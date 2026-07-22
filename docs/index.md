@@ -6,7 +6,7 @@ titleTemplate: false
 hero:
     name: ZynoHosting
     text: Ship sites from a terminal or an agent
-    tagline: Inspect authorized sites, move individual files, plan exact deployments, download snapshots, and expose the same guarded operations through local MCP.
+    tagline: Ship hosted sites and let agents create, discover, embed, and connect published ZynoForms through one guarded local MCP server.
     actions:
         - theme: brand
           text: Get started
@@ -31,7 +31,7 @@ features:
       linkText: File commands
     - icon: 🤖
       title: Local MCP
-      details: Give agents the same capabilities through stdio while confining every local path to explicit roots.
+      details: Give agents guarded hosting operations plus form creation, discovery, embedding guidance, and CORS management through stdio.
       link: /mcp/
       linkText: MCP setup
     - icon: 🔐
