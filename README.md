@@ -6,7 +6,7 @@
 - inspect, download, upload, and delete individual files;
 - preview and apply complete manifest-driven deployments;
 - download a complete deployable snapshot or, with the extra permission, all user content;
-- discover, create, embed, and configure published ZynoForms;
+- discover, create, inspect, edit, embed, and configure published ZynoForms;
 - expose the same operations to agents through a local stdio MCP server.
 
 The package requires Node.js 24.
@@ -187,7 +187,10 @@ The MCP tools are:
 - `get_site`
 - `list_forms`
 - `get_form_integration`
+- `describe_form`
 - `create_basic_form`
+- `update_form`
+- `update_form_bot_protection`
 - `update_form_origins`
 - `list_files`
 - `get_file`
@@ -204,19 +207,19 @@ Full deploys and downloads intentionally use separate plan/apply calls. Plans ar
 
 The tenant credential is limited by explicit Hosting and Forms permissions:
 
-| Permission                  | Capability                                   |
-| --------------------------- | -------------------------------------------- |
-| `hosting.sitesRead`         | List and inspect sites                       |
-| `hosting.filesRead`         | List files and download individual files     |
-| `hosting.filesWrite`        | Create and replace individual files          |
-| `hosting.filesDelete`       | Delete individual files                      |
-| `hosting.deploy`            | Plan and apply full deployments              |
-| `hosting.download`          | Download the deployable snapshot             |
-| `hosting.downloadSensitive` | Include protected and user-generated content |
-| `hosting.analyticsRead`     | Read hosting analytics                       |
-| `hosting.analyticsManage`   | Change analytics configuration               |
-| `forms.create`              | Create and immediately publish a basic form  |
-| `forms.edit`                | Add or remove a form’s allowed CORS origins  |
+| Permission                  | Capability                                                |
+| --------------------------- | --------------------------------------------------------- |
+| `hosting.sitesRead`         | List and inspect sites                                    |
+| `hosting.filesRead`         | List files and download individual files                  |
+| `hosting.filesWrite`        | Create and replace individual files                       |
+| `hosting.filesDelete`       | Delete individual files                                   |
+| `hosting.deploy`            | Plan and apply full deployments                           |
+| `hosting.download`          | Download the deployable snapshot                          |
+| `hosting.downloadSensitive` | Include protected and user-generated content              |
+| `hosting.analyticsRead`     | Read hosting analytics                                    |
+| `hosting.analyticsManage`   | Change analytics configuration                            |
+| `forms.create`              | Create and immediately publish a basic form               |
+| `forms.edit`                | Edit a form, its Cap protection, and allowed CORS origins |
 
 The form discovery and integration tools use the same tenant credential against the ZynoSuite API. Adding origins from a hosting-site reference also requires `hosting.sitesRead`.
 

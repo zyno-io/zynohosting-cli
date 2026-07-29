@@ -50,17 +50,17 @@ Consume one JSON object per line rather than parsing the complete standard outpu
 
 ## Exit codes
 
-| Exit code | Category                                                                  |
-| --------- | ------------------------------------------------------------------------- |
-| `0`       | Success.                                                                  |
-| `1`       | Unexpected CLI or runtime failure.                                        |
-| `2`       | Invalid local input, unsafe path, configuration, or missing confirmation. |
-| `3`       | Authentication or authorization failure, including expired login.         |
-| `4`       | Remote API failure or failed ETag/create-only precondition.               |
-| `5`       | Invalid, incompatible, or unsafe manager/agent response.                  |
-| `6`       | Unknown or expired plan/session.                                          |
-| `7`       | The node agent could not apply a deployment.                              |
-| `8`       | Mutation applied, but cache invalidation could not be queued.             |
+| Exit code | Category                                                                   |
+| --------- | -------------------------------------------------------------------------- |
+| `0`       | Success.                                                                   |
+| `1`       | Unexpected CLI or runtime failure.                                         |
+| `2`       | Invalid local input, unsafe path, configuration, or missing confirmation.  |
+| `3`       | Authentication or authorization failure, including expired login.          |
+| `4`       | Remote API failure or failed ETag/create-only precondition.                |
+| `5`       | Invalid, incompatible, or unsafe manager/agent response.                   |
+| `6`       | Unknown or expired plan/session, or a stated precondition no longer holds. |
+| `7`       | The node agent could not apply a deployment.                               |
+| `8`       | Mutation applied, but cache invalidation could not be queued.              |
 
 ::: danger Exit code 8
 The remote mutation already succeeded. Do not blindly retry the deployment as though nothing changed; inspect the site and retry cache invalidation through an approved operational path.

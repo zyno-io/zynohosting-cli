@@ -49,12 +49,17 @@ Returns everything needed to connect a site to the current live version of one f
 - the live definition ID, version, and revision;
 - the response contract keyed by stable field alias;
 - JSON, URL-encoded, multipart-text, and native HTML examples;
+- the optional public Cap.js `botProtection` configuration and a mode-specific `capScript` example that submits with a Cap proof;
 - accepted content types and the 5 MiB body limit;
 - a warning when an unpublished draft exists.
 
 JSON is the recommended and OpenAPI-advertised submission format. The runtime also accepts `application/x-www-form-urlencoded` and multipart text fields using names such as `responses[email]` and `responses[contact][firstName]`. Public definition and submission endpoints require no credential.
 
-The native HTML example posts successfully without JavaScript, then navigates to the API’s JSON success response. Intercept the submit event and render an in-page confirmation when that user experience is preferred; cross-origin `fetch` requires the page’s exact origin to be allowed.
+With interactive Cap protection, the native HTML example pins `cap-widget@0.1.56`, renders `<cap-widget>` with the returned `apiEndpoint`, and names its hidden token field `capToken`, so the widget posts the proof as part of the form and the page needs no script of its own. The widget is form-associated and carries `required`, so the browser blocks submission until the visitor solves it. The returned `capScript` example shows how a custom JSON integration can take the solved token from that widget and include it in the payload without rendering an official ZynoForm.
+
+With invisible protection there is no markup-only path: the generated `capScript` takes over the HTML example's submit event, solves Cap with `new Cap({ apiEndpoint }).solve()` from the pinned `cap-widget@0.1.56` script, and posts the answers as JSON with the token under the returned `tokenField` (currently `capToken`). The markup keeps its `action` so a page whose script never loads fails loudly on the API instead of navigating with every answer in the query string, and the result carries a warning saying it cannot post by itself. Disabled protection omits Cap entirely, so legacy HTML and JSON integrations remain valid.
+
+Use `apiEndpoint` exactly as returned, trailing slash included—the widget appends its own `challenge` and `redeem` paths. Beyond the pinned script, the widget fetches its WebAssembly and pako from `cdn.jsdelivr.net` and calls the Cap endpoint at runtime, so a page with a strict Content-Security-Policy needs both hosts in `script-src` and `connect-src`. A proof is single-use, so each submission needs its own. The API validates the responses before it consumes the proof, so a rejection for a bad field value leaves a solved widget usable; only a spent or expired proof requires verifying again. Cap's endpoint answers any origin, so solving needs no configuration—allowed origins govern the ZynoSuite endpoints only. Both generated scripts post JSON on purpose: a URL-encoded `fetch` skips the CORS preflight, and the submission endpoint withholds only response headers, so an unlisted origin would have its submissions stored and merely hidden. A native `<form>` post is a navigation and is unaffected.
 
 - Mutates remote state: no
 - Permission: authenticated tenant access
@@ -73,6 +78,7 @@ Creates a one-page form and immediately publishes version 1. This is deliberatel
     "notification_emails": ["sales@example.com"],
     "origins": ["https://www.example.com"],
     "origin_sites": ["example.com"],
+    "bot_protection": "interactive",
     "fields": [
         { "key": "name", "label": "Name", "type": "text" },
         { "key": "email", "label": "Email", "type": "email" },
@@ -80,6 +86,16 @@ Creates a one-page form and immediately publishes version 1. This is deliberatel
     ]
 }
 ```
+
+- `name` and `fields` are required; `fields` takes 1–100 entries.
+- `slug` and `title` are optional.
+- `submit_label` defaults to `Submit`; `success_message` defaults to `Thank you. Your response has been submitted.`
+- `notification_emails`, `origins`, and `origin_sites` are optional and default to `[]`; each caps at 100 entries.
+- `bot_protection` defaults to `interactive`. Choose `invisible` for a programmatic Cap solve after local validation, or `disabled` for a legacy integration that submits no token.
+- `notification_emails` lists the To: recipients who receive submission notifications—not a sender or From address—and has no bearing on the recipient domain’s SPF, DKIM, or DMARC records.
+- The input schema is strict; unrecognized keys are rejected rather than ignored.
+
+On a Suite deployment that predates Cap, the API can create the form while ignoring the requested protection setting. In that case this tool returns an error that names the already-created form rather than claiming it is protected. Use `disabled` explicitly for a legacy deployment, or upgrade the Suite before creating a protected form.
 
 `fields` accepts `text`, `textarea`, `email`, `phone`, `url`, `number`, `date`, `select`, `radio`, `checkbox`, and one `contact` field. Every field has a unique JavaScript-identifier `key`; that becomes its stable submission alias. `required` defaults to `true`.
 
@@ -102,6 +118,89 @@ Exact `origins` are normalized and deduplicated. Each `origin_sites` reference e
 - Mutates remote state: yes; creates and publishes
 - Idempotent: no
 - Permission: `forms.create`; `hosting.sitesRead` when `origin_sites` is used
+
+### `describe_form`
+
+Describes a form the way it is authored, rather than the way it is submitted to. Read this before editing one.
+
+```json
+{ "form": "contact-us", "include_draft": true }
+```
+
+`form` is a form UUID or exact slug. The result contains:
+
+- the form summary, its current notification emails, and its public Cap `botProtection` configuration (`null` when protection is disabled);
+- the live definition’s id, version, revision, heading, submit label, and success message;
+- `pages[].fields[]` in document order—each with the `key` that addresses it, its type in the same vocabulary `create_basic_form` speaks, its label, whether it is required, its constraints, and its enclosing section when it has one;
+- `editable` per field, plus `preservedProperties` for stored detail outside this vocabulary and `lockedProperties` for detail that cannot be rewritten without loss (rich radio options, per-part contact configuration);
+- `advanced`—the constructs the form holds that these tools preserve but cannot author: sections, conditional rules, multiple pages, themes, translations, CRM contact rules, and review, signature, or display fields;
+- `draft`—the same structure for the unpublished draft, when there is one, because a draft blocks editing;
+- `editable` and `blockedReason` for the form as a whole.
+
+A stored `text` field carrying `inputType: email` is reported as `email`, and one carrying `format: large` as `textarea`—the words that produced it.
+
+- Mutates remote state: no
+- Permission: authenticated tenant access
+
+### `update_form`
+
+Changes an existing form in place, publishing a new version by default:
+
+```json
+{
+    "form": "contact-us",
+    "name": "Contact sales",
+    "notification_emails": ["sales@example.com"],
+    "operations": [
+        { "op": "add_field", "after": "email", "field": { "key": "budget", "type": "number", "label": "Budget", "min": 0 } },
+        { "op": "update_field", "key": "message", "label": "How can we help?", "required": false },
+        { "op": "move_field", "key": "terms", "page": 2 },
+        { "op": "remove_field", "key": "fax" }
+    ]
+}
+```
+
+Metadata arguments—`name`, `slug`, `title`, `submit_label`, `success_message`, `notification_emails`—are each optional and applied only when they differ from what the form already holds. `notification_emails` replaces the list; `[]` clears it. `slug` accepts `null` to remove the public link name.
+
+`operations` apply in order, each addressing a field by its `key` (or its UUID when it has none):
+
+- `add_field` takes the same field shape as `create_basic_form`. Position it with `before`, `after`, or `page`; the default is the end of the last page. An anchor inside a section inserts into that section.
+- `update_field` changes only the properties it names: `label`, `required`, `placeholder`, `options`, `enable_other`, `min`, `max`, `step`, `min_length`, `max_length`, `fields` (contact parts), and `new_key` to rename the submission key. `null` clears an optional constraint. Changing a field’s type is rejected—remove it and add its replacement, since the field’s identity carries its submission history.
+- `remove_field` removes a field, and a section removes the fields inside it.
+- `move_field` repositions a field, including into or out of a section.
+
+Fields no operation names keep their UUIDs and every stored property, so an edit never disturbs the rest of the form. Content this vocabulary cannot express—sections, conditions, themes, translations, per-field styling—is carried through untouched. An edit that produces no change writes nothing.
+
+Refused rather than half-applied:
+
+- a field named by a conditional rule cannot be renamed or removed, and neither can one a review field summarizes;
+- a field whose type is outside the basic vocabulary cannot be updated, only moved or removed;
+- a rich radio option list or a contact field with per-part configuration cannot be replaced, though the rest of that field stays editable;
+- adding a second contact field, a duplicate key, or a bound that contradicts its counterpart.
+
+A form has one shared draft, also used by the ZynoForms builder. While an unpublished draft exists `update_form` refuses, rather than overwrite work in progress; pass `on_existing_draft: "extend"` to build on that draft instead. A save quotes the draft revision it was based on—`0` when there was none—so a concurrent save is rejected by the API rather than clobbered. Pass `expected_definition_id` from `describe_form` to have the edit refused if a different version has gone live in the meantime; it is re-checked immediately before the write, though the API offers no atomic compare-and-publish, so a publish landing in that last instant cannot be detected.
+
+`publish` defaults to `true`. With `publish: false` the result is saved as an unpublished draft and the live form is unchanged. The result is the same integration package as `get_form_integration`, plus `applied` (`metadata`, and `definition` as `published`, `draft`, or `unchanged`) and a `changes` list. Metadata is applied before the definition; if the definition step then fails, the error says so.
+
+Removing a field does not affect existing submissions—each is pinned to the definition version it was made against. Renaming a key does break integrations posting the old one.
+
+- Mutates remote state: yes; publishes a new version unless `publish` is false
+- Idempotent: no
+- Permission: `forms.edit`
+
+### `update_form_bot_protection`
+
+Idempotently configures the form’s public Cap.js protection without changing fields or definitions:
+
+```json
+{ "form": "contact-us", "bot_protection": "invisible" }
+```
+
+`bot_protection` is one of `interactive`, `invisible`, or `disabled`. The tool returns the same integration package as `get_form_integration`, including the public `botProtection` config and an appropriate `capScript` example, plus `botProtectionChanged` and `botProtectionSetting` — the setting echoed back in this tri-state vocabulary, where the Suite's own `form.botProtectionMode` is `null` for disabled. Repeating the current setting performs no update request. Use `disabled` only for a legacy integration that must continue submitting without a Cap token.
+
+- Mutates remote state: yes; only when the requested setting differs
+- Idempotent: yes
+- Permission: `forms.edit`
 
 ### `update_form_origins`
 
@@ -278,11 +377,11 @@ The plan must come from `plan_download` in the same MCP process. A successful ap
 
 Treat these tools as follows:
 
-| Category        | Tools                                                               | Review expectation                                      |
-| --------------- | ------------------------------------------------------------------- | ------------------------------------------------------- |
-| Remote read     | `list_sites`, `get_site`, `list_forms`, `get_form_integration`      | Safe for routine discovery.                             |
-| Local write     | `get_file`, `apply_download`                                        | Confirm the destination and overwrite behavior.         |
-| Remote mutation | `create_basic_form`, `update_form_origins`, file/deploy apply tools | Review form/site, fields, origins, paths, and plans.    |
-| Plan only       | `plan_deploy`, `plan_download`                                      | Inspect the returned scope and operations before apply. |
+| Category        | Tools                                                                                                            | Review expectation                                      |
+| --------------- | ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| Remote read     | `list_sites`, `get_site`, `list_forms`, `get_form_integration`, `describe_form`                                  | Safe for routine discovery.                             |
+| Local write     | `get_file`, `apply_download`                                                                                     | Confirm the destination and overwrite behavior.         |
+| Remote mutation | `create_basic_form`, `update_form`, `update_form_bot_protection`, `update_form_origins`, file/deploy apply tools | Review form/site, fields, origins, paths, and plans.    |
+| Plan only       | `plan_deploy`, `plan_download`                                                                                   | Inspect the returned scope and operations before apply. |
 
 The MCP server enforces technical boundaries, but the calling agent or user remains responsible for choosing the intended site and reviewing destructive operations.

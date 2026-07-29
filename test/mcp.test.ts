@@ -186,6 +186,7 @@ test('serves site metadata and downloads files only inside allowed roots', async
             'apply_download',
             'create_basic_form',
             'delete_file',
+            'describe_form',
             'get_file',
             'get_form_integration',
             'get_site',
@@ -195,6 +196,8 @@ test('serves site metadata and downloads files only inside allowed roots', async
             'plan_deploy',
             'plan_download',
             'put_file',
+            'update_form',
+            'update_form_bot_protection',
             'update_form_origins'
         ]);
         const sites = await client.callTool({ name: 'list_sites', arguments: {} });

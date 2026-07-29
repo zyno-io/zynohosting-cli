@@ -18,6 +18,7 @@ test('builds a published-form definition with stable aliases, generated UUIDs, a
         notification_emails: [],
         origins: [],
         origin_sites: [],
+        bot_protection: 'interactive',
         fields: [
             { key: 'message', label: 'Message', type: 'textarea', required: true, min_length: 10, max_length: 1000 },
             { key: 'email', label: 'Email', type: 'email', required: false },
@@ -68,6 +69,7 @@ test('maps every basic scalar field type and its constraints to the Suite defini
         notification_emails: [],
         origins: [],
         origin_sites: [],
+        bot_protection: 'interactive',
         fields: [
             { key: 'plain', label: 'Plain', type: 'text', required: true, placeholder: 'Type here' },
             { key: 'phone', label: 'Phone', type: 'phone', required: true },
@@ -103,6 +105,7 @@ test('builds live endpoints and alias-keyed examples without credentials', () =>
     assert.equal(Object.hasOwn(summary, 'activeDefinition'), false);
     assert.equal(Object.hasOwn(summary, 'draftDefinition'), false);
     assert.deepEqual(integration.liveDefinition, { id: DEFINITION_ID, version: 1, revision: 0, published: true });
+    assert.equal(integration.botProtection, null);
     assert.deepEqual(integration.endpoints, {
         direct: 'https://zyno.app/f/acme/contact-us',
         iframe: '<iframe src="https://zyno.app/f/acme/contact-us" title="Contact us" style="width:100%;min-height:720px;border:0" loading="lazy"></iframe>',
@@ -136,6 +139,118 @@ test('builds live endpoints and alias-keyed examples without credentials', () =>
     assert.doesNotMatch(JSON.stringify(integration), /api-secret|Authorization|Bearer/);
     assert.match(EMBEDDING_GUIDE, /OpenAPI-advertised/);
     assert.match(EMBEDDING_GUIDE, /application\/x-www-form-urlencoded/);
+});
+
+function protectedForm(mode: 'interactive' | 'invisible'): DetailedForm {
+    const form = detailedForm();
+    form.botProtectionMode = mode;
+    form.botProtection = {
+        provider: 'cap',
+        mode,
+        apiEndpoint: `https://cap.example.test/v1/forms.submit/${FORM_ID}/`,
+        tokenField: 'capToken'
+    };
+    return form;
+}
+
+test('adds Cap.js widget and programmatic JSON guidance only when bot protection is enabled', () => {
+    const interactive = buildFormIntegration(protectedForm('interactive'), 'https://suite.api.zyno.app');
+    const interactiveExamples = (interactive.submission as { examples: { html: string; capScript: string } }).examples;
+    assert.match(interactiveExamples.html, /cap-widget@0\.1\.56/);
+    assert.match(interactiveExamples.html, /<cap-widget required data-cap-api-endpoint=/);
+    assert.match(interactiveExamples.html, /data-cap-hidden-field-name="capToken"/);
+    assert.match(interactiveExamples.html, /<form id="zyno-form" method="post" action=/, 'an interactive form still posts natively');
+    assert.match(interactiveExamples.capScript, /zynoCapWidget\?\.tokenValue/);
+    assert.match(interactiveExamples.capScript, /if \(response\.ok\)/);
+    assert.match(interactiveExamples.capScript, /zynoCapWidget\.reset\(\)/);
+    assert.match(interactiveExamples.capScript, /capToken/);
+    assert.deepEqual(interactive.warnings, [], 'an interactive widget posts its own hidden proof, so the markup stands alone');
+
+    const invisible = buildFormIntegration(protectedForm('invisible'), 'https://suite.api.zyno.app');
+    const invisibleExamples = (invisible.submission as { examples: { html: string; capScript: string } }).examples;
+    assert.doesNotMatch(invisibleExamples.html, /<cap-widget/);
+    assert.match(invisibleExamples.html, /^<!-- Invisible bot protection: the capScript example submits this form/);
+    // The action stays put: if the script never loads, a native post fails loudly instead of navigating to
+    // a URL carrying every answer in its query string.
+    assert.match(invisibleExamples.html, /<form id="zyno-form" method="post" action=/);
+    assert.match(invisibleExamples.html, /<p id="zyno-status" role="status" aria-live="polite"><\/p>$/);
+    assert(
+        invisible.warnings.some(warning => /cannot post by itself/.test(warning)),
+        'an HTML example that the API would always reject has to say so'
+    );
+    assert.match(invisibleExamples.capScript, /document\.querySelector\("#zyno-form"\)/, 'the script must find the markup it ships with');
+    assert.match(invisibleExamples.capScript, /addEventListener\('submit'/);
+    assert.match(invisibleExamples.capScript, /event\.preventDefault\(\)/);
+    assert.match(invisibleExamples.capScript, /capToken/);
+
+    // JSON, not the form's own encoding: urlencoded is a simple request, so an unallowed origin would have
+    // its submission stored and only the response hidden.
+    assert.match(invisibleExamples.capScript, /'Content-Type': 'application\/json'/);
+    assert.doesNotMatch(invisibleExamples.capScript, /URLSearchParams/);
+    // One solver per page — constructing Cap appends a hidden widget and spawns workers that nothing removes.
+    assert.match(invisibleExamples.capScript, /^const zynoCap = new Cap\(\{ apiEndpoint: /m);
+    assert.equal(invisibleExamples.capScript.match(/new Cap\(/g)?.length, 1);
+    // A listener's rejected promise goes nowhere a visitor can see, so outcomes are written to the page.
+    assert.match(invisibleExamples.capScript, /zynoStatus\.textContent = error\.message/);
+    assert.match(invisibleExamples.capScript, /submit\.disabled = true/);
+});
+
+test('builds prototype-safe response objects for invisible protected forms', () => {
+    const form = protectedForm('invisible');
+    const contactId = '55555555-5555-4555-8555-555555555555';
+    // `toString` is a valid field alias. The generated script must not traverse into Object.prototype when
+    // this contact field produces a nested response object.
+    form.activeDefinition!.content.fieldIdsByAlias = { toString: contactId };
+    form.activeDefinition!.content.pages[0]!.fields = [
+        { id: contactId, alias: 'toString', type: 'contact', fields: { firstName: true, email: true } }
+    ];
+
+    const script = (buildFormIntegration(form, 'https://suite.api.zyno.app').submission as { examples: { capScript: string } }).examples.capScript;
+    assert.match(script, /const responses = Object\.create\(null\);/);
+    assert.match(script, /if \(!Object\.hasOwn\(node, part\)\) node\[part\] =/);
+    assert.doesNotMatch(script, /node = node\[part\] \?\?=/);
+});
+
+test('keeps a solved proof usable when the API rejects the responses rather than the verification', () => {
+    const interactive = buildFormIntegration(protectedForm('interactive'), 'https://suite.api.zyno.app');
+    const capScript = (interactive.submission as { examples: { capScript: string } }).examples.capScript;
+
+    // The Suite validates fields before it consumes the proof, so only a spent or stale proof is reset.
+    assert.doesNotMatch(capScript, /finally/);
+    assert.match(capScript, /if \(response\.ok\) \{\n\s+zynoCapWidget\.reset\(\);/);
+    // The proof is consumed before the submission transaction, so only a field-level 400 provably left it
+    // unspent — anything else has to send the visitor back through verification.
+    assert.match(capScript, /if \(response\.status !== 400 \|\| \/verification\/i\.test\(failure\.error \?\? ''\)\) zynoCapWidget\.reset\(\);/);
+    // The Suite writes rejections as {"error": "..."}, so reading `message` would surface nothing.
+    assert.doesNotMatch(capScript, /failure\.message/);
+});
+
+test('submits a boolean answer for questions a tickbox cannot express', () => {
+    const form = detailedForm();
+    const fid = (n: number) => `4444444${n}-4444-4444-8444-444444444444`;
+    form.activeDefinition!.content.fieldIdsByAlias = {};
+    form.activeDefinition!.content.pages[0]!.fields = [
+        { id: fid(1), type: 'marketingOptOut', label: 'Yes, send me offers', inverted: true },
+        { id: fid(2), type: 'marketingOptOut', label: 'Do not contact me' },
+        { id: fid(3), type: 'checkbox', label: 'Do you consent?', format: 'yesno' },
+        { id: fid(4), type: 'checkbox', label: 'I agree' }
+    ];
+    const html = (buildFormIntegration(form, 'https://suite.api.zyno.app').submission as { examples: { html: string } }).examples.html;
+
+    // The stored value always means "opted out", whichever way the question is worded, and an untouched
+    // question is itself an answer — so the renderer's seeded default is preselected rather than omitted.
+    assert.match(html, new RegExp(`name="responses\\[${fid(1)}\\]" value="false"> Yes`));
+    assert.match(html, new RegExp(`name="responses\\[${fid(1)}\\]" value="true" checked> No`));
+    assert.match(html, new RegExp(`name="responses\\[${fid(2)}\\]" value="true"> Yes`));
+    assert.match(html, new RegExp(`name="responses\\[${fid(2)}\\]" value="false" checked> No`));
+
+    // A yes/no question is required and starts unanswered: a tickbox could only ever say yes.
+    assert.match(html, new RegExp(`name="responses\\[${fid(3)}\\]" value="true" required> Yes`));
+    assert.match(html, new RegExp(`name="responses\\[${fid(3)}\\]" value="false" required> No`));
+    assert.doesNotMatch(html, new RegExp(`name="responses\\[${fid(3)}\\]"[^>]*checked`));
+
+    // A plain agreement checkbox is still a checkbox.
+    assert.match(html, new RegExp(`type="checkbox" name="responses\\[${fid(4)}\\]" value="true" required`));
 });
 
 test('describes repeatable-section aliases as arrays in generated integration examples', () => {
@@ -194,6 +309,7 @@ test('falls back to a field UUID when a legacy alias is unsafe for bracket notat
 test('FormsClient sends shared credentials to exact Suite paths and rejects malformed responses', async () => {
     const seen: Array<{ method: string; url: string; authorization: string | undefined; body: unknown }> = [];
     let malformed = false;
+    let preCap = false;
     const server = createServer(async (request, response) => {
         const bodyText = await requestText(request);
         seen.push({
@@ -207,10 +323,16 @@ test('FormsClient sends shared credentials to exact Suite paths and rejects malf
             response.end(JSON.stringify({ unexpected: true }));
             return;
         }
+        if (preCap) {
+            const { botProtectionMode: _mode, ...summary } = formSummary();
+            const { botProtection: _config, botProtectionMode: _detailedMode, ...detailed } = protectedDetailedForm();
+            response.end(JSON.stringify(request.url === '/forms' ? [summary] : detailed));
+            return;
+        }
         if (request.url === '/forms') response.end(JSON.stringify([formSummary()]));
-        else if (request.url === `/forms/manage/${FORM_ID}` && request.method === 'GET') response.end(JSON.stringify(detailedForm()));
-        else if (request.url === '/forms/manage' && request.method === 'POST') response.end(JSON.stringify(detailedForm()));
-        else if (request.url === `/forms/manage/${FORM_ID}` && request.method === 'PUT') response.end(JSON.stringify(detailedForm()));
+        else if (request.url === `/forms/manage/${FORM_ID}` && request.method === 'GET') response.end(JSON.stringify(protectedDetailedForm()));
+        else if (request.url === '/forms/manage' && request.method === 'POST') response.end(JSON.stringify(protectedDetailedForm()));
+        else if (request.url === `/forms/manage/${FORM_ID}` && request.method === 'PUT') response.end(JSON.stringify(protectedDetailedForm()));
         else {
             response.statusCode = 404;
             response.end(JSON.stringify({ message: 'not found' }));
@@ -223,7 +345,9 @@ test('FormsClient sends shared credentials to exact Suite paths and rejects malf
 
     try {
         assert.equal((await client.listForms())[0]!.id, FORM_ID);
-        assert.equal((await client.getForm(FORM_ID)).activeDefinition?.id, DEFINITION_ID);
+        const detailed = await client.getForm(FORM_ID);
+        assert.equal(detailed.activeDefinition?.id, DEFINITION_ID);
+        assert.equal(detailed.botProtection?.mode, 'interactive');
         await client.createForm({ name: 'Contact us', content: detailedForm().activeDefinition!.content });
         await client.updateForm(FORM_ID, { corsOrigins: ['https://example.com'] });
         assert.deepEqual(
@@ -237,6 +361,16 @@ test('FormsClient sends shared credentials to exact Suite paths and rejects malf
         );
         assert(seen.every(request => request.authorization === `Basic ${Buffer.from('api:api-secret').toString('base64')}`));
         assert.deepEqual(seen[3]!.body, { corsOrigins: ['https://example.com'] });
+
+        // A Suite deployment that predates Cap sends no bot-protection field at all. The CLI can be pointed
+        // at that environment while another is already upgraded, so its absence has to read as "off".
+        preCap = true;
+        const legacy = await client.listForms();
+        assert.equal(legacy[0]!.botProtectionMode, null);
+        const legacyDetailed = await client.getForm(FORM_ID);
+        assert.equal(legacyDetailed.botProtectionMode, null);
+        assert.equal(legacyDetailed.botProtection, undefined);
+        preCap = false;
 
         malformed = true;
         await assert.rejects(client.listForms(), (error: unknown) => error instanceof Error && /invalid forms response/.test(error.message));
@@ -256,6 +390,7 @@ function formSummary() {
         slug: 'contact-us',
         emailTo: ['ops@example.com'],
         corsOrigins: ['https://old.example.com'],
+        botProtectionMode: null,
         activeDefinitionId: DEFINITION_ID,
         createdAt: '2026-07-21T12:00:00.000Z',
         updatedAt: '2026-07-21T12:00:00.000Z',
@@ -299,6 +434,19 @@ function detailedForm(): DetailedForm {
                     }
                 ]
             }
+        }
+    };
+}
+
+function protectedDetailedForm(): DetailedForm {
+    return {
+        ...detailedForm(),
+        botProtectionMode: 'interactive',
+        botProtection: {
+            provider: 'cap',
+            mode: 'interactive',
+            apiEndpoint: `https://cap.example.test/v1/forms.submit/${FORM_ID}/`,
+            tokenField: 'capToken'
         }
     };
 }

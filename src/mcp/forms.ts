@@ -1,129 +1,53 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 
-import { DetailedForm, FormDefinitionContent, FormField, FormsClient, FormSummary } from '../api/forms-client.js';
+import {
+    DetailedForm,
+    FormDefinition,
+    FormDefinitionContent,
+    FormField,
+    FormsClient,
+    FormSummary,
+    PublicBotProtection,
+    UpdateFormRequest
+} from '../api/forms-client.js';
 import { ManagerClient } from '../api/manager-client.js';
 import { CliError } from '../errors.js';
+import { applyFormEdits, describeFormContent, FormEditResult, formOperationSchema, isFieldRequired, walkFields } from './forms-edit.js';
+import { basicFieldSchema, buildBasicField, describeBasicField, refineBasicField, UNSAFE_FORM_KEYS } from './forms-fields.js';
 
-const ALIAS_PATTERN = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
-const UNSAFE_FORM_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
+export { buildBasicField, describeBasicField } from './forms-fields.js';
+
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const FORM_SUBMISSION_MAX_BODY_BYTES = 5 * 1024 * 1024;
 const EMBEDDING_GUIDE_URI = 'zynoforms://guides/embedding';
+/** The id the generated markup carries so the generated script can find the form it belongs to. */
+const FORM_ELEMENT_ID = 'zyno-form';
+/** Where the generated script reports verification and submission outcomes to the visitor. */
+const STATUS_ELEMENT_ID = 'zyno-status';
 
-const commonFieldIdentityShape = {
-    key: z
-        .string()
-        .trim()
-        .min(1)
-        .max(255)
-        .regex(ALIAS_PATTERN, 'must be a JavaScript identifier, using letters, numbers, _, or $')
-        .refine(key => !UNSAFE_FORM_KEYS.has(key), 'is reserved by the web-form parser'),
-    required: z.boolean().default(true)
-};
-
-const commonFieldShape = { ...commonFieldIdentityShape, label: z.string().trim().min(1).max(255) };
-
-const textFieldSchema = z
-    .object({
-        ...commonFieldShape,
-        type: z.enum(['text', 'textarea', 'email', 'phone', 'url']),
-        placeholder: z.string().max(500).optional(),
-        min_length: z.number().int().nonnegative().optional(),
-        max_length: z.number().int().nonnegative().optional()
-    })
-    .strict();
-
-const numberFieldSchema = z
-    .object({
-        ...commonFieldShape,
-        type: z.literal('number'),
-        placeholder: z.string().max(500).optional(),
-        min: z.number().finite().optional(),
-        max: z.number().finite().optional(),
-        step: z.number().positive().finite().optional()
-    })
-    .strict();
-
-const dateFieldSchema = z
-    .object({
-        ...commonFieldShape,
-        type: z.literal('date'),
-        min: calendarDateSchema().optional(),
-        max: calendarDateSchema().optional()
-    })
-    .strict();
-
-const selectFieldSchema = z
-    .object({
-        ...commonFieldShape,
-        type: z.literal('select'),
-        options: z.array(z.string().trim().min(1).max(255)).min(1).max(100),
-        enable_other: z.boolean().default(false)
-    })
-    .strict();
-
-const radioFieldSchema = z
-    .object({
-        ...commonFieldShape,
-        type: z.literal('radio'),
-        options: z
-            .array(
-                z.union([
-                    z.string().trim().min(1).max(255),
-                    z.object({ title: z.string().trim().min(1).max(255), value: z.string().trim().min(1).max(255).optional() }).strict()
-                ])
-            )
-            .min(1)
-            .max(100)
-    })
-    .strict();
-
-const checkboxFieldSchema = z
-    .object({
-        ...commonFieldShape,
-        type: z.literal('checkbox')
-    })
-    .strict();
-
-const contactPartSchema = z.enum(['display_name', 'first_name', 'last_name', 'company', 'birthdate', 'phone_cell', 'email', 'address', 'zip']);
-
-const contactFieldSchema = z
-    .object({
-        ...commonFieldIdentityShape,
-        type: z.literal('contact'),
-        fields: z.array(contactPartSchema).min(1).max(9)
-    })
-    .strict();
-
-const basicFieldSchema = z.discriminatedUnion('type', [
-    textFieldSchema,
-    numberFieldSchema,
-    dateFieldSchema,
-    selectFieldSchema,
-    radioFieldSchema,
-    checkboxFieldSchema,
-    contactFieldSchema
-]);
+const slugSchema = z
+    .string()
+    .trim()
+    .toLowerCase()
+    .regex(/^[a-z0-9][a-z0-9-]*$/)
+    .max(255)
+    .refine(slug => slug.length !== 36, 'cannot be exactly 36 characters long');
 
 const createBasicFormInputSchema = z
     .object({
         name: z.string().trim().min(1).max(255),
-        slug: z
-            .string()
-            .trim()
-            .toLowerCase()
-            .regex(/^[a-z0-9][a-z0-9-]*$/)
-            .max(255)
-            .refine(slug => slug.length !== 36, 'cannot be exactly 36 characters long')
-            .optional(),
+        slug: slugSchema.optional(),
         title: z.string().trim().min(1).max(500).optional(),
         submit_label: z.string().trim().min(1).max(255).default('Submit'),
         success_message: z.string().trim().min(1).max(5000).default('Thank you. Your response has been submitted.'),
         notification_emails: z.array(z.string().trim().email()).max(100).default([]),
         origins: z.array(z.string().trim().min(1)).max(100).default([]),
         origin_sites: z.array(z.string().trim().min(1)).max(100).default([]),
+        bot_protection: z
+            .enum(['interactive', 'invisible', 'disabled'])
+            .default('interactive')
+            .describe('Cap.js protection for public submissions; disabled preserves legacy integrations without a token'),
         fields: z.array(basicFieldSchema).min(1).max(100)
     })
     .strict()
@@ -136,27 +60,44 @@ const createBasicFormInputSchema = z
             if (field.type === 'contact' && ++contacts > 1) {
                 context.addIssue({ code: 'custom', path: ['fields', index], message: 'only one contact field is supported' });
             }
-            if ('min_length' in field && field.min_length !== undefined && field.max_length !== undefined && field.min_length > field.max_length) {
-                context.addIssue({ code: 'custom', path: ['fields', index], message: 'min_length cannot exceed max_length' });
-            }
-            if ('min' in field && field.min !== undefined && field.max !== undefined && field.min > field.max) {
-                context.addIssue({ code: 'custom', path: ['fields', index], message: 'min cannot exceed max' });
-            }
-            if (field.type === 'select' && new Set(field.options).size !== field.options.length) {
-                context.addIssue({ code: 'custom', path: ['fields', index, 'options'], message: 'options must be unique' });
-            }
-            if (field.type === 'radio') {
-                const values = field.options.map(option => (typeof option === 'string' ? option : (option.value ?? option.title)));
-                if (new Set(values).size !== values.length) {
-                    context.addIssue({ code: 'custom', path: ['fields', index, 'options'], message: 'option values must be unique' });
-                }
-            }
-            if (field.type === 'contact' && new Set(field.fields).size !== field.fields.length) {
-                context.addIssue({ code: 'custom', path: ['fields', index, 'fields'], message: 'contact fields must be unique' });
-            }
-            if (field.type === 'contact' && field.fields.includes('address') && field.fields.includes('zip')) {
-                context.addIssue({ code: 'custom', path: ['fields', index, 'fields'], message: 'address already includes ZIP; omit zip' });
-            }
+            refineBasicField(field, context, ['fields', index]);
+        }
+    });
+
+const describeFormInputSchema = {
+    form: z.string().trim().min(1).describe('Form UUID or slug'),
+    include_draft: z.boolean().default(true).describe('Also describe the unpublished draft, when there is one')
+};
+
+const updateFormInputSchema = z
+    .object({
+        form: z.string().trim().min(1).describe('Form UUID or slug'),
+        name: z.string().trim().min(1).max(255).optional(),
+        slug: slugSchema.nullable().optional().describe('The public link name; null removes it'),
+        title: z.string().trim().min(1).max(500).optional().describe('The heading shown above the form'),
+        submit_label: z.string().trim().min(1).max(255).optional(),
+        success_message: z.string().trim().min(1).max(5000).optional(),
+        notification_emails: z.array(z.string().trim().email()).max(100).optional().describe('Replaces the current list; an empty array clears it'),
+        operations: z.array(formOperationSchema).max(100).optional().describe('Field edits, applied in order'),
+        publish: z.boolean().default(true).describe('Publish the result; false saves an unpublished draft instead'),
+        expected_definition_id: z
+            .string()
+            .uuid()
+            .optional()
+            .describe('The live definition this edit was computed against; the edit is refused if it is no longer live'),
+        on_existing_draft: z
+            .enum(['fail', 'extend'])
+            .default('fail')
+            .describe('What to do when the form already has an unpublished draft: refuse, or edit that draft')
+    })
+    .strict()
+    .superRefine((value, context) => {
+        const metadata = [value.name, value.slug, value.title, value.submit_label, value.success_message, value.notification_emails];
+        if (metadata.every(field => field === undefined) && !value.operations?.length) {
+            context.addIssue({ code: 'custom', path: [], message: 'provide at least one change or field operation' });
+        }
+        for (const [index, operation] of (value.operations ?? []).entries()) {
+            if (operation.op === 'add_field') refineBasicField(operation.field, context, ['operations', index, 'field']);
         }
     });
 
@@ -173,8 +114,17 @@ const updateOriginsInputSchema = z
         message: 'provide at least one origin or site to add or remove'
     });
 
-type BasicFieldInput = z.infer<typeof basicFieldSchema>;
+const updateBotProtectionInputSchema = z.object({
+    form: z.string().trim().min(1).describe('Form UUID or slug'),
+    bot_protection: z
+        .enum(['interactive', 'invisible', 'disabled'])
+        .describe(
+            'interactive renders a Cap widget, invisible solves it programmatically after local validation, and disabled accepts legacy submissions'
+        )
+});
+
 type CreateBasicFormInput = z.infer<typeof createBasicFormInputSchema>;
+type UpdateFormInput = z.infer<typeof updateFormInputSchema>;
 
 export function registerFormsMcp(server: McpServer, forms: FormsClient, manager: ManagerClient, suiteApiUrl: string | undefined): void {
     server.registerResource(
@@ -229,14 +179,188 @@ export function registerFormsMcp(server: McpServer, forms: FormsClient, manager:
         async input => {
             const siteOrigins = await originsForSites(manager, input.origin_sites);
             const corsOrigins = unique([...input.origins.map(normalizeWebOrigin), ...siteOrigins]);
+            const requestedBotProtection = botProtectionMode(input.bot_protection);
             const created = await forms.createForm({
                 name: input.name,
                 ...(input.slug === undefined ? {} : { slug: input.slug }),
                 emailTo: input.notification_emails.length ? unique(input.notification_emails) : null,
                 corsOrigins: corsOrigins.length ? corsOrigins : null,
+                botProtectionMode: requestedBotProtection,
                 content: buildBasicFormDefinition(input)
             });
+            // Older Suite deployments accept unknown form properties but silently drop them. Creation cannot
+            // be rolled back here, so make that outcome explicit rather than claiming an unprotected form has
+            // the interactive default this tool requested.
+            if (created.botProtectionMode !== requestedBotProtection) {
+                throw new CliError(
+                    `The form ${created.id} was created, but ZynoSuite did not apply bot protection; it reports ${botProtectionModeName(created.botProtectionMode)} after being asked for ${input.bot_protection}. It is likely running a build without Cap support.`,
+                    5,
+                    'bot_protection_unsupported'
+                );
+            }
             return result(buildFormIntegration(created, requireSuiteApiUrl(suiteApiUrl)));
+        }
+    );
+
+    server.registerTool(
+        'describe_form',
+        {
+            title: 'Describe a ZynoForm’s structure',
+            description:
+                'Describe a form the way it is authored: its fields in order with their keys, types, labels, and constraints, which of them this tool can edit, and what advanced content — sections, conditions, themes, translations — it preserves but cannot change. Read this before update_form.',
+            inputSchema: describeFormInputSchema,
+            annotations: { readOnlyHint: true, openWorldHint: false }
+        },
+        async ({ form, include_draft }) => {
+            const detailed = await getFormByReference(forms, form);
+            const live = requireLiveDefinition(detailed);
+            const structure = describeFormContent(live.content);
+            const draft = include_draft ? detailed.draftDefinition : undefined;
+            const warnings = [...structure.warnings];
+            if (detailed.hasDraft) {
+                warnings.push('This form has an unpublished draft, so the live structure below is not what the builder currently shows.');
+            }
+
+            return result({
+                form: decorateFormSummary(detailed),
+                notificationEmails: detailed.emailTo ?? [],
+                botProtection: detailed.botProtection ?? null,
+                live: definitionSummary(live),
+                pages: structure.pages,
+                advanced: structure.advanced,
+                draft: draft ? { ...definitionSummary(draft), ...describeFormContent(draft.content) } : null,
+                editable: !detailed.hasDraft,
+                ...(detailed.hasDraft
+                    ? {
+                          blockedReason:
+                              'An unpublished draft exists. Publish or discard it in the ZynoForms builder, or call update_form with on_existing_draft: "extend" to edit the draft itself.'
+                      }
+                    : {}),
+                warnings
+            });
+        }
+    );
+
+    server.registerTool(
+        'update_form',
+        {
+            title: 'Update a ZynoForm',
+            description:
+                'Change a form’s name, link, heading, submit label, success message, or notification emails, and add, update, move, or remove fields addressed by key. Untouched fields keep their identity, and content this vocabulary cannot express is preserved. Publishes a new version by default. Removing a field does not affect existing submissions, which are pinned to the version they were made against.',
+            inputSchema: updateFormInputSchema,
+            annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false }
+        },
+        async input => {
+            const detailed = await getFormByReference(forms, input.form);
+            requireExpectedDefinition(input.expected_definition_id, detailed);
+
+            const base = resolveEditBase(detailed, input);
+            const edit = base && applyFormEdits(base.content, contentEdits(input));
+            const metadata = metadataChanges(detailed, input);
+            const applied = { metadata: false, definition: 'unchanged' as 'unchanged' | 'draft' | 'published' };
+
+            let form: DetailedForm = detailed;
+            if (Object.keys(metadata).length) {
+                form = await forms.updateForm(detailed.id, metadata);
+                applied.metadata = true;
+                try {
+                    requireExpectedDefinition(input.expected_definition_id, form);
+                } catch (error) {
+                    throw withAppliedMetadataNote(error);
+                }
+            }
+
+            // Skipping the save when the content is identical avoids a pointless version — but "publish this
+            // draft" is a request in its own right, and an edit that the draft already reflects (a retry, or
+            // a change someone else saved first) still has to reach the API or the form never goes live.
+            const rewrites = !!edit && !!base && changesContent(base, edit);
+            const publishesDraft = !!base?.isDraft && input.publish;
+            if (edit && base && (rewrites || publishesDraft)) {
+                try {
+                    await forms.saveDefinition(detailed.id, {
+                        content: edit.content,
+                        publish: input.publish,
+                        expectedRevision: base.isDraft ? base.revision : 0
+                    });
+                } catch (error) {
+                    throw applied.metadata ? withAppliedMetadataNote(error) : error;
+                }
+                applied.definition = input.publish ? 'published' : 'draft';
+                form = await describeAppliedWrites(applied, () => forms.getForm(detailed.id));
+            }
+
+            // Reading the result back can still fail. Everything above has already been written by then, so
+            // the error has to say so rather than read as "the edit did not happen".
+            const integration = await describeAppliedWrites(applied, () => buildFormIntegration(form, requireSuiteApiUrl(suiteApiUrl)));
+            const warnings = [...(rewrites ? (edit?.warnings ?? []) : []), ...integration.warnings];
+            if (applied.metadata && applied.definition === 'draft') {
+                warnings.push(
+                    'The name, link, and notification-email changes are live now — form metadata is not versioned, so publish: false held back only the field and wording changes.'
+                );
+            }
+            // A custom submission template addresses fields by key, and it is inherited by the new version
+            // untouched. The Suite cannot rewrite it, so a key that moved leaves that template addressing
+            // something that no longer answers.
+            if (base?.renderTemplate && rewrites) {
+                const renamed = (edit?.changes ?? [])
+                    .filter(change => change.change === 'updated_field' && change.properties?.includes('key'))
+                    .map(change => change.key);
+                const removed = (edit?.changes ?? []).flatMap(change =>
+                    change.change === 'removed_field' ? (change.removedKeys ?? [change.key]) : []
+                );
+                renamed.push(...removed);
+                const reshaped = (edit?.changes ?? []).some(change => change.responseShapeChanged === true);
+                if (renamed.length || reshaped) {
+                    warnings.push(
+                        `This form has a custom submission template, which addresses fields by key${renamed.length ? ` — including ${renamed.join(', ')}` : ''}. Notification emails and PDFs will render those values empty until the template is updated in the ZynoForms builder.`
+                    );
+                }
+            }
+            return result({
+                ...integration,
+                applied,
+                // Only what was actually written: an edit the base already reflected changed nothing, and
+                // reporting it as a change would read as work this call performed.
+                changes: rewrites ? (edit?.changes ?? []) : [],
+                warnings
+            });
+        }
+    );
+
+    server.registerTool(
+        'update_form_bot_protection',
+        {
+            title: 'Update ZynoForm bot protection',
+            description:
+                'Idempotently set Cap.js protection to an interactive widget, an invisible programmatic solve, or disabled for legacy submissions. A request that already matches skips the update call.',
+            inputSchema: updateBotProtectionInputSchema,
+            annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false }
+        },
+        async input => {
+            const detailed = await getFormByReference(forms, input.form);
+            const wanted = botProtectionMode(input.bot_protection);
+            const updated = detailed.botProtectionMode === wanted ? detailed : await forms.updateForm(detailed.id, { botProtectionMode: wanted });
+            // A Suite that predates Cap accepts the request and returns a form without the field, which the
+            // client reads as disabled. Left unchecked this reports "changed to disabled" on every call and
+            // never converges; say what actually happened instead.
+            if (updated.botProtectionMode !== wanted) {
+                throw new CliError(
+                    `This ZynoSuite deployment did not apply bot protection; it reports ${botProtectionModeName(updated.botProtectionMode)} after being asked for ${input.bot_protection}. It is likely running a build without Cap support.`,
+                    5,
+                    'bot_protection_unsupported'
+                );
+            }
+            const changed = detailed.botProtectionMode !== updated.botProtectionMode;
+            const integration = await describeAppliedWrites({ metadata: changed, definition: 'unchanged' }, () =>
+                buildFormIntegration(updated, requireSuiteApiUrl(suiteApiUrl))
+            );
+            // Named for the tri-state argument rather than the stored column, which the spread integration
+            // already reports as `form.botProtectionMode` (null when off) and `botProtection` (the config).
+            return result({
+                ...integration,
+                botProtectionChanged: changed,
+                botProtectionSetting: botProtectionModeName(updated.botProtectionMode)
+            });
         }
     );
 
@@ -290,6 +414,127 @@ export function buildBasicFormDefinition(input: CreateBasicFormInput): FormDefin
     };
 }
 
+/** The definition an edit starts from: the live version, or the shared draft when asked to extend it. */
+function resolveEditBase(form: DetailedForm, input: UpdateFormInput): FormDefinition | undefined {
+    const wanted = [input.title, input.submit_label, input.success_message].some(value => value !== undefined) || !!input.operations?.length;
+    if (!wanted) return undefined;
+
+    const draft = form.draftDefinition;
+    if (draft !== undefined || form.hasDraft) {
+        if (input.on_existing_draft === 'fail') {
+            throw new CliError(
+                'This form has an unpublished draft. Publish or discard it in the ZynoForms builder, or pass on_existing_draft: "extend" to edit that draft instead of the live version.',
+                6,
+                'form_has_draft'
+            );
+        }
+        // `hasDraft` and the draft itself are two queries, so a draft discarded between them reads as
+        // "there is one, here it isn't". Fall through to the live definition and quote revision 0: if a
+        // draft really is there, the API rejects the stale write with its own message.
+        if (draft) return draft;
+    }
+    return requireLiveDefinition(form);
+}
+
+function contentEdits(input: UpdateFormInput) {
+    return {
+        ...(input.title === undefined ? {} : { title: input.title }),
+        ...(input.submit_label === undefined ? {} : { submitLabel: input.submit_label }),
+        ...(input.success_message === undefined ? {} : { successMessage: input.success_message }),
+        ...(input.operations === undefined ? {} : { operations: input.operations })
+    };
+}
+
+/** Only the metadata that actually differs, so an unchanged value never mints an audit entry. */
+function metadataChanges(form: DetailedForm, input: UpdateFormInput): UpdateFormRequest {
+    const changes: UpdateFormRequest = {};
+    if (input.name !== undefined && input.name !== form.name) changes.name = input.name;
+    if (input.slug !== undefined && (input.slug ?? null) !== form.slug) changes.slug = input.slug;
+    if (input.notification_emails !== undefined) {
+        const emails = unique(input.notification_emails);
+        if (!arraysEqual(emails, form.emailTo ?? [])) changes.emailTo = emails.length ? emails : null;
+    }
+    return changes;
+}
+
+/**
+ * Whether the edit is worth a new version. The baseline runs through the same edit pass with nothing to
+ * do, so a definition stored before `fieldIdsByAlias` existed is not mistaken for a change.
+ */
+function changesContent(base: FormDefinition, edit: FormEditResult): boolean {
+    return JSON.stringify(edit.content) !== JSON.stringify(applyFormEdits(base.content, {}).content);
+}
+
+/**
+ * Runs the read-back that turns a completed write into a result. A failure here is not a failed edit — the
+ * writes already landed — so the error says which ones did before it propagates.
+ */
+/**
+ * The caller's precondition on the live version, re-tested against the freshest form the call holds — as
+ * close to the write as this API allows. Saving a definition quotes a draft revision, not the version it
+ * was derived from, so a publish landing between this check and the save cannot be detected here.
+ */
+function requireExpectedDefinition(expected: string | undefined, form: DetailedForm): void {
+    if (expected === undefined || expected === form.activeDefinitionId) return;
+    throw new CliError(
+        `The form’s live definition is now ${form.activeDefinitionId}, not the expected ${expected}; describe it again and rebuild the edit`,
+        6,
+        'definition_changed'
+    );
+}
+
+async function describeAppliedWrites<T>(
+    applied: { metadata: boolean; definition: 'unchanged' | 'draft' | 'published' },
+    build: () => T | Promise<T>
+): Promise<T> {
+    try {
+        return await build();
+    } catch (error) {
+        const written = [
+            ...(applied.metadata ? ['the metadata change'] : []),
+            ...(applied.definition === 'unchanged' ? [] : [`the ${applied.definition} definition`])
+        ];
+        if (!written.length || !(error instanceof CliError)) throw error;
+        throw new CliError(
+            `${error.message} (${written.join(' and ')} already applied; read the form again rather than repeating the edit)`,
+            error.exitCode,
+            error.code,
+            error.details
+        );
+    }
+}
+
+function withAppliedMetadataNote(error: unknown): unknown {
+    if (!(error instanceof CliError)) return error;
+    return new CliError(
+        `${error.message} (the requested name, link, or notification-email changes were already applied)`,
+        error.exitCode,
+        error.code,
+        error.details
+    );
+}
+
+function requireLiveDefinition(form: DetailedForm): FormDefinition {
+    const definition = form.activeDefinition;
+    if (!definition) throw new CliError('The form has no live definition', 5, 'missing_active_definition');
+    return definition;
+}
+
+function definitionSummary(definition: FormDefinition): Record<string, unknown> {
+    const successMessage = definition.content.submit?.successMessage;
+    return {
+        definitionId: definition.id,
+        version: definition.version,
+        revision: definition.revision,
+        isDraft: definition.isDraft,
+        hasRenderTemplate: definition.renderTemplate !== null,
+        title: definition.content.header?.title,
+        submitLabel: definition.content.submit?.title,
+        successMessage: typeof successMessage === 'string' ? successMessage : undefined,
+        ...(successMessage !== undefined && typeof successMessage !== 'string' ? { successMessageIsExpression: true } : {})
+    };
+}
+
 export function normalizeWebOrigin(value: string): string {
     let url: URL;
     try {
@@ -303,7 +548,8 @@ export function normalizeWebOrigin(value: string): string {
     return url.origin;
 }
 
-export function buildFormIntegration(form: DetailedForm, suiteApiUrl: string): Record<string, unknown> {
+export function buildFormIntegration(form: DetailedForm, suiteApiUrl: string): Record<string, unknown> & { warnings: string[] } {
+    const botProtection = form.botProtection;
     const definition = form.activeDefinition;
     if (!definition) throw new CliError('The form has no live definition', 5, 'missing_active_definition');
     if (definition.isDraft) throw new CliError('ZynoSuite marked the active form definition as a draft', 5, 'invalid_suite_response');
@@ -317,6 +563,52 @@ export function buildFormIntegration(form: DetailedForm, suiteApiUrl: string): R
     );
     const flatExample = flattenResponsesForForm(responseExample);
     const warnings = form.hasDraft ? ['This form has an unpublished draft. Integration details describe the current live definition.'] : [];
+    if (form.botProtectionMode && !botProtection) {
+        throw new CliError('ZynoSuite did not return the enabled form’s public bot-protection configuration', 5, 'invalid_suite_response');
+    }
+    if (botProtection && botProtection.mode !== form.botProtectionMode) {
+        throw new CliError('ZynoSuite returned bot-protection configuration that does not match the form', 5, 'invalid_suite_response');
+    }
+    // An invisible proof is only obtainable from script, so the generated markup cannot stand on its own.
+    if (botProtection?.mode === 'invisible') {
+        warnings.push(
+            'Invisible bot protection is enabled, so the generated HTML example cannot post by itself; every submission needs a Cap token. Use the capScript example, which solves Cap and submits the answers as JSON.'
+        );
+    }
+    // A select stores plain strings. Anything else is authored outside this vocabulary, and the generated
+    // control would drop those options silently, leaving an empty and unsubmittable field.
+    const unrenderableSelects = contract.fields
+        .filter(({ field }) => field.type === 'select' && Array.isArray(field.options) && !field.options.every(option => typeof option === 'string'))
+        .map(({ key }) => key);
+    if (unrenderableSelects.length) {
+        warnings.push(
+            `The select fields ${unrenderableSelects.join(', ')} hold options this vocabulary cannot express; the generated HTML omits their choices, so build those controls from the live definition instead.`
+        );
+    }
+    // A paragraph field's pattern is a browser-side rule the API never re-checks, and a textarea cannot
+    // carry one — so for these fields the generated markup enforces nothing the rendered form does.
+    const unenforcedPatterns = contract.fields
+        .filter(({ field }) => field.type === 'text' && field.format === 'large' && typeof field.pattern === 'string')
+        .map(({ key }) => key);
+    if (unenforcedPatterns.length) {
+        warnings.push(
+            `The paragraph fields ${unenforcedPatterns.join(', ')} carry a format rule that a textarea cannot enforce and the API does not re-check; validate them in your own script as the rendered ZynoForm does.`
+        );
+    }
+    // The generated markup shows one copy of a repeating section. The API reads indexed names as an array
+    // and rejects gaps, so hand-added copies have to be numbered consecutively from zero.
+    const repeatedKeys = contract.fields.filter(({ repeated }) => repeated).map(({ key }) => key);
+    if (repeatedKeys.length) {
+        warnings.push(
+            `The fields ${repeatedKeys.join(', ')} belong to a repeating section and are shown as copy [0] only. Number further copies consecutively — the API rejects a gap in the sequence — or let the rendered ZynoForm handle repeats.`
+        );
+    }
+    const otherSelects = contract.fields.filter(({ field }) => field.type === 'select' && field.enableOther === true).map(({ key }) => key);
+    if (otherSelects.length) {
+        warnings.push(
+            `The select fields ${otherSelects.join(', ')} accept a free-text "Other" answer that the generated markup cannot offer; it can submit only the listed options.`
+        );
+    }
     const unsafeAliases = contract.fields.map(field => field.alias).filter((alias): alias is string => !!alias && UNSAFE_FORM_KEYS.has(alias));
     if (unsafeAliases.length) {
         warnings.push(
@@ -333,6 +625,7 @@ export function buildFormIntegration(form: DetailedForm, suiteApiUrl: string): R
             published: !definition.isDraft
         },
         endpoints,
+        botProtection: botProtection ?? null,
         submission: {
             public: true,
             credentialsRequired: false,
@@ -346,7 +639,10 @@ export function buildFormIntegration(form: DetailedForm, suiteApiUrl: string): R
                 json: { responses: responseExample },
                 urlencodedFields: Object.fromEntries(flatExample),
                 multipartTextFields: Object.fromEntries(flatExample),
-                html: htmlFormExample(endpoints.submission, contract.fields)
+                html: htmlFormExample(endpoints.submission, contract.fields, botProtection),
+                ...(botProtection === undefined
+                    ? {}
+                    : { capScript: capScriptExample(endpoints.submission, botProtection, successText(definition.content)) })
             }
         },
         warnings
@@ -359,87 +655,6 @@ async function getFormByReference(forms: FormsClient, reference: string): Promis
     if (!matches.length) throw new CliError(`No form has the slug "${reference}"`, 4, 'form_not_found');
     if (matches.length > 1) throw new CliError(`More than one form has the slug "${reference}"; use its UUID`, 5, 'ambiguous_form');
     return forms.getForm(matches[0]!.id);
-}
-
-function buildBasicField(field: BasicFieldInput): FormField {
-    const common = {
-        id: randomUUID(),
-        alias: field.key,
-        ...(!field.required ? { optional: true } : {})
-    };
-    switch (field.type) {
-        case 'text':
-        case 'textarea':
-        case 'email':
-        case 'phone':
-        case 'url':
-            return {
-                ...common,
-                type: 'text',
-                label: field.label,
-                ...(field.placeholder === undefined ? {} : { placeholder: field.placeholder }),
-                ...(field.type === 'textarea' ? { format: 'large' } : {}),
-                ...(['email', 'phone', 'url'].includes(field.type) ? { inputType: field.type === 'phone' ? 'tel' : field.type } : {}),
-                ...(field.min_length === undefined ? {} : { minLength: field.min_length }),
-                ...(field.max_length === undefined ? {} : { maxLength: field.max_length })
-            };
-        case 'number':
-            return {
-                ...common,
-                type: 'number',
-                label: field.label,
-                ...(field.placeholder === undefined ? {} : { placeholder: field.placeholder }),
-                ...(field.min === undefined ? {} : { min: field.min }),
-                ...(field.max === undefined ? {} : { max: field.max }),
-                ...(field.step === undefined ? {} : { step: field.step })
-            };
-        case 'date':
-            return {
-                ...common,
-                type: 'date',
-                label: field.label,
-                ...(field.min === undefined ? {} : { min: field.min }),
-                ...(field.max === undefined ? {} : { max: field.max })
-            };
-        case 'select':
-            return {
-                ...common,
-                type: 'select',
-                label: field.label,
-                options: field.options,
-                ...(field.enable_other ? { enableOther: true } : {})
-            };
-        case 'radio':
-            return {
-                ...common,
-                type: 'radio',
-                label: field.label,
-                options: field.options.map(option => (typeof option === 'string' ? { title: option } : option))
-            };
-        case 'checkbox':
-            return { ...common, type: 'checkbox', label: field.label };
-        case 'contact':
-            return {
-                ...common,
-                type: 'contact',
-                fields: Object.fromEntries(field.fields.map(part => [contactPartName(part), true]))
-            };
-    }
-}
-
-function contactPartName(part: z.infer<typeof contactPartSchema>): string {
-    const names: Record<z.infer<typeof contactPartSchema>, string> = {
-        display_name: 'displayName',
-        first_name: 'firstName',
-        last_name: 'lastName',
-        company: 'company',
-        birthdate: 'birthdate',
-        phone_cell: 'phoneCell',
-        email: 'email',
-        address: 'address',
-        zip: 'zip'
-    };
-    return names[part];
 }
 
 async function originsForSites(manager: ManagerClient, siteRefs: string[]): Promise<string[]> {
@@ -458,6 +673,7 @@ function decorateFormSummary(form: FormSummary): Record<string, unknown> {
         slug: form.slug,
         emailTo: form.emailTo,
         corsOrigins: form.corsOrigins,
+        botProtectionMode: form.botProtectionMode,
         activeDefinitionId: form.activeDefinitionId,
         createdAt: form.createdAt,
         updatedAt: form.updatedAt,
@@ -469,20 +685,31 @@ function decorateFormSummary(form: FormSummary): Record<string, unknown> {
     };
 }
 
-function publicEndpoints(publicUrl: string, suiteApiUrl: string, definitionId: string, formId: string, formName: string) {
-    const url = new URL(publicUrl);
-    const segments = url.pathname.split('/').filter(Boolean);
-    const formMarker = segments.lastIndexOf('f');
-    if (formMarker < 0 || segments.length !== formMarker + 3) {
-        throw new CliError('ZynoSuite returned a public form URL with an unexpected path', 5, 'invalid_suite_response');
+function botProtectionMode(value: 'interactive' | 'invisible' | 'disabled'): 'interactive' | 'invisible' | null {
+    return value === 'disabled' ? null : value;
+}
+
+function botProtectionModeName(value: 'interactive' | 'invisible' | null): 'interactive' | 'invisible' | 'disabled' {
+    return value ?? 'disabled';
+}
+
+function publicTenantFromUrl(publicUrl: string): string {
+    const segments = new URL(publicUrl).pathname.split('/').filter(Boolean);
+    const formPrefix = segments.indexOf('f');
+    const tenant = formPrefix === -1 ? undefined : segments[formPrefix + 1];
+    if (!tenant) {
+        throw new CliError('ZynoSuite returned a public form URL without a tenant segment', 5, 'invalid_suite_response');
     }
-    let tenant: string;
     try {
-        tenant = decodeURIComponent(segments[formMarker + 1]!);
-        decodeURIComponent(segments[formMarker + 2]!);
+        return decodeURIComponent(tenant);
     } catch {
+        // A stray percent makes decoding throw a bare URIError, which would surface with no exit code.
         throw new CliError('ZynoSuite returned a public form URL with invalid path encoding', 5, 'invalid_suite_response');
     }
+}
+
+function publicEndpoints(publicUrl: string, suiteApiUrl: string, definitionId: string, formId: string, formName: string) {
+    const tenant = publicTenantFromUrl(publicUrl);
     const publicDefinition = `${suiteApiUrl}/public/forms/${encodeURIComponent(tenant)}/${encodeURIComponent(formId)}`;
     return {
         direct: publicUrl,
@@ -505,49 +732,45 @@ function fieldContract(content: FormDefinitionContent): { fields: ContractField[
     const aliases = content.fieldIdsByAlias ?? {};
     const aliasById = new Map(Object.entries(aliases).map(([alias, id]) => [id, alias]));
     const result: ContractField[] = [];
-    const visit = (fields: FormField[], repeat?: unknown) => {
-        for (const field of fields) {
-            if (field.type === 'display' || field.type === 'review') continue;
-            if (field.type === 'section' && Array.isArray(field.fields)) {
-                visit(field.fields.filter(isFormField), field.repeat);
-                continue;
-            }
-            const candidateAlias = field.alias ?? aliasById.get(field.id);
-            const alias = candidateAlias ? candidateAlias : undefined;
-            const key = alias && !UNSAFE_FORM_KEYS.has(alias) ? alias : field.id;
-            const contactFields = isRecord(field.fields) ? field.fields : undefined;
-            const details: Record<string, unknown> = {
-                fieldId: field.id,
-                submissionKey: key,
-                type: field.type,
-                required: !['marketingOptOut', 'emailCopy'].includes(field.type) && field.optional !== true,
-                ...(repeat === undefined ? {} : { repeated: true, repeat }),
-                ...(field.label ? { label: field.label } : {}),
-                ...(field.options !== undefined ? { options: field.options } : {}),
-                ...(field.type === 'contact' && contactFields ? { contactFields: contactResponseParts(contactFields) } : {})
-            };
-            for (const property of [
-                'inputType',
-                'format',
-                'placeholder',
-                'min',
-                'max',
-                'step',
-                'minLength',
-                'maxLength',
-                'pattern',
-                'patternMessage',
-                'enableOther',
-                'inverted',
-                'preamble',
-                'condition'
-            ]) {
-                if (field[property] !== undefined) details[property] = field[property];
-            }
-            result.push({ key, ...(alias ? { alias } : {}), field, repeated: repeat !== undefined, details });
+    for (const { field, section } of walkFields(content)) {
+        // A section holds no response of its own, and neither display blocks nor review summaries are
+        // submitted; everything else answers under its own key, sections included via their children.
+        if (field.type === 'section' || field.type === 'display' || field.type === 'review') continue;
+        const repeat = section?.repeat;
+        const candidateAlias = field.alias ?? aliasById.get(field.id);
+        const alias = candidateAlias ? candidateAlias : undefined;
+        const key = alias && !UNSAFE_FORM_KEYS.has(alias) ? alias : field.id;
+        const contactFields = isRecord(field.fields) ? field.fields : undefined;
+        const details: Record<string, unknown> = {
+            fieldId: field.id,
+            submissionKey: key,
+            type: field.type,
+            required: isFieldRequired(field),
+            ...(repeat === undefined ? {} : { repeated: true, repeat }),
+            ...(field.label ? { label: field.label } : {}),
+            ...(field.options !== undefined ? { options: field.options } : {}),
+            ...(field.type === 'contact' && contactFields ? { contactFields: contactResponseParts(contactFields) } : {})
+        };
+        for (const property of [
+            'inputType',
+            'format',
+            'placeholder',
+            'min',
+            'max',
+            'step',
+            'minLength',
+            'maxLength',
+            'pattern',
+            'patternMessage',
+            'enableOther',
+            'inverted',
+            'preamble',
+            'condition'
+        ]) {
+            if (field[property] !== undefined) details[property] = field[property];
         }
-    };
-    for (const page of content.pages) visit(page.fields);
+        result.push({ key, ...(alias ? { alias } : {}), field, repeated: repeat !== undefined, details });
+    }
     return { fields: result };
 }
 
@@ -657,14 +880,145 @@ function flattenResponsesForForm(responses: Record<string, unknown>): Array<[str
     return result;
 }
 
-function htmlFormExample(submissionUrl: string, fields: ContractField[]): string {
+function htmlFormExample(submissionUrl: string, fields: ContractField[], botProtection?: PublicBotProtection): string {
     const controls = fields.flatMap(({ key, field, repeated }) => htmlControls(key, field, repeated));
+    // The widget posts the solved proof as a hidden field of this form, so interactive protection needs no
+    // script of the site's own. An invisible proof has no markup form at all — say so instead of shipping a
+    // form every submission of which the API rejects.
+    const capControls =
+        botProtection?.mode === 'interactive'
+            ? [
+                  capWidgetScriptTag(),
+                  `  <cap-widget required data-cap-api-endpoint="${escapeHtml(botProtection.apiEndpoint)}" data-cap-hidden-field-name="${escapeHtml(botProtection.tokenField)}"></cap-widget>`
+              ]
+            : [];
+    // Under invisible protection the capScript below takes over this form's submit event. The action stays
+    // on the element anyway: if that script never loads, a native post fails loudly with the API's own 400
+    // instead of navigating to a URL carrying every answer in its query string.
+    const invisible = botProtection?.mode === 'invisible';
+    const preamble = invisible
+        ? [
+              '<!-- Invisible bot protection: the capScript example submits this form. Paste it after this markup; a native post carries no proof and is rejected. -->'
+          ]
+        : [];
+    const status = invisible ? [`<p id="${STATUS_ELEMENT_ID}" role="status" aria-live="polite"></p>`] : [];
     return [
-        `<form method="post" action="${escapeHtml(submissionUrl)}" enctype="application/x-www-form-urlencoded">`,
+        ...preamble,
+        `<form id="${FORM_ELEMENT_ID}" method="post" action="${escapeHtml(submissionUrl)}" enctype="application/x-www-form-urlencoded">`,
         ...controls.map(control => `  ${control}`),
+        ...capControls,
         '  <button type="submit">Submit</button>',
-        '</form>'
+        '</form>',
+        ...status
     ].join('\n');
+}
+
+/** The submitting script for each protection mode: a JSON path for custom pages, a handler for the markup. */
+function capScriptExample(submissionUrl: string, botProtection: PublicBotProtection, success: string): string {
+    const endpoint = jsonForInlineScript(botProtection.apiEndpoint);
+    const submission = jsonForInlineScript(submissionUrl);
+    const tokenField = jsonForInlineScript(botProtection.tokenField);
+    const formSelector = jsonForInlineScript(`#${FORM_ELEMENT_ID}`);
+    const statusSelector = jsonForInlineScript(`#${STATUS_ELEMENT_ID}`);
+    const successMessage = jsonForInlineScript(success);
+    if (botProtection.mode === 'interactive') {
+        // The API validates the responses before it consumes the proof, so a field error leaves the visitor's
+        // solved widget usable. Resetting on every failure would send them back through verification for a
+        // mistyped email; reset once the proof has actually been spent, or when the API says it is stale.
+        return `<cap-widget id="zyno-cap" required data-cap-api-endpoint="${escapeHtml(botProtection.apiEndpoint)}"></cap-widget>
+${capWidgetScriptTag()}
+<script>
+const zynoCapWidget = document.querySelector('#zyno-cap');
+async function submitZynoForm(responses) {
+  const capToken = zynoCapWidget?.tokenValue;
+  if (!capToken) throw new Error('Complete the verification first.');
+  const response = await fetch(${submission}, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ responses, [${tokenField}]: capToken })
+  });
+  if (response.ok) {
+    zynoCapWidget.reset();
+    return await response.json();
+  }
+  const failure = await response.json().catch(() => ({}));
+  // Only a field-level 400 provably left the proof unspent; anything else may have consumed it.
+  if (response.status !== 400 || /verification/i.test(failure.error ?? '')) zynoCapWidget.reset();
+  throw new Error(failure.error || \`Submission failed (\${response.status})\`);
+}
+</script>`;
+    }
+    // Wired to the generated markup, so the pair works as pasted. Three things this has to get right:
+    // JSON rather than the form's own encoding, because it forces a CORS preflight and a page whose origin
+    // is not allowed is then refused *before* a submission is stored rather than after; one solver for the
+    // page, because constructing Cap appends a hidden widget and spawns workers that nothing removes; and a
+    // visible outcome, because a listener's rejected promise goes nowhere a visitor can see.
+    return `${capWidgetScriptTag()}
+<script>
+const zynoForm = document.querySelector(${formSelector});
+const zynoStatus = document.querySelector(${statusSelector});
+const zynoCap = new Cap({ apiEndpoint: ${endpoint} });
+
+zynoForm.addEventListener('submit', event => {
+  event.preventDefault();
+  void submitZynoForm();
+});
+
+async function submitZynoForm() {
+  if (!zynoForm.reportValidity()) return;
+  const submit = zynoForm.querySelector('button[type="submit"]');
+  submit.disabled = true;
+  zynoStatus.textContent = 'Verifying that you are human…';
+  try {
+    const result = await zynoCap.solve();
+    if (!result?.success || !result.token) throw new Error('Human verification could not be completed. Please try again.');
+    const response = await fetch(${submission}, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ responses: zynoResponses(), [${tokenField}]: result.token })
+    });
+    if (!response.ok) {
+      const failure = await response.json().catch(() => ({}));
+      throw new Error(failure.error || \`Submission failed (\${response.status})\`);
+    }
+    zynoForm.hidden = true;
+    zynoStatus.textContent = ${successMessage};
+  } catch (error) {
+    zynoStatus.textContent = error.message;
+    submit.disabled = false;
+  }
+}
+
+/** Rebuilds the nested responses object from this form's own field names. */
+function zynoResponses() {
+  const responses = Object.create(null);
+  for (const [name, value] of new FormData(zynoForm)) {
+    if (!name.startsWith('responses[')) continue;
+    const path = [...name.matchAll(/\\[([^\\]]*)\\]/g)].map(part => part[1]);
+    let node = responses;
+    path.forEach((part, index) => {
+      if (index === path.length - 1) node[part] = value;
+      else {
+        if (!Object.hasOwn(node, part)) node[part] = /^\\d+$/.test(path[index + 1]) ? [] : Object.create(null);
+        node = node[part];
+      }
+    });
+  }
+  return responses;
+}
+</script>`;
+}
+
+/** The form's own confirmation, when it is fixed text an artifact can safely repeat back. */
+function successText(content: FormDefinitionContent): string {
+    const message = content.submit?.successMessage;
+    return typeof message === 'string' && message.trim() ? message : 'Thank you. Your response has been submitted.';
+}
+
+function capWidgetScriptTag(): string {
+    return '<script src="https://cdn.jsdelivr.net/npm/cap-widget@0.1.56/cap.min.js"></script>';
+}
+
+function jsonForInlineScript(value: string): string {
+    return JSON.stringify(value).replaceAll('<', '\\u003c');
 }
 
 function htmlControls(key: string, field: FormField, repeated: boolean): string[] {
@@ -678,8 +1032,12 @@ function htmlControls(key: string, field: FormField, repeated: boolean): string[
         );
     }
     if (field.type === 'select' && Array.isArray(field.options)) {
+        // A select is only "missing" to the browser when its selected option is a placeholder — first, and
+        // with an empty value. Without one, `required` never fires and the first real option is submitted
+        // by default, quietly answering a question the rendered ZynoForm makes the visitor answer.
+        const placeholder = `<option value=""${required ? ' disabled' : ''} selected></option>`;
         return [
-            `<label>${escapeHtml(label)} <select name="${escapeHtml(name)}"${required}>${field.options
+            `<label>${escapeHtml(label)} <select name="${escapeHtml(name)}"${required}>${placeholder}${field.options
                 .filter((option): option is string => typeof option === 'string')
                 .map(option => `<option value="${escapeHtml(option)}">${escapeHtml(option)}</option>`)
                 .join('')}</select></label>`
@@ -692,7 +1050,26 @@ function htmlControls(key: string, field: FormField, repeated: boolean): string[
             return `<label><input type="radio" name="${escapeHtml(name)}" value="${escapeHtml(value)}"${required}> ${escapeHtml(title)}</label>`;
         });
     }
-    if (field.type === 'checkbox' || field.type === 'marketingOptOut' || field.type === 'emailCopy') {
+    // A tickbox can only say yes, and an untouched one is indistinguishable from an unread question. Two
+    // formats need an answer either way, so both render as an explicit pair, exactly as the ZynoForm does:
+    // a yes/no checkbox (required, unanswered until chosen) and a marketing question (whose unticked state
+    // is itself an answer, so the default the renderer seeds is preselected here).
+    if (field.type === 'marketingOptOut' || (field.type === 'checkbox' && field.format === 'yesno')) {
+        const inverted = field.type === 'marketingOptOut' && field.inverted === true;
+        const marketing = field.type === 'marketingOptOut';
+        const preselected = marketing ? String(inverted) : undefined;
+        return [
+            `<fieldset><legend>${escapeHtml(label)}</legend>`,
+            ...(['Yes', 'No'] as const).map(answer => {
+                // The stored value always means "opted out", whichever way the question is worded.
+                const value = String(answer === 'Yes' ? !inverted : inverted);
+                const checked = value === preselected ? ' checked' : '';
+                return `  <label><input type="radio" name="${escapeHtml(name)}" value="${value}"${marketing ? '' : required}${checked}> ${answer}</label>`;
+            }),
+            '</fieldset>'
+        ];
+    }
+    if (field.type === 'checkbox' || field.type === 'emailCopy') {
         return [`<label><input type="checkbox" name="${escapeHtml(name)}" value="true"${required}> ${escapeHtml(label)}</label>`];
     }
     if (field.type === 'signature') {
@@ -701,7 +1078,11 @@ function htmlControls(key: string, field: FormField, repeated: boolean): string[
         ];
     }
     if (field.type === 'text' && field.format === 'large') {
-        return [`<label>${escapeHtml(label)} <textarea name="${escapeHtml(name)}"${controlAttributes(field)}${required}></textarea></label>`];
+        // `pattern` is an input-only attribute; a textarea ignores it, and the API deliberately does not
+        // re-check patterns either. Emitting it would look like a rule and enforce nothing.
+        return [
+            `<label>${escapeHtml(label)} <textarea name="${escapeHtml(name)}"${controlAttributes(field, { pattern: false })}${required}></textarea></label>`
+        ];
     }
     const type =
         field.type === 'number' || field.type === 'date'
@@ -714,7 +1095,7 @@ function htmlControls(key: string, field: FormField, repeated: boolean): string[
     ];
 }
 
-function controlAttributes(field: FormField): string {
+function controlAttributes(field: FormField, options: { pattern?: boolean } = {}): string {
     const attributes: Array<[string, unknown]> = [
         ['placeholder', field.placeholder],
         ['min', field.min],
@@ -722,7 +1103,7 @@ function controlAttributes(field: FormField): string {
         ['step', field.step],
         ['minlength', field.minLength],
         ['maxlength', field.maxLength],
-        ['pattern', field.pattern]
+        ['pattern', options.pattern === false ? undefined : field.pattern]
     ];
     return attributes
         .filter((entry): entry is [string, string | number] => typeof entry[1] === 'string' || typeof entry[1] === 'number')
@@ -761,10 +1142,6 @@ function requireSuiteApiUrl(value: string | undefined): string {
     );
 }
 
-function isFormField(value: unknown): value is FormField {
-    return isRecord(value) && typeof value.id === 'string' && typeof value.type === 'string';
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
     return !!value && typeof value === 'object' && !Array.isArray(value);
 }
@@ -779,16 +1156,6 @@ function arraysEqual(a: string[], b: string[]): boolean {
 
 function humanize(value: string): string {
     return value.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/^./, first => first.toUpperCase());
-}
-
-function calendarDateSchema() {
-    return z
-        .string()
-        .regex(/^\d{4}-\d{2}-\d{2}$/, 'must use YYYY-MM-DD')
-        .refine(value => {
-            const date = new Date(`${value}T00:00:00Z`);
-            return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
-        }, 'must be a real calendar date');
 }
 
 function escapeHtml(value: string): string {
@@ -808,9 +1175,35 @@ Use \`list_forms\` to discover published forms and \`get_form_integration\` to r
 
 ## Creating a basic form
 
-\`create_basic_form\` creates and immediately publishes a one-page form. Each field has a unique \`key\`, which becomes its stable submission alias, and \`required\` defaults to true. The creator supports text, textarea, email, phone, URL, number, date, select, radio, checkbox, and one contact field. Contact details label themselves and are selected with \`fields\`, such as \`["first_name", "last_name", "email", "phone_cell", "address"]\`. Use \`zip\` for ZIP-only collection; \`address\` already includes street, ZIP, city, and state.
+\`create_basic_form\` creates and immediately publishes a one-page form. Each field has a unique \`key\`, which becomes its stable submission alias, and \`required\` defaults to true. The creator supports text, textarea, email, phone, URL, number, date, select, radio, checkbox, and one contact field. Contact details label themselves and are selected with \`fields\`, such as \`["first_name", "last_name", "email", "phone_cell", "address"]\`. Use \`zip\` for ZIP-only collection; \`address\` already includes street, ZIP, city, and state. Its \`bot_protection\` defaults to \`interactive\`; choose \`invisible\` for a programmatic solve or \`disabled\` to preserve a legacy submission integration.
 
 Set explicit \`origins\`, or use \`origin_sites\` to allow HTTPS origins for a ZynoHosting site's primary, alias, and vanity hostnames. The result includes the published form's complete integration details.
+
+## Inspecting and editing a form
+
+\`describe_form\` returns a form the way it is authored: its pages and fields in order, each with the \`key\` that addresses it, its type in the same vocabulary \`create_basic_form\` speaks, its constraints, and whether these tools can edit it. Its \`advanced\` list names everything a form holds that they preserve but cannot author — sections, conditional rules, themes, translations, review and signature fields.
+
+\`update_form\` changes a form in place. Metadata — \`name\`, \`slug\`, \`title\`, \`submit_label\`, \`success_message\`, \`notification_emails\` — is set directly; fields change through \`operations\`, applied in order:
+
+\`\`\`json
+{
+    "form": "contact-us",
+    "operations": [
+        { "op": "add_field", "after": "email", "field": { "key": "budget", "type": "number", "label": "Budget", "min": 0 } },
+        { "op": "update_field", "key": "message", "label": "How can we help?", "required": false },
+        { "op": "move_field", "key": "terms", "page": 2 },
+        { "op": "remove_field", "key": "fax" }
+    ]
+}
+\`\`\`
+
+Fields not named by an operation keep their identity and every stored detail, so editing one field never disturbs another. An anchor inside a section inserts into that section. A new version is published immediately; pass \`publish: false\` to leave an unpublished draft for a person to review instead.
+
+Removing a field does not affect existing submissions: each one is pinned to the definition version it was made against. Renaming a key does break integrations posting the old one. A field named by a conditional rule cannot be renamed or removed here, and neither can a field type outside the basic vocabulary — use the ZynoForms builder for those.
+
+A form has one shared draft. While an unpublished draft exists, \`update_form\` refuses rather than overwrite work in progress; publish or discard it in the builder, or pass \`on_existing_draft: "extend"\` to build on that draft. Pass \`expected_definition_id\` from \`describe_form\` to have the edit refused if the live version changed in the meantime. It is re-checked immediately before the write; the API has no atomic compare-and-publish, so a publish landing in that last instant cannot be detected.
+
+\`update_form_bot_protection\` independently and idempotently changes only Cap protection. Use \`interactive\`, \`invisible\`, or \`disabled\`; a setting that already matches makes no write.
 
 ## Direct link or iframe
 
@@ -834,7 +1227,17 @@ responses[contact][lastName]=Example
 
 Use field aliases as response keys. Field UUIDs remain supported as a fallback. Brackets create nested objects; numeric brackets and empty brackets create arrays. File uploads are not supported by the basic-form integration.
 
-The generated native HTML form posts without JavaScript, then navigates to the API's JSON success response. To show an in-page confirmation instead, intercept submission with JavaScript and allow the page's exact origin before using cross-origin \`fetch\`.
+When \`botProtection\` is non-null in the integration result, its \`apiEndpoint\` and \`tokenField\` are authoritative. Use the endpoint exactly as returned, trailing slash included—the widget appends its own \`challenge\` and \`redeem\` paths to it. The public definition endpoint returns the same object, so a script can read it at runtime instead of hard-coding it.
+
+For \`interactive\`, the native HTML example pins \`cap-widget@0.1.56\` and renders \`<cap-widget>\` with that endpoint and a hidden \`capToken\` field, so the widget posts the proof as part of the form and the page needs no script of its own. The widget is form-associated and carries \`required\`, so the browser blocks submission until the visitor solves it. Its \`capScript\` example shows the matching JSON payload, so custom pages can use Cap without rendering an official ZynoForm.
+
+For \`invisible\`, run local validation first and then call \`new Cap({ apiEndpoint }).solve()\`; include the resulting token as the returned \`tokenField\` (currently \`capToken\`) in the JSON submission. There is no markup-only path: the generated \`capScript\` takes over the generated form's submit event, solves Cap, and posts its answers as JSON. \`disabled\` omits Cap entirely, so existing HTML and JSON submissions remain valid.
+
+The widget loads more than the pinned script: at runtime it fetches its WebAssembly and pako from \`cdn.jsdelivr.net\` and calls the Cap \`apiEndpoint\`. A page with a strict Content-Security-Policy needs both hosts in \`script-src\` and \`connect-src\`, or verification fails with nothing visibly wrong.
+
+A proof is single-use. Each submission needs its own, and the API validates the responses *before* it consumes the proof—so a rejection for a bad field value leaves the visitor's solved widget usable, and only a spent or expired proof requires verifying again. Verification failures come back as HTTP 400 with a message about verification.
+
+The generated native HTML form posts without a script of the site's own—for \`invisible\` protection, use the \`capScript\` example instead—and then navigates to the API's JSON success response. To show an in-page confirmation instead, intercept submission with JavaScript and allow the page's exact origin before using cross-origin \`fetch\`.
 
 The rendered ZynoForm and generated HTML enforce required fields in the browser. A custom JavaScript client should enforce the returned \`required\` contract before submission; the public API cannot generally enforce requiredness because advanced forms may conditionally hide fields.
 
@@ -842,7 +1245,11 @@ The rendered ZynoForm and generated HTML enforce required fields in the browser.
 
 Browser JavaScript that fetches a definition or submits cross-origin must use an allowed exact origin. Use \`update_form_origins\` with explicit HTTP(S) origins, or add a ZynoHosting site to allow HTTPS from its primary, alias, and vanity hostnames. Origins contain only scheme, host, and optional port—never a path.
 
+Allowed origins govern the ZynoSuite form endpoints only. Cap's own \`apiEndpoint\` answers any origin, so solving needs no configuration; a page that solves successfully and is then refused at submission has an origin problem, not a verification one.
+
+Both generated scripts submit JSON deliberately. A URL-encoded \`fetch\` is a simple cross-origin request that skips the preflight, and the submission endpoint withholds only its response headers — so an unlisted origin would have its submissions stored and merely hidden from the page, with every retry storing another. JSON forces the preflight, and an unlisted origin is refused before anything is written. A native \`<form>\` post is a navigation rather than a fetch, so it is unaffected either way.
+
 ## Versioning and limits
 
-API endpoints use the stable form UUID and submission URLs include the active definition ID. After publishing a different definition, call \`get_form_integration\` again and update custom integrations. A saved draft does not change the live endpoint. Request bodies are limited to 5 MiB. The public parser rejects unsafe object keys such as \`__proto__\`.
+API endpoints use the stable form UUID and submission URLs include the active definition ID. After publishing a different definition, call \`get_form_integration\` again and update custom integrations. A saved draft does not change the live endpoint. Request bodies are limited to 5 MiB. The URL-encoded and multipart bracket parser rejects unsafe object keys such as \`__proto__\`; a field whose alias is one of those submits under its field UUID instead.
 `;

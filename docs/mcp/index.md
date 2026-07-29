@@ -118,13 +118,16 @@ Plans:
 
 ## Available tools
 
-The server exposes fourteen tools:
+The server exposes seventeen tools:
 
 - `list_sites`
 - `get_site`
 - `list_forms`
 - `get_form_integration`
+- `describe_form`
 - `create_basic_form`
+- `update_form`
+- `update_form_bot_protection`
 - `update_form_origins`
 - `list_files`
 - `get_file`
