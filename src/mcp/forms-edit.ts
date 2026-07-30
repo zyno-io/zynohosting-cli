@@ -136,7 +136,7 @@ export function fieldKey(field: FormField): string {
 }
 
 export function isFieldRequired(field: FormField): boolean {
-    return !['marketingOptOut', 'emailCopy'].includes(field.type) && field.optional !== true;
+    return !['hidden', 'marketingOptOut', 'emailCopy'].includes(field.type) && field.optional !== true;
 }
 
 export interface DescribedField extends Record<string, unknown> {
@@ -320,6 +320,7 @@ const PROPERTIES_BY_TYPE: Record<string, string[]> = {
     email: ['label', 'placeholder', 'min_length', 'max_length'],
     phone: ['label', 'placeholder', 'min_length', 'max_length'],
     url: ['label', 'placeholder', 'min_length', 'max_length'],
+    hidden: ['label'],
     number: ['label', 'placeholder', 'min', 'max', 'step'],
     date: ['label', 'min', 'max'],
     select: ['label', 'options', 'enable_other'],
@@ -351,7 +352,7 @@ function updateField(
     const provided = Object.entries(properties).filter(([, value]) => value !== undefined);
     if (!provided.length && newKey === undefined) throw new CliError(`no change was requested for "${operation.key}"`, 2, 'empty_operation');
 
-    const allowed = [...(PROPERTIES_BY_TYPE[described.type] ?? []), 'required'];
+    const allowed = [...(PROPERTIES_BY_TYPE[described.type] ?? []), ...(described.type === 'hidden' ? [] : ['required'])];
     for (const [name] of provided) {
         if (allowed.includes(name)) continue;
         throw new CliError(

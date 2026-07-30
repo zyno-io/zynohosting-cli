@@ -16,7 +16,7 @@ Registry-friendly package invocation:
 npx -y @zyno-io/zynohosting mcp --root /absolute/path/to/project
 ```
 
-At least one existing local directory is required. Every local source, destination, deployment root, and ignore file used by a tool must remain inside an allowed root after canonical path resolution.
+Local roots are optional, so a Forms-only or remote-file MCP can start without one. `get_file`, `put_file`, `plan_deploy`, and `plan_download` reject calls until at least one existing local directory is configured. Every local source, destination, deployment root, and ignore file those tools use must remain inside an allowed root after canonical path resolution.
 
 ## Generic client configuration
 
@@ -82,20 +82,20 @@ zynohosting-mcp --environment alpha --root /absolute/path/to/project
 
 The MCP binary accepts:
 
-| Option                  | Purpose                                                |
-| ----------------------- | ------------------------------------------------------ |
-| `--root <path>`         | Add an allowed local root; repeatable.                 |
-| `--api-url <url>`       | Override the Hosting Manager URL.                      |
-| `--suite-api-url <url>` | Override the ZynoSuite API URL used by form tools.     |
-| `--auth-api-url <url>`  | Override the Zyno Auth URL used for token renewal.     |
-| `--environment <name>`  | Select `production`, `alpha`, or `dev`.                |
-| `--api-key <key>`       | Supply a tenant API key. Prefer environment injection. |
+| Option                  | Purpose                                                     |
+| ----------------------- | ----------------------------------------------------------- |
+| `--root <path>`         | Add an allowed local root for local-file tools; repeatable. |
+| `--api-url <url>`       | Override the Hosting Manager URL.                           |
+| `--suite-api-url <url>` | Override the ZynoSuite API URL used by form tools.          |
+| `--auth-api-url <url>`  | Override the Zyno Auth URL used for token renewal.          |
+| `--environment <name>`  | Select `production`, `alpha`, or `dev`.                     |
+| `--api-key <key>`       | Supply a tenant API key. Prefer environment injection.      |
 
 It also honors the normal [configuration environment variables](../reference/configuration#environment-variables).
 
 ## Security boundary
 
-The server canonicalizes existing paths with `realpath`. For a new destination, it finds the nearest existing parent, verifies that parent is a real directory inside an allowed root, and then resolves the remaining suffix. Symbolic-link destinations and escapes are rejected.
+When a local-file tool is used, the server canonicalizes existing paths with `realpath`. For a new destination, it finds the nearest existing parent, verifies that parent is a real directory inside an allowed root, and then resolves the remaining suffix. Symbolic-link destinations and escapes are rejected. With no configured roots, tools that need a local path reject before accessing the filesystem.
 
 Remote access remains independently constrained by tenant permissions and the short-lived site capability issued for each operation.
 

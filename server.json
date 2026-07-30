@@ -7,12 +7,12 @@
         "url": "https://github.com/zyno-io/zynohosting-cli",
         "source": "github"
     },
-    "version": "0.4.0",
+    "version": "0.4.1",
     "packages": [
         {
             "registryType": "npm",
             "identifier": "@zyno-io/zynohosting",
-            "version": "0.4.0",
+            "version": "0.4.1",
             "transport": {
                 "type": "stdio"
             },
@@ -24,8 +24,8 @@
             ],
             "environmentVariables": [
                 {
-                    "description": "Absolute local roots the MCP server may read and write, separated by the platform path delimiter.",
-                    "isRequired": true,
+                    "description": "Optional absolute local roots for local-file MCP tools, separated by the platform path delimiter.",
+                    "isRequired": false,
                     "format": "string",
                     "isSecret": false,
                     "name": "ZYNO_HOSTING_MCP_ROOTS"

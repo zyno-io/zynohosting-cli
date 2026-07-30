@@ -149,7 +149,7 @@ The destination must be new or empty. Archive bytes are extracted as the hosting
 
 The MCP server is local stdio only. It does not open a port or provide a hosted/cloud MCP endpoint.
 
-Every invocation must have at least one allowed local root. Agent file reads, file writes, deploy sources, ignore files, and download destinations are constrained to those roots after canonical path resolution.
+Local roots are optional. Without one, the MCP can still use remote site and form tools, but `get_file`, `put_file`, `plan_deploy`, and `plan_download` reject calls until a root is configured. When roots are configured, local file reads, writes, deploy sources, ignore files, and download destinations are constrained to them after canonical path resolution.
 
 Direct invocation:
 

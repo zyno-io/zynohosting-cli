@@ -7,9 +7,6 @@ export class AllowedLocalRoots {
     private constructor(private readonly roots: string[]) {}
 
     static async create(values: string[]): Promise<AllowedLocalRoots> {
-        if (!values.length) {
-            throw new CliError('At least one MCP local root is required. Pass --root or set ZYNO_HOSTING_MCP_ROOTS.', 2, 'missing_local_root');
-        }
         const roots = await Promise.all(
             values.map(async value => {
                 const absolute = resolve(value);
@@ -30,6 +27,7 @@ export class AllowedLocalRoots {
     }
 
     async existing(path: string): Promise<string> {
+        this.requireConfigured();
         const absolute = this.absolute(path);
         const canonical = await realpath(absolute).catch(error => {
             throw new CliError(
@@ -43,6 +41,7 @@ export class AllowedLocalRoots {
     }
 
     async destination(path: string): Promise<string> {
+        this.requireConfigured();
         const absolute = this.absolute(path);
         const existing = await lstat(absolute).catch(error => {
             if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
@@ -85,6 +84,15 @@ export class AllowedLocalRoots {
     private absolute(path: string): string {
         if (!path || !isAbsolute(path)) throw new CliError('MCP local paths must be absolute', 2, 'unsafe_local_path');
         return resolve(path);
+    }
+
+    private requireConfigured(): void {
+        if (this.roots.length) return;
+        throw new CliError(
+            'This MCP server has no allowed local roots. Pass --root or set ZYNO_HOSTING_MCP_ROOTS before using a tool that reads or writes local files.',
+            2,
+            'missing_local_root'
+        );
     }
 
     private requireInside(path: string): void {

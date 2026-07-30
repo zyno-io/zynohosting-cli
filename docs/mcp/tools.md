@@ -59,6 +59,8 @@ With interactive Cap protection, the native HTML example pins `cap-widget@0.1.56
 
 With invisible protection there is no markup-only path: the generated `capScript` takes over the HTML example's submit event, solves Cap with `new Cap({ apiEndpoint }).solve()` from the pinned `cap-widget@0.1.56` script, and posts the answers as JSON with the token under the returned `tokenField` (currently `capToken`). The markup keeps its `action` so a page whose script never loads fails loudly on the API instead of navigating with every answer in the query string, and the result carries a warning saying it cannot post by itself. Disabled protection omits Cap entirely, so legacy HTML and JSON integrations remain valid.
 
+For a `hidden` form field, the response contract identifies its `source` as `urlQueryParameter` and includes its `urlParameter`. It is not a secret: the public form reads that query parameter from its own URL, and generated native HTML enables its hidden control only when the parameter is present. Treat the value as visitor-controlled in every integration.
+
 Use `apiEndpoint` exactly as returned, trailing slash included—the widget appends its own `challenge` and `redeem` paths. Beyond the pinned script, the widget fetches its WebAssembly and pako from `cdn.jsdelivr.net` and calls the Cap endpoint at runtime, so a page with a strict Content-Security-Policy needs both hosts in `script-src` and `connect-src`. A proof is single-use, so each submission needs its own. The API validates the responses before it consumes the proof, so a rejection for a bad field value leaves a solved widget usable; only a spent or expired proof requires verifying again. Cap's endpoint answers any origin, so solving needs no configuration—allowed origins govern the ZynoSuite endpoints only. Both generated scripts post JSON on purpose: a URL-encoded `fetch` skips the CORS preflight, and the submission endpoint withholds only response headers, so an unlisted origin would have its submissions stored and merely hidden. A native `<form>` post is a navigation and is unaffected.
 
 - Mutates remote state: no
@@ -97,7 +99,9 @@ Creates a one-page form and immediately publishes version 1. This is deliberatel
 
 On a Suite deployment that predates Cap, the API can create the form while ignoring the requested protection setting. In that case this tool returns an error that names the already-created form rather than claiming it is protected. Use `disabled` explicitly for a legacy deployment, or upgrade the Suite before creating a protected form.
 
-`fields` accepts `text`, `textarea`, `email`, `phone`, `url`, `number`, `date`, `select`, `radio`, `checkbox`, and one `contact` field. Every field has a unique JavaScript-identifier `key`; that becomes its stable submission alias. `required` defaults to `true`.
+`fields` accepts `text`, `textarea`, `email`, `phone`, `url`, `hidden`, `number`, `date`, `select`, `radio`, `checkbox`, and one `contact` field. Every field has a unique JavaScript-identifier `key`; that becomes its stable submission alias. `required` defaults to `true` except for `hidden` fields.
+
+A `hidden` field accepts only `key` and `label`. Its key is its public form URL query-parameter name: for example, `?campaign=spring` submits `campaign: "spring"`. It never renders a visible input and is always visitor-controlled; do not use it for secrets or trusted data.
 
 The rendered form and generated HTML enforce required fields in the browser. Custom JavaScript integrations should enforce the returned `required` contract before submitting; the public API cannot generally require conditionally visible fields.
 
@@ -165,7 +169,7 @@ Metadata arguments—`name`, `slug`, `title`, `submit_label`, `success_message`,
 `operations` apply in order, each addressing a field by its `key` (or its UUID when it has none):
 
 - `add_field` takes the same field shape as `create_basic_form`. Position it with `before`, `after`, or `page`; the default is the end of the last page. An anchor inside a section inserts into that section.
-- `update_field` changes only the properties it names: `label`, `required`, `placeholder`, `options`, `enable_other`, `min`, `max`, `step`, `min_length`, `max_length`, `fields` (contact parts), and `new_key` to rename the submission key. `null` clears an optional constraint. Changing a field’s type is rejected—remove it and add its replacement, since the field’s identity carries its submission history.
+- `update_field` changes only the properties it names: `label`, `required`, `placeholder`, `options`, `enable_other`, `min`, `max`, `step`, `min_length`, `max_length`, `fields` (contact parts), and `new_key` to rename the submission key. A `hidden` field permits only `label` and `new_key`. `null` clears an optional constraint. Changing a field’s type is rejected—remove it and add its replacement, since the field’s identity carries its submission history.
 - `remove_field` removes a field, and a section removes the fields inside it.
 - `move_field` repositions a field, including into or out of a section.
 
@@ -249,6 +253,8 @@ Permission: `hosting.filesRead`.
 ### `get_file`
 
 Downloads one regular hosted file into an allowed local root.
+
+This tool, `put_file`, `plan_deploy`, and `plan_download` require at least one configured local root. Remote-only tools, including `list_files` and `delete_file`, can run without one.
 
 ```json
 {

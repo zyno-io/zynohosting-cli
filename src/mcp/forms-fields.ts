@@ -7,7 +7,20 @@ export const ALIAS_PATTERN = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 export const UNSAFE_FORM_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
 
 /** The authoring vocabulary these tools speak. Anything else is described and preserved, never authored. */
-export const BASIC_FIELD_TYPES = ['text', 'textarea', 'email', 'phone', 'url', 'number', 'date', 'select', 'radio', 'checkbox', 'contact'] as const;
+export const BASIC_FIELD_TYPES = [
+    'text',
+    'textarea',
+    'email',
+    'phone',
+    'url',
+    'hidden',
+    'number',
+    'date',
+    'select',
+    'radio',
+    'checkbox',
+    'contact'
+] as const;
 
 export type BasicFieldType = (typeof BASIC_FIELD_TYPES)[number];
 
@@ -51,6 +64,15 @@ const textFieldSchema = z
         placeholder: z.string().max(500).optional(),
         min_length: z.number().int().nonnegative().optional(),
         max_length: z.number().int().nonnegative().optional()
+    })
+    .strict();
+
+/** A URL-populated tracking value. It has no rendered input and therefore cannot be required. */
+const hiddenFieldSchema = z
+    .object({
+        key: fieldKeySchema,
+        type: z.literal('hidden'),
+        label: z.string().trim().min(1).max(255)
     })
     .strict();
 
@@ -112,6 +134,7 @@ const contactFieldSchema = z
 
 export const basicFieldSchema = z.discriminatedUnion('type', [
     textFieldSchema,
+    hiddenFieldSchema,
     numberFieldSchema,
     dateFieldSchema,
     selectFieldSchema,
@@ -162,10 +185,11 @@ export function radioOptionValue(option: RadioOptionInput): string {
 }
 
 export function buildBasicField(field: BasicFieldInput): FormField {
+    const optional = 'required' in field && field.required === false;
     const common = {
         id: randomUUID(),
         alias: field.key,
-        ...(!field.required ? { optional: true } : {})
+        ...(optional ? { optional: true } : {})
     };
     switch (field.type) {
         case 'text':
@@ -183,6 +207,8 @@ export function buildBasicField(field: BasicFieldInput): FormField {
                 ...(field.min_length === undefined ? {} : { minLength: field.min_length }),
                 ...(field.max_length === undefined ? {} : { maxLength: field.max_length })
             };
+        case 'hidden':
+            return { ...common, type: 'hidden', label: field.label };
         case 'number':
             return {
                 ...common,
@@ -290,6 +316,13 @@ export function describeBasicField(field: FormField): BasicFieldDescription | un
                 locked: []
             };
         }
+        case 'hidden':
+            return {
+                type: 'hidden',
+                properties: { label: stringOrUndefined(field.label) },
+                preserved: preservedProperties(field, ['label']),
+                locked: []
+            };
         case 'number':
             return {
                 type: 'number',

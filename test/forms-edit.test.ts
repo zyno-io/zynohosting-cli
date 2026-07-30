@@ -102,6 +102,29 @@ test('describes every basic field in the vocabulary that created it', () => {
     assert.deepEqual(described.warnings, []);
 });
 
+test('authors and edits hidden URL-parameter fields without requiredness', () => {
+    const { content } = applyFormEdits(basicForm(), {
+        operations: [{ op: 'add_field', field: { key: 'campaign', label: 'Campaign', type: 'hidden' } }] as FormOperation[]
+    });
+    const hidden = describeFormContent(content).pages[0]!.fields.find(field => field.key === 'campaign')!;
+    assert.deepEqual(
+        { type: hidden.type, label: hidden.label, required: hidden.required, editable: hidden.editable },
+        { type: 'hidden', label: 'Campaign', required: false, editable: true }
+    );
+    const stored = content.pages[0]!.fields.find(field => field.alias === 'campaign')!;
+    assert.deepEqual(stored, { id: stored.id, alias: 'campaign', type: 'hidden', label: 'Campaign' });
+
+    const { content: relabeled } = applyFormEdits(content, {
+        operations: [{ op: 'update_field', key: 'campaign', label: 'Campaign source', new_key: 'campaignSource' }] as FormOperation[]
+    });
+    const updated = relabeled.pages[0]!.fields.find(field => field.alias === 'campaignSource')!;
+    assert.equal(updated.label, 'Campaign source');
+    assert.throws(
+        () => applyFormEdits(relabeled, { operations: [{ op: 'update_field', key: 'campaignSource', required: true }] as FormOperation[] }),
+        /does not apply to the hidden field/
+    );
+});
+
 test('describes advanced content as preserved and not editable', () => {
     const described = describeFormContent(advancedForm());
     const fields = described.pages.flatMap(page => page.fields);

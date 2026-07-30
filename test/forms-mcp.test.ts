@@ -195,6 +195,7 @@ test('exposes forms discovery, creation, integration guidance, and exact-origin 
                 fields: [
                     { key: 'name', label: 'Name', type: 'text' },
                     { key: 'email', label: 'Email', type: 'email' },
+                    { key: 'campaign', label: 'Campaign', type: 'hidden' },
                     { key: 'budget', label: 'Budget', type: 'number', required: false, min: 0 },
                     { key: 'message', label: 'Message', type: 'textarea' }
                 ]
@@ -223,10 +224,16 @@ test('exposes forms discovery, creation, integration guidance, and exact-origin 
             'https://forms.example.net'
         ]);
         assert.equal(createBody.botProtectionMode, 'interactive', 'basic forms default to interactive Cap protection');
-        assert.deepEqual(Object.keys(createBody.content.fieldIdsByAlias), ['name', 'email', 'budget', 'message']);
+        assert.deepEqual(Object.keys(createBody.content.fieldIdsByAlias), ['name', 'email', 'campaign', 'budget', 'message']);
         assert(createBody.content.pages[0]!.fields.every(field => typeof field.id === 'string'));
         assert.equal(createBody.content.pages[0]!.fields[0]!.optional, undefined);
-        assert.equal(createBody.content.pages[0]!.fields[2]!.optional, true);
+        assert.deepEqual(createBody.content.pages[0]!.fields[2], {
+            id: createBody.content.pages[0]!.fields[2]!.id,
+            alias: 'campaign',
+            type: 'hidden',
+            label: 'Campaign'
+        });
+        assert.equal(createBody.content.pages[0]!.fields[3]!.optional, true);
         assert.deepEqual(createBody.content.header, { title: 'Request a quote' });
         assert.deepEqual(createBody.content.submit, {
             title: 'Submit',

@@ -172,7 +172,7 @@ export function registerFormsMcp(server: McpServer, forms: FormsClient, manager:
         {
             title: 'Create a basic published ZynoForm',
             description:
-                'Create and immediately publish a one-page form with text, textarea, email, phone, URL, number, date, select, radio, checkbox, or contact fields. Fields submit by stable key aliases; required defaults to true. Exact origins or ZynoHosting site references may be allowed for browser JavaScript.',
+                'Create and immediately publish a one-page form with text, textarea, email, phone, URL, hidden, number, date, select, radio, checkbox, or contact fields. Fields submit by stable key aliases; required defaults to true except for hidden URL-parameter fields. Exact origins or ZynoHosting site references may be allowed for browser JavaScript.',
             inputSchema: createBasicFormInputSchema,
             annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }
         },
@@ -741,6 +741,7 @@ function fieldContract(content: FormDefinitionContent): { fields: ContractField[
         const alias = candidateAlias ? candidateAlias : undefined;
         const key = alias && !UNSAFE_FORM_KEYS.has(alias) ? alias : field.id;
         const contactFields = isRecord(field.fields) ? field.fields : undefined;
+        const urlParameter = field.type === 'hidden' ? requireHiddenUrlParameter(field) : undefined;
         const details: Record<string, unknown> = {
             fieldId: field.id,
             submissionKey: key,
@@ -749,7 +750,8 @@ function fieldContract(content: FormDefinitionContent): { fields: ContractField[
             ...(repeat === undefined ? {} : { repeated: true, repeat }),
             ...(field.label ? { label: field.label } : {}),
             ...(field.options !== undefined ? { options: field.options } : {}),
-            ...(field.type === 'contact' && contactFields ? { contactFields: contactResponseParts(contactFields) } : {})
+            ...(field.type === 'contact' && contactFields ? { contactFields: contactResponseParts(contactFields) } : {}),
+            ...(urlParameter === undefined ? {} : { source: 'urlQueryParameter', urlParameter })
         };
         for (const property of [
             'inputType',
@@ -801,9 +803,16 @@ function exampleValue(field: FormField): unknown {
             return contactExample(field.fields);
         case 'signature':
             return 'name:Alex Example';
+        case 'hidden':
+            return 'example-url-value';
         default:
             return textExample(field);
     }
+}
+
+function requireHiddenUrlParameter(field: FormField): string {
+    if (typeof field.alias === 'string' && field.alias) return field.alias;
+    throw new CliError(`ZynoSuite returned hidden field ${field.id} without its required URL parameter name`, 5, 'invalid_suite_response');
 }
 
 function contactExample(value: unknown): Record<string, unknown> {
@@ -882,6 +891,7 @@ function flattenResponsesForForm(responses: Record<string, unknown>): Array<[str
 
 function htmlFormExample(submissionUrl: string, fields: ContractField[], botProtection?: PublicBotProtection): string {
     const controls = fields.flatMap(({ key, field, repeated }) => htmlControls(key, field, repeated));
+    const hiddenPrefill = hiddenFieldPrefillScript(fields);
     // The widget posts the solved proof as a hidden field of this form, so interactive protection needs no
     // script of the site's own. An invisible proof has no markup form at all — say so instead of shipping a
     // form every submission of which the API rejects.
@@ -909,6 +919,7 @@ function htmlFormExample(submissionUrl: string, fields: ContractField[], botProt
         ...capControls,
         '  <button type="submit">Submit</button>',
         '</form>',
+        ...hiddenPrefill,
         ...status
     ].join('\n');
 }
@@ -1017,14 +1028,19 @@ function capWidgetScriptTag(): string {
     return '<script src="https://cdn.jsdelivr.net/npm/cap-widget@0.1.56/cap.min.js"></script>';
 }
 
-function jsonForInlineScript(value: string): string {
-    return JSON.stringify(value).replaceAll('<', '\\u003c');
+function jsonForInlineScript(value: unknown): string {
+    const json = JSON.stringify(value);
+    if (json === undefined) throw new Error('Cannot serialize inline script data');
+    return json.replaceAll('<', '\\u003c');
 }
 
 function htmlControls(key: string, field: FormField, repeated: boolean): string[] {
     const name = `responses[${key}]${repeated ? '[0]' : ''}`;
     const label = field.label ?? key;
     const required = field.optional === true || field.type === 'marketingOptOut' || field.type === 'emailCopy' ? '' : ' required';
+    if (field.type === 'hidden') {
+        return [`<input type="hidden" id="${escapeHtml(hiddenInputId(field))}" name="${escapeHtml(name)}" disabled>`];
+    }
     if (field.type === 'contact' && isRecord(field.fields)) {
         return contactResponseParts(field.fields).map(
             part =>
@@ -1093,6 +1109,30 @@ function htmlControls(key: string, field: FormField, repeated: boolean): string[
     return [
         `<label>${escapeHtml(label)} <input type="${escapeHtml(type)}" name="${escapeHtml(name)}"${controlAttributes(field)}${required}></label>`
     ];
+}
+
+function hiddenFieldPrefillScript(fields: ContractField[]): string[] {
+    const bindings = fields.flatMap(({ field }) => {
+        if (field.type !== 'hidden' || typeof field.alias !== 'string') return [];
+        return [{ id: hiddenInputId(field), parameter: field.alias }];
+    });
+    if (!bindings.length) return [];
+    return [
+        `<script>
+for (const { id, parameter } of ${jsonForInlineScript(bindings)}) {
+  const input = document.getElementById(id);
+  const value = new URLSearchParams(window.location.search).get(parameter);
+  if (input instanceof HTMLInputElement && value !== null) {
+    input.value = value;
+    input.disabled = false;
+  }
+}
+</script>`
+    ];
+}
+
+function hiddenInputId(field: FormField): string {
+    return `zyno-hidden-${field.id}`;
 }
 
 function controlAttributes(field: FormField, options: { pattern?: boolean } = {}): string {
@@ -1175,7 +1215,7 @@ Use \`list_forms\` to discover published forms and \`get_form_integration\` to r
 
 ## Creating a basic form
 
-\`create_basic_form\` creates and immediately publishes a one-page form. Each field has a unique \`key\`, which becomes its stable submission alias, and \`required\` defaults to true. The creator supports text, textarea, email, phone, URL, number, date, select, radio, checkbox, and one contact field. Contact details label themselves and are selected with \`fields\`, such as \`["first_name", "last_name", "email", "phone_cell", "address"]\`. Use \`zip\` for ZIP-only collection; \`address\` already includes street, ZIP, city, and state. Its \`bot_protection\` defaults to \`interactive\`; choose \`invisible\` for a programmatic solve or \`disabled\` to preserve a legacy submission integration.
+\`create_basic_form\` creates and immediately publishes a one-page form. Each field has a unique \`key\`, which becomes its stable submission alias, and \`required\` defaults to true. The creator supports text, textarea, email, phone, URL, hidden URL-parameter, number, date, select, radio, checkbox, and one contact field. A hidden field accepts only \`key\` and \`label\`: the public ZynoForm reads its matching query parameter (for example, \`?campaign=spring\`) into that response. It is visitor-controlled attribution, not a secret or trusted input. Contact details label themselves and are selected with \`fields\`, such as \`["first_name", "last_name", "email", "phone_cell", "address"]\`. Use \`zip\` for ZIP-only collection; \`address\` already includes street, ZIP, city, and state. Its \`bot_protection\` defaults to \`interactive\`; choose \`invisible\` for a programmatic solve or \`disabled\` to preserve a legacy submission integration.
 
 Set explicit \`origins\`, or use \`origin_sites\` to allow HTTPS origins for a ZynoHosting site's primary, alias, and vanity hostnames. The result includes the published form's complete integration details.
 
@@ -1227,6 +1267,8 @@ responses[contact][lastName]=Example
 
 Use field aliases as response keys. Field UUIDs remain supported as a fallback. Brackets create nested objects; numeric brackets and empty brackets create arrays. File uploads are not supported by the basic-form integration.
 
+A hidden field is not a secret and never renders a visible input. Its alias is the public form URL's query-parameter name: a link ending in \`?campaign=spring\` submits \`campaign: "spring"\`. The generated native HTML keeps that control disabled unless that exact parameter is present, then a small prefill script enables it. Custom JSON clients should use the same parameter convention and must treat every value as visitor-controlled.
+
 When \`botProtection\` is non-null in the integration result, its \`apiEndpoint\` and \`tokenField\` are authoritative. Use the endpoint exactly as returned, trailing slash included—the widget appends its own \`challenge\` and \`redeem\` paths to it. The public definition endpoint returns the same object, so a script can read it at runtime instead of hard-coding it.
 
 For \`interactive\`, the native HTML example pins \`cap-widget@0.1.56\` and renders \`<cap-widget>\` with that endpoint and a hidden \`capToken\` field, so the widget posts the proof as part of the form and the page needs no script of its own. The widget is form-associated and carries \`required\`, so the browser blocks submission until the visitor solves it. Its \`capScript\` example shows the matching JSON payload, so custom pages can use Cap without rendering an official ZynoForm.
@@ -1237,7 +1279,7 @@ The widget loads more than the pinned script: at runtime it fetches its WebAssem
 
 A proof is single-use. Each submission needs its own, and the API validates the responses *before* it consumes the proof—so a rejection for a bad field value leaves the visitor's solved widget usable, and only a spent or expired proof requires verifying again. Verification failures come back as HTTP 400 with a message about verification.
 
-The generated native HTML form posts without a script of the site's own—for \`invisible\` protection, use the \`capScript\` example instead—and then navigates to the API's JSON success response. To show an in-page confirmation instead, intercept submission with JavaScript and allow the page's exact origin before using cross-origin \`fetch\`.
+The generated native HTML form posts without a script of the site's own—except the small URL-prefill script needed for hidden fields. For \`invisible\` protection, use the \`capScript\` example instead—and then navigates to the API's JSON success response. To show an in-page confirmation instead, intercept submission with JavaScript and allow the page's exact origin before using cross-origin \`fetch\`.
 
 The rendered ZynoForm and generated HTML enforce required fields in the browser. A custom JavaScript client should enforce the returned \`required\` contract before submission; the public API cannot generally enforce requiredness because advanced forms may conditionally hide fields.
 

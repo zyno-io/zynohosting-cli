@@ -284,6 +284,35 @@ test('serves site metadata and downloads files only inside allowed roots', async
     }
 });
 
+test('starts without local roots and rejects only tools that access local paths', async () => {
+    const roots = await AllowedLocalRoots.create([]);
+    assert.deepEqual(roots.list(), []);
+    const hosting = await createHostingMcpServer({
+        roots,
+        version: '1.0.0',
+        apiUrl: 'http://127.0.0.1:1',
+        suiteApiUrl: 'http://127.0.0.1:1',
+        apiKey: 'secret'
+    });
+    const client = new Client({ name: 'rootless-mcp-test-client', version: '1.0.0' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await hosting.connect(serverTransport);
+    await client.connect(clientTransport);
+    try {
+        const tools = await client.listTools();
+        assert(tools.tools.some(tool => tool.name === 'list_forms'));
+        const rejected = await client.callTool({
+            name: 'get_file',
+            arguments: { site: 'example.com', remote_path: 'index.html', local_path: '/tmp/index.html' }
+        });
+        assert.equal(rejected.isError, true);
+        assert.match(JSON.stringify(rejected.content), /no allowed local roots/);
+    } finally {
+        await client.close();
+        await hosting.close();
+    }
+});
+
 async function requestText(request: AsyncIterable<unknown>): Promise<string> {
     const chunks: Buffer[] = [];
     for await (const chunk of request) chunks.push(Buffer.from(chunk as Buffer));

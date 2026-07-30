@@ -74,6 +74,7 @@ test('maps every basic scalar field type and its constraints to the Suite defini
             { key: 'plain', label: 'Plain', type: 'text', required: true, placeholder: 'Type here' },
             { key: 'phone', label: 'Phone', type: 'phone', required: true },
             { key: 'website', label: 'Website', type: 'url', required: true },
+            { key: 'campaign', label: 'Campaign', type: 'hidden' },
             { key: 'amount', label: 'Amount', type: 'number', required: true, min: 0, max: 10, step: 0.5 },
             { key: 'day', label: 'Day', type: 'date', required: true, min: '2026-01-01', max: '2026-12-31' },
             { key: 'choice', label: 'Choice', type: 'select', required: true, options: ['One', 'Two'], enable_other: true }
@@ -85,10 +86,11 @@ test('maps every basic scalar field type and its constraints to the Suite defini
     assert.equal(fields[0]!.placeholder, 'Type here');
     assert.equal(fields[1]!.inputType, 'tel');
     assert.equal(fields[2]!.inputType, 'url');
-    assert.deepEqual({ min: fields[3]!.min, max: fields[3]!.max, step: fields[3]!.step }, { min: 0, max: 10, step: 0.5 });
-    assert.deepEqual({ min: fields[4]!.min, max: fields[4]!.max }, { min: '2026-01-01', max: '2026-12-31' });
-    assert.deepEqual(fields[5]!.options, ['One', 'Two']);
-    assert.equal(fields[5]!.enableOther, true);
+    assert.deepEqual(fields[3], { id: fields[3]!.id, alias: 'campaign', type: 'hidden', label: 'Campaign' });
+    assert.deepEqual({ min: fields[4]!.min, max: fields[4]!.max, step: fields[4]!.step }, { min: 0, max: 10, step: 0.5 });
+    assert.deepEqual({ min: fields[5]!.min, max: fields[5]!.max }, { min: '2026-01-01', max: '2026-12-31' });
+    assert.deepEqual(fields[6]!.options, ['One', 'Two']);
+    assert.equal(fields[6]!.enableOther, true);
 });
 
 test('normalizes exact web origins and rejects paths, credentials, and non-web schemes', () => {
@@ -139,6 +141,43 @@ test('builds live endpoints and alias-keyed examples without credentials', () =>
     assert.doesNotMatch(JSON.stringify(integration), /api-secret|Authorization|Bearer/);
     assert.match(EMBEDDING_GUIDE, /OpenAPI-advertised/);
     assert.match(EMBEDDING_GUIDE, /application\/x-www-form-urlencoded/);
+});
+
+test('describes and prefills hidden URL-parameter fields in generated integrations', () => {
+    const form = detailedForm();
+    const hiddenId = '99999999-9999-4999-8999-999999999999';
+    form.activeDefinition!.content.fieldIdsByAlias!.campaign = hiddenId;
+    form.activeDefinition!.content.pages[0]!.fields.push({ id: hiddenId, alias: 'campaign', type: 'hidden', label: 'Campaign' });
+
+    const integration = buildFormIntegration(form, 'https://suite.api.zyno.app');
+    const submission = integration.submission as {
+        fieldsByAlias: Record<string, Record<string, unknown>>;
+        examples: { json: { responses: Record<string, unknown> }; html: string };
+    };
+    assert.deepEqual(submission.fieldsByAlias.campaign, {
+        fieldId: hiddenId,
+        submissionKey: 'campaign',
+        type: 'hidden',
+        required: false,
+        label: 'Campaign',
+        source: 'urlQueryParameter',
+        urlParameter: 'campaign'
+    });
+
+    const examples = submission.examples;
+    assert.equal(examples.json.responses.campaign, 'example-url-value');
+    assert.match(examples.html, new RegExp(`<input type="hidden" id="zyno-hidden-${hiddenId}" name="responses\\[campaign\\]" disabled>`));
+    assert.match(examples.html, /"parameter":"campaign"/);
+    assert.match(examples.html, /new URLSearchParams\(window\.location\.search\)\.get\(parameter\)/);
+    assert.doesNotMatch(examples.html, /<label>Campaign/);
+    assert.match(EMBEDDING_GUIDE, /visitor-controlled attribution/);
+});
+
+test('rejects a malformed hidden field without its URL parameter alias', () => {
+    const form = detailedForm();
+    form.activeDefinition!.content.pages[0]!.fields = [{ id: '99999999-9999-4999-8999-999999999999', type: 'hidden', label: 'Campaign' }];
+    form.activeDefinition!.content.fieldIdsByAlias = {};
+    assert.throws(() => buildFormIntegration(form, 'https://suite.api.zyno.app'), /hidden field .*required URL parameter name/);
 });
 
 function protectedForm(mode: 'interactive' | 'invisible'): DetailedForm {
