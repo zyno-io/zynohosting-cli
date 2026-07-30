@@ -85,11 +85,11 @@ export async function createHostingMcpServer(options: McpServerOptions): Promise
         'get_file',
         {
             title: 'Download one hosted file',
-            description: 'Download one regular hosted file into an allowed local root.',
+            description: 'Download one regular hosted file to the MCP process filesystem, optionally restricted by configured local roots.',
             inputSchema: {
                 site: z.string().min(1),
                 remote_path: z.string().min(1),
-                local_path: z.string().min(1).describe('Absolute path inside an allowed MCP local root'),
+                local_path: z.string().min(1).describe('Absolute local destination; inside an MCP root when roots are configured'),
                 overwrite: z.boolean().default(false)
             },
             annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false }
@@ -113,10 +113,11 @@ export async function createHostingMcpServer(options: McpServerOptions): Promise
         'put_file',
         {
             title: 'Upload one hosted file',
-            description: 'Create or replace one regular hosted file from an allowed local source.',
+            description:
+                'Create or replace one regular hosted file from the MCP process filesystem, optionally restricted by configured local roots.',
             inputSchema: {
                 site: z.string().min(1),
-                local_path: z.string().min(1).describe('Absolute source path inside an allowed MCP local root'),
+                local_path: z.string().min(1).describe('Absolute local source; inside an MCP root when roots are configured'),
                 remote_path: z.string().min(1),
                 etag: z.string().optional(),
                 create_only: z.boolean().default(false)
@@ -164,7 +165,7 @@ export async function createHostingMcpServer(options: McpServerOptions): Promise
             description: 'Build and store an exact deployment plan. This does not change the hosted site.',
             inputSchema: {
                 site: z.string().min(1),
-                local_root: z.string().min(1).describe('Absolute directory inside an allowed MCP local root'),
+                local_root: z.string().min(1).describe('Absolute local directory; inside an MCP root when roots are configured'),
                 ignore: z.array(z.string()).default([]),
                 ignore_file: z.string().optional(),
                 allow_empty: z.boolean().default(false)
@@ -219,10 +220,11 @@ export async function createHostingMcpServer(options: McpServerOptions): Promise
         'plan_download',
         {
             title: 'Plan a complete site download',
-            description: 'Authorize a deployable-only or sensitive full snapshot into an allowed local destination.',
+            description:
+                'Authorize a deployable-only or sensitive full snapshot into a local destination, optionally restricted by configured roots.',
             inputSchema: {
                 site: z.string().min(1),
-                local_root: z.string().min(1).describe('Absolute new or empty directory inside an allowed MCP local root'),
+                local_root: z.string().min(1).describe('Absolute new or empty directory; inside an MCP root when roots are configured'),
                 include_sensitive: z.boolean().default(false)
             },
             annotations: { readOnlyHint: true, openWorldHint: false }

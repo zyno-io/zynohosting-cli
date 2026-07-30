@@ -1,7 +1,7 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, symlink, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -284,14 +284,77 @@ test('serves site metadata and downloads files only inside allowed roots', async
     }
 });
 
-test('starts without local roots and rejects only tools that access local paths', async () => {
+test('allows unrestricted local paths when no local roots are configured', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'zynohosting-mcp-unrestricted-'));
+    const source = join(directory, 'source.html');
+    const destination = join(directory, 'download.html');
+    await writeFile(source, 'unrestricted upload');
     const roots = await AllowedLocalRoots.create([]);
     assert.deepEqual(roots.list(), []);
+    const canonicalDirectory = await realpath(directory);
+    assert.equal(await roots.existing(source), await realpath(source));
+    assert.equal(await roots.destination(destination), join(canonicalDirectory, 'download.html'));
+
+    let uploaded = '';
+    const httpServer = createServer(async (request, response) => {
+        response.setHeader('Content-Type', 'application/json');
+        if (request.url === '/v1/sites/example.com/access-sessions' && request.method === 'POST') {
+            const body = JSON.parse(await requestText(request)) as { scopes: string[] };
+            response.end(
+                JSON.stringify({
+                    protocolVersion: 1,
+                    site: {
+                        id: '11111111-1111-4111-8111-111111111111',
+                        fqdn: 'example.com',
+                        status: 'active',
+                        phpVersion: null
+                    },
+                    endpoints: {
+                        deploy: `http://127.0.0.1:${address().port}/deploy`,
+                        files: `http://127.0.0.1:${address().port}/files`
+                    },
+                    scopes: body.scopes,
+                    accessToken: 'file-token',
+                    expiresAt: new Date(Date.now() + 60_000).toISOString()
+                })
+            );
+            return;
+        }
+        if (request.url === '/files/content?path=index.html' && request.method === 'PUT') {
+            assert.equal(request.headers.authorization, 'Bearer file-token');
+            uploaded = await requestText(request);
+            response.end(
+                JSON.stringify({
+                    created: true,
+                    entry: {
+                        path: 'index.html',
+                        type: 'file',
+                        size: Buffer.byteLength(uploaded),
+                        modifiedAt: '2026-07-30T00:00:00.000Z',
+                        etag: '"uploaded"'
+                    }
+                })
+            );
+            return;
+        }
+        if (request.url === '/v1/sites/11111111-1111-4111-8111-111111111111/cache/purge' && request.method === 'POST') {
+            response.end(JSON.stringify({ status: 'pending' }));
+            return;
+        }
+        response.statusCode = 404;
+        response.end(JSON.stringify({ message: 'not found' }));
+    });
+    await new Promise<void>(resolve => httpServer.listen(0, '127.0.0.1', resolve));
+    const address = () => {
+        const value = httpServer.address();
+        assert(value && typeof value === 'object');
+        return value;
+    };
     const hosting = await createHostingMcpServer({
         roots,
         version: '1.0.0',
-        apiUrl: 'http://127.0.0.1:1',
-        suiteApiUrl: 'http://127.0.0.1:1',
+        apiUrl: `http://127.0.0.1:${address().port}`,
+        suiteApiUrl: `http://127.0.0.1:${address().port}`,
         apiKey: 'secret'
     });
     const client = new Client({ name: 'rootless-mcp-test-client', version: '1.0.0' });
@@ -301,15 +364,16 @@ test('starts without local roots and rejects only tools that access local paths'
     try {
         const tools = await client.listTools();
         assert(tools.tools.some(tool => tool.name === 'list_forms'));
-        const rejected = await client.callTool({
-            name: 'get_file',
-            arguments: { site: 'example.com', remote_path: 'index.html', local_path: '/tmp/index.html' }
+        const result = await client.callTool({
+            name: 'put_file',
+            arguments: { site: 'example.com', local_path: source, remote_path: 'index.html' }
         });
-        assert.equal(rejected.isError, true);
-        assert.match(JSON.stringify(rejected.content), /no allowed local roots/);
+        assert.equal(result.isError, undefined);
+        assert.equal(uploaded, 'unrestricted upload');
     } finally {
         await client.close();
         await hosting.close();
+        await new Promise<void>((resolve, reject) => httpServer.close(error => (error ? reject(error) : resolve())));
     }
 });
 

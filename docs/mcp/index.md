@@ -16,7 +16,7 @@ Registry-friendly package invocation:
 npx -y @zyno-io/zynohosting mcp --root /absolute/path/to/project
 ```
 
-Local roots are optional, so a Forms-only or remote-file MCP can start without one. `get_file`, `put_file`, `plan_deploy`, and `plan_download` reject calls until at least one existing local directory is configured. Every local source, destination, deployment root, and ignore file those tools use must remain inside an allowed root after canonical path resolution.
+Local roots are an optional allowlist for the filesystem of the computer running the MCP process. When `ZYNO_HOSTING_MCP_ROOTS` and `--root` are both omitted, local-file tools can use any absolute path that process user can access. Configure one or more existing roots to limit every local source, destination, deployment root, and ignore file to those directories after canonical path resolution.
 
 ## Generic client configuration
 
@@ -74,6 +74,8 @@ $env:ZYNO_HOSTING_MCP_ROOTS='C:\sites\a;C:\sites\b'
 
 Roots must already exist and must be real directories rather than symbolic links. Duplicate canonical roots are collapsed.
 
+Omit both `--root` and `ZYNO_HOSTING_MCP_ROOTS` to leave local-file tools unrestricted to the MCP process user's accessible filesystem. This is useful for a trusted personal MCP; use roots when the agent should be confined to specific projects.
+
 ## Select an environment
 
 ```bash
@@ -82,20 +84,20 @@ zynohosting-mcp --environment alpha --root /absolute/path/to/project
 
 The MCP binary accepts:
 
-| Option                  | Purpose                                                     |
-| ----------------------- | ----------------------------------------------------------- |
-| `--root <path>`         | Add an allowed local root for local-file tools; repeatable. |
-| `--api-url <url>`       | Override the Hosting Manager URL.                           |
-| `--suite-api-url <url>` | Override the ZynoSuite API URL used by form tools.          |
-| `--auth-api-url <url>`  | Override the Zyno Auth URL used for token renewal.          |
-| `--environment <name>`  | Select `production`, `alpha`, or `dev`.                     |
-| `--api-key <key>`       | Supply a tenant API key. Prefer environment injection.      |
+| Option                  | Purpose                                                |
+| ----------------------- | ------------------------------------------------------ |
+| `--root <path>`         | Restrict local-file tools to this root; repeatable.    |
+| `--api-url <url>`       | Override the Hosting Manager URL.                      |
+| `--suite-api-url <url>` | Override the ZynoSuite API URL used by form tools.     |
+| `--auth-api-url <url>`  | Override the Zyno Auth URL used for token renewal.     |
+| `--environment <name>`  | Select `production`, `alpha`, or `dev`.                |
+| `--api-key <key>`       | Supply a tenant API key. Prefer environment injection. |
 
 It also honors the normal [configuration environment variables](../reference/configuration#environment-variables).
 
 ## Security boundary
 
-When a local-file tool is used, the server canonicalizes existing paths with `realpath`. For a new destination, it finds the nearest existing parent, verifies that parent is a real directory inside an allowed root, and then resolves the remaining suffix. Symbolic-link destinations and escapes are rejected. With no configured roots, tools that need a local path reject before accessing the filesystem.
+When local roots are configured, the server canonicalizes existing paths with `realpath`. For a new destination, it finds the nearest existing parent, verifies that parent is a real directory inside an allowed root, and then resolves the remaining suffix. Symbolic-link destinations and escapes are rejected. With no configured roots, there is no root containment boundary: local-file tools use any absolute path accessible to the MCP process user.
 
 Remote access remains independently constrained by tenant permissions and the short-lived site capability issued for each operation.
 
@@ -140,4 +142,4 @@ The server exposes seventeen tools:
 
 See the [MCP tool reference](./tools) for arguments, effects, and permissions.
 
-It also publishes the `zynoforms://guides/embedding` resource. Agents can read it for a compact description of direct links, iframes, public submission formats, alias-keyed fields, versioned endpoints, body limits, and CORS.
+It also publishes the `zynoforms://guides/embedding` resource. Agents can read it for a compact description of direct links, iframes, the height message a framed form posts to its host page, public submission formats, alias-keyed fields, versioned endpoints, body limits, and CORS.

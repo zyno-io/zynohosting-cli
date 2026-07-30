@@ -14,19 +14,19 @@ The Hosting API URL is selected from an explicit option, environment variable, s
 
 ## Environment variables
 
-| Variable                        | Sensitive | Purpose                                                                                                       |
-| ------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------- |
-| `ZYNO_HOSTING_API_KEY`          | yes       | Tenant API key for CLI, CI, or MCP.                                                                           |
-| `ZYNO_HOSTING_ACCESS_TOKEN`     | yes       | Advanced user bearer-token injection.                                                                         |
-| `ZYNO_HOSTING_TENANT_ID`        | no        | Optional tenant metadata for an injected scoped token.                                                        |
-| `ZYNO_HOSTING_TOKEN_EXPIRES_AT` | no        | Optional bearer expiry as epoch milliseconds.                                                                 |
-| `ZYNO_HOSTING_API_URL`          | no        | Override the Hosting Manager base URL.                                                                        |
-| `ZYNO_SUITE_API_URL`            | no        | Override the ZynoSuite base URL used by MCP form tools.                                                       |
-| `ZYNO_AUTH_API_URL`             | no        | Override the Zyno Auth base URL used for renew and revoke.                                                    |
-| `ZYNO_HOSTING_ENVIRONMENT`      | no        | Select `production`, `alpha`, or `dev`.                                                                       |
-| `ZYNO_HOSTING_CONFIG`           | no        | Override the saved configuration path.                                                                        |
-| `ZYNO_HOSTING_LOGIN_URL`        | no        | Override the browser-login SPA URL.                                                                           |
-| `ZYNO_HOSTING_MCP_ROOTS`        | no        | Optional platform-delimited absolute roots for MCP local I/O; required only by tools that access local files. |
+| Variable                        | Sensitive | Purpose                                                                                                                    |
+| ------------------------------- | --------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `ZYNO_HOSTING_API_KEY`          | yes       | Tenant API key for CLI, CI, or MCP.                                                                                        |
+| `ZYNO_HOSTING_ACCESS_TOKEN`     | yes       | Advanced user bearer-token injection.                                                                                      |
+| `ZYNO_HOSTING_TENANT_ID`        | no        | Optional tenant metadata for an injected scoped token.                                                                     |
+| `ZYNO_HOSTING_TOKEN_EXPIRES_AT` | no        | Optional bearer expiry as epoch milliseconds.                                                                              |
+| `ZYNO_HOSTING_API_URL`          | no        | Override the Hosting Manager base URL.                                                                                     |
+| `ZYNO_SUITE_API_URL`            | no        | Override the ZynoSuite base URL used by MCP form tools.                                                                    |
+| `ZYNO_AUTH_API_URL`             | no        | Override the Zyno Auth base URL used for renew and revoke.                                                                 |
+| `ZYNO_HOSTING_ENVIRONMENT`      | no        | Select `production`, `alpha`, or `dev`.                                                                                    |
+| `ZYNO_HOSTING_CONFIG`           | no        | Override the saved configuration path.                                                                                     |
+| `ZYNO_HOSTING_LOGIN_URL`        | no        | Override the browser-login SPA URL.                                                                                        |
+| `ZYNO_HOSTING_MCP_ROOTS`        | no        | Optional platform-delimited local-path allowlist for the MCP process. Omit it to allow any accessible absolute local path. |
 
 ## API endpoint validation
 

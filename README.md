@@ -149,7 +149,7 @@ The destination must be new or empty. Archive bytes are extracted as the hosting
 
 The MCP server is local stdio only. It does not open a port or provide a hosted/cloud MCP endpoint.
 
-Local roots are optional. Without one, the MCP can still use remote site and form tools, but `get_file`, `put_file`, `plan_deploy`, and `plan_download` reject calls until a root is configured. When roots are configured, local file reads, writes, deploy sources, ignore files, and download destinations are constrained to them after canonical path resolution.
+`ZYNO_HOSTING_MCP_ROOTS` is an optional local-computer allowlist for the MCP process. When it is unset, local-file tools can use any absolute path the MCP process user can access. When roots are configured, local file reads, writes, deploy sources, ignore files, and download destinations are constrained to them after canonical path resolution.
 
 Direct invocation:
 

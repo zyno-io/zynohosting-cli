@@ -82,7 +82,7 @@ Continue with [Full deployments](../cli/deploy).
 
 ### Connect an agent
 
-Run the local MCP server with an allowed filesystem root when the agent needs local-file, deploy, or download tools:
+Restrict local-file access to a project root when the agent should not use the MCP process user's entire accessible filesystem:
 
 ```bash
 npx -y @zyno-io/zynohosting mcp --root /absolute/path/to/project

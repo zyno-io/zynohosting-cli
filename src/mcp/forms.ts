@@ -640,8 +640,10 @@ export function buildFormIntegration(form: DetailedForm, suiteApiUrl: string): R
                 urlencodedFields: Object.fromEntries(flatExample),
                 multipartTextFields: Object.fromEntries(flatExample),
                 html: htmlFormExample(endpoints.submission, contract.fields, botProtection),
+                // A Cap-free script for a protected form would be a submission the API always rejects,
+                // so the two are alternatives rather than both being offered.
                 ...(botProtection === undefined
-                    ? {}
+                    ? { jsonScript: jsonScriptExample(endpoints.submission, successText(definition.content)) }
                     : { capScript: capScriptExample(endpoints.submission, botProtection, successText(definition.content)) })
             }
         },
@@ -714,10 +716,39 @@ function publicEndpoints(publicUrl: string, suiteApiUrl: string, definitionId: s
     return {
         direct: publicUrl,
         iframe: `<iframe src="${escapeHtml(publicUrl)}" title="${escapeHtml(formName)}" style="width:100%;min-height:720px;border:0" loading="lazy"></iframe>`,
+        iframeAutoHeight: autoHeightIframe(publicUrl, formName),
         definition: `${publicDefinition}?definitionId=${encodeURIComponent(definitionId)}`,
         currentDefinition: publicDefinition,
         submission: `${publicDefinition}/${encodeURIComponent(definitionId)}/submissions`
     };
+}
+
+// The rendered form measures itself and posts its height to whatever framed it, so a host page can
+// size the frame to the content instead of leaving a fixed box with an inner scrollbar. The listener
+// is generated rather than described because it has two checks a hand-written one tends to omit: any
+// framed page can post a message, so the origin must match the form's, and a page may embed several
+// forms, so the message must be tied to this frame. It matches on `event.source`, not the message's
+// `formId` — a form URL may name its form by slug, so the id in the payload is only canonical once
+// the definition has loaded.
+function autoHeightIframe(publicUrl: string, formName: string): string {
+    const origin = new URL(publicUrl).origin;
+    return [
+        `<iframe src="${escapeHtml(publicUrl)}" title="${escapeHtml(formName)}" style="width:100%;height:720px;border:0" loading="lazy"></iframe>`,
+        '<script>',
+        '(function () {',
+        '    var frame = document.currentScript && document.currentScript.previousElementSibling;',
+        '    if (!(frame instanceof HTMLIFrameElement)) return;',
+        '    window.addEventListener("message", function (event) {',
+        `    if (event.origin !== ${JSON.stringify(origin)}) return;`,
+        '    var message = event.data;',
+        '    if (!message || message.type !== "zcx:embed:form-height") return;',
+        '    if (event.source !== frame.contentWindow) return;',
+        '    if (typeof message.height !== "number" || !Number.isFinite(message.height) || message.height < 0) return;',
+        '    frame.style.height = Math.ceil(message.height) + "px";',
+        '    });',
+        '}());',
+        '</script>'
+    ].join('\n');
 }
 
 interface ContractField {
@@ -1018,6 +1049,34 @@ function zynoResponses() {
 </script>`;
 }
 
+/**
+ * The submitting script for a form the site builds and styles itself. Cap-protected forms get
+ * `capScript` instead, which has to solve a proof first; this is the plain path, and it exists
+ * because a page carrying its own markup otherwise had the endpoint and the body shape but no
+ * example stating the verb, the content type, or what a rejection looks like.
+ */
+function jsonScriptExample(submissionUrl: string, success: string): string {
+    const submission = jsonForInlineScript(submissionUrl);
+    const successMessage = jsonForInlineScript(success);
+    return `<script>
+(() => {
+// In this script's own submit handler, call with field values keyed by submission key:
+// submitZynoForm({ email: 'person@example.com' })
+async function submitZynoForm(responses) {
+  const response = await fetch(${submission}, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ responses })
+  });
+  const result = await response.json().catch(() => ({}));
+  // 200 answers { ok: true }; every failure answers { error: "..." } — 400 for a rejected value,
+  // 404 for an unknown form or definition, 413 for a body over the 5 MiB limit.
+  if (!response.ok) throw new Error(result.error || \`Submission failed (\${response.status})\`);
+  return ${successMessage};
+}
+})();
+</script>`;
+}
+
 /** The form's own confirmation, when it is fixed text an artifact can safely repeat back. */
 function successText(content: FormDefinitionContent): string {
     const message = content.submit?.successMessage;
@@ -1249,13 +1308,25 @@ A form has one shared draft. While an unpublished draft exists, \`update_form\` 
 
 The form's \`publicUrl\` is a customer-facing rendered form. Link to it directly or use the iframe returned by the tools. An iframe does not require custom JavaScript; adjust its minimum height to suit the page and form.
 
+A framed form measures itself and posts its height to the parent page, so the frame can follow the content instead of scrolling inside a fixed box:
+
+\`\`\`json
+{ "type": "zcx:embed:form-height", "formId": "<form UUID>", "height": 1180 }
+\`\`\`
+
+It posts as soon as it loads and again on every later height change — paging through a multi-page form, a conditional field appearing, a validation message, the visitor resizing the window. \`get_form_integration\` returns \`iframeAutoHeight\`: the same iframe plus a listener that applies it. A page writing its own listener must check \`event.origin\` against the form's origin, and identify the sending frame with \`event.source === frame.contentWindow\` when the page embeds more than one form. Do not match on \`formId\`: a form URL may name its form by slug, so the payload carries whatever the URL used until the definition loads and the canonical form UUID afterwards. The form posts to \`*\` because it cannot know which site framed it; the payload is only that id and an integer. A page that ignores the message keeps its fixed-height iframe and inner scrollbar, so nothing breaks by not listening.
+
 ## Custom HTML or JavaScript
 
-Submit to the live definition's public submission endpoint. Public definition and submission requests require no credentials. JSON is the recommended and OpenAPI-advertised format:
+A site can build and style its own form and post to ZynoForms directly — no iframe, no ZynoSuite markup. Read the field list from \`get_form_integration\`'s \`fieldsByAlias\` (or the public definition endpoint, to pick up changes without a redeploy), render it however the site's design calls for, and \`POST\` the answers to the live definition's public submission endpoint with \`Content-Type: application/json\`. Public definition and submission requests require no credentials. JSON is the recommended and OpenAPI-advertised format:
 
 \`\`\`json
 { "responses": { "email": "person@example.com" } }
 \`\`\`
+
+A form without bot protection returns a ready \`jsonScript\` example with an instance-scoped \`submitZynoForm\` function for that form's own submit handler; a protected one returns \`capScript\` instead, which is the same request with a solved Cap token added, since a submission without one is always rejected.
+
+A stored submission answers \`200\` with \`{ "ok": true }\`. Every failure answers \`{ "error": "<message>" }\`: \`400\` for a rejected value, a field addressed twice, an unpublished definition, or failed verification — the message is meant to be shown to the visitor; \`404\` for a tenant, form, or definition that does not exist; \`413\` for a body over the 5 MiB limit. A cross-origin submission from an unlisted origin is refused by the browser at the preflight, so the page sees a network error rather than a status.
 
 The runtime also accepts \`application/x-www-form-urlencoded\` and multipart text fields using bracket notation:
 

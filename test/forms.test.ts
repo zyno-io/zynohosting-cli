@@ -108,13 +108,29 @@ test('builds live endpoints and alias-keyed examples without credentials', () =>
     assert.equal(Object.hasOwn(summary, 'draftDefinition'), false);
     assert.deepEqual(integration.liveDefinition, { id: DEFINITION_ID, version: 1, revision: 0, published: true });
     assert.equal(integration.botProtection, null);
-    assert.deepEqual(integration.endpoints, {
+    const { iframeAutoHeight, ...endpoints } = integration.endpoints as Record<string, string> & { iframeAutoHeight: string };
+    assert.deepEqual(endpoints, {
         direct: 'https://zyno.app/f/acme/contact-us',
         iframe: '<iframe src="https://zyno.app/f/acme/contact-us" title="Contact us" style="width:100%;min-height:720px;border:0" loading="lazy"></iframe>',
         definition: `https://suite.api.zyno.app/public/forms/acme/${FORM_ID}?definitionId=${DEFINITION_ID}`,
         currentDefinition: `https://suite.api.zyno.app/public/forms/acme/${FORM_ID}`,
         submission: `https://suite.api.zyno.app/public/forms/acme/${FORM_ID}/${DEFINITION_ID}/submissions`
     });
+    // The generated listener must be selective: any framed page can post a message, and one host page
+    // may embed several forms.
+    assert.match(iframeAutoHeight, /<iframe src="https:\/\/zyno\.app\/f\/acme\/contact-us"/);
+    assert.doesNotMatch(iframeAutoHeight, /id="zynoform-/);
+    // Each pasted snippet binds to its immediately preceding iframe rather than a page-global ID, so
+    // embedding the same form twice does not make both listeners target the first frame.
+    assert.match(iframeAutoHeight, /document\.currentScript && document\.currentScript\.previousElementSibling/);
+    assert.match(iframeAutoHeight, /event\.origin !== "https:\/\/zyno\.app"/);
+    assert.match(iframeAutoHeight, /message\.type !== "zcx:embed:form-height"/);
+    // Not `message.formId`: a public URL may name the form by slug, so the id is only canonical after
+    // the definition loads.
+    assert.match(iframeAutoHeight, /event\.source !== frame\.contentWindow/);
+    assert.doesNotMatch(iframeAutoHeight, /message\.formId/);
+    assert.match(iframeAutoHeight, /typeof message\.height !== "number"/);
+    assert.match(iframeAutoHeight, /frame\.style\.height = Math\.ceil\(message\.height\) \+ "px"/);
     const submission = integration.submission as Record<string, unknown>;
     assert.deepEqual(submission.openApiContentTypes, ['application/json']);
     assert.deepEqual(submission.acceptedContentTypes, ['application/json', 'application/x-www-form-urlencoded', 'multipart/form-data']);
@@ -141,6 +157,24 @@ test('builds live endpoints and alias-keyed examples without credentials', () =>
     assert.doesNotMatch(JSON.stringify(integration), /api-secret|Authorization|Bearer/);
     assert.match(EMBEDDING_GUIDE, /OpenAPI-advertised/);
     assert.match(EMBEDDING_GUIDE, /application\/x-www-form-urlencoded/);
+    assert.match(EMBEDDING_GUIDE, /zcx:embed:form-height/);
+    assert.match(EMBEDDING_GUIDE, /iframeAutoHeight/);
+    // A site building its own themed form needs the verb, the header, and what an answer looks like.
+    assert.match(EMBEDDING_GUIDE, /Content-Type: application\/json/);
+    assert.match(EMBEDDING_GUIDE, /\{ "ok": true \}/);
+    assert.match(EMBEDDING_GUIDE, /\{ "error": "<message>" \}/);
+
+    // No bot protection on this form, so the plain JSON submitter stands in for capScript.
+    const submitters = examples as unknown as Record<string, string | undefined>;
+    assert.equal(submitters.capScript, undefined);
+    const jsonScript = submitters.jsonScript!;
+    assert.match(jsonScript, /method: 'POST', headers: \{ 'Content-Type': 'application\/json' \}/);
+    assert.match(jsonScript, new RegExp(`fetch\\("https://suite\\.api\\.zyno\\.app/public/forms/acme/${FORM_ID}/${DEFINITION_ID}/submissions"`));
+    assert.match(jsonScript, /JSON\.stringify\(\{ responses \}\)/);
+    assert.match(jsonScript, /result\.error \|\| /);
+    assert.match(jsonScript, /\(\(\) => \{/);
+    assert.match(jsonScript, /\}\)\(\);/);
+    assert.doesNotMatch(jsonScript, /(?:window\.)?submitZynoForm\s*=/, 'the helper must not overwrite one from another pasted snippet');
 });
 
 test('describes and prefills hidden URL-parameter fields in generated integrations', () => {

@@ -220,7 +220,7 @@ export function createProgram(): Command {
     program
         .command('mcp')
         .description('run the local ZynoHosting and ZynoForms MCP server')
-        .option('--root <path>', 'allow local-file MCP tools to access this root (repeatable)', collect, [])
+        .option('--root <path>', 'restrict local-file MCP tools to this root (repeatable)', collect, [])
         .action(async (commandOptions: { root: string[] }) => {
             const context = commandContext(program, {});
             await startHostingMcp({

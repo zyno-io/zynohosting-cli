@@ -44,16 +44,18 @@ Returns everything needed to connect a site to the current live version of one f
 
 `form` is a form UUID or exact slug; names are intentionally not accepted. The result includes:
 
-- direct and iframe embed code;
+- direct and iframe embed code, including an `iframeAutoHeight` variant that resizes the frame to the form;
 - stable form-UUID public definition and submission URLs, version-pinned to the live definition, plus the current-definition URL;
 - the live definition ID, version, and revision;
 - the response contract keyed by stable field alias;
-- JSON, URL-encoded, multipart-text, and native HTML examples;
+- JSON, URL-encoded, multipart-text, and native HTML examples, plus an instance-scoped `jsonScript` submit helper for a site's own themed form (replaced by `capScript` when the form is Cap-protected);
 - the optional public Cap.js `botProtection` configuration and a mode-specific `capScript` example that submits with a Cap proof;
 - accepted content types and the 5 MiB body limit;
 - a warning when an unpublished draft exists.
 
 JSON is the recommended and OpenAPI-advertised submission format. The runtime also accepts `application/x-www-form-urlencoded` and multipart text fields using names such as `responses[email]` and `responses[contact][firstName]`. Public definition and submission endpoints require no credential.
+
+A site that renders its own themed form posts `{ "responses": { … } }` to the submission endpoint with `POST` and `Content-Type: application/json`. A stored submission answers `200` with `{ "ok": true }`; failures answer `{ "error": "<message>" }` with `400` (rejected value, duplicate field, unpublished definition, failed verification), `404` (unknown tenant, form, or definition), or `413` (body over 5 MiB).
 
 With interactive Cap protection, the native HTML example pins `cap-widget@0.1.56`, renders `<cap-widget>` with the returned `apiEndpoint`, and names its hidden token field `capToken`, so the widget posts the proof as part of the form and the page needs no script of its own. The widget is form-associated and carries `required`, so the browser blocks submission until the visitor solves it. The returned `capScript` example shows how a custom JSON integration can take the solved token from that widget and include it in the payload without rendering an official ZynoForm.
 
@@ -226,6 +228,8 @@ At least one add/remove list must be non-empty. An origin contains only an HTTP(
 - Idempotent: yes
 - Permission: `forms.edit`; `hosting.sitesRead` when a site reference is used
 
+A framed form posts `{ type: "zcx:embed:form-height", formId, height }` to its parent on load and on every later height change. `iframeAutoHeight` already listens for it; a hand-written listener must check `event.origin` and, when a page embeds more than one form, identify the frame with `event.source === frame.contentWindow` rather than by `formId`.
+
 For a static integration overview, read the MCP resource `zynoforms://guides/embedding`.
 
 ## Individual files
@@ -252,9 +256,9 @@ Permission: `hosting.filesRead`.
 
 ### `get_file`
 
-Downloads one regular hosted file into an allowed local root.
+Downloads one regular hosted file to the filesystem of the computer running the MCP process.
 
-This tool, `put_file`, `plan_deploy`, and `plan_download` require at least one configured local root. Remote-only tools, including `list_files` and `delete_file`, can run without one.
+When one or more local roots are configured, this tool, `put_file`, `plan_deploy`, and `plan_download` constrain their local paths to those roots. When no roots are configured, they can use any absolute path accessible to the MCP process user.
 
 ```json
 {
@@ -265,18 +269,18 @@ This tool, `put_file`, `plan_deploy`, and `plan_download` require at least one c
 }
 ```
 
-| Argument      | Required | Default | Meaning                                    |
-| ------------- | -------- | ------- | ------------------------------------------ |
-| `site`        | yes      | —       | Site UUID or hostname.                     |
-| `remote_path` | yes      | —       | Remote file relative to the document root. |
-| `local_path`  | yes      | —       | Absolute destination inside an MCP root.   |
-| `overwrite`   | no       | `false` | Replace an existing regular local file.    |
+| Argument      | Required | Default | Meaning                                                   |
+| ------------- | -------- | ------- | --------------------------------------------------------- |
+| `site`        | yes      | —       | Site UUID or hostname.                                    |
+| `remote_path` | yes      | —       | Remote file relative to the document root.                |
+| `local_path`  | yes      | —       | Absolute destination; inside an MCP root when configured. |
+| `overwrite`   | no       | `false` | Replace an existing regular local file.                   |
 
 Permission: `hosting.filesRead`.
 
 ### `put_file`
 
-Creates or replaces one regular hosted file from an allowed local source.
+Creates or replaces one regular hosted file from the MCP process filesystem.
 
 ```json
 {
@@ -288,13 +292,13 @@ Creates or replaces one regular hosted file from an allowed local source.
 }
 ```
 
-| Argument      | Required | Default | Meaning                                           |
-| ------------- | -------- | ------- | ------------------------------------------------- |
-| `site`        | yes      | —       | Site UUID or hostname.                            |
-| `local_path`  | yes      | —       | Existing regular file inside an MCP root.         |
-| `remote_path` | yes      | —       | Remote destination relative to the document root. |
-| `etag`        | no       | —       | Replace only if the current ETag matches.         |
-| `create_only` | no       | `false` | Fail if the path already exists.                  |
+| Argument      | Required | Default | Meaning                                                    |
+| ------------- | -------- | ------- | ---------------------------------------------------------- |
+| `site`        | yes      | —       | Site UUID or hostname.                                     |
+| `local_path`  | yes      | —       | Existing regular file; inside an MCP root when configured. |
+| `remote_path` | yes      | —       | Remote destination relative to the document root.          |
+| `etag`        | no       | —       | Replace only if the current ETag matches.                  |
+| `create_only` | no       | `false` | Fail if the path already exists.                           |
 
 The manager queues cache invalidation after a successful write. Permission: `hosting.filesWrite`.
 

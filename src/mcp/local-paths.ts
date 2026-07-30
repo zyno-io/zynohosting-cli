@@ -27,7 +27,6 @@ export class AllowedLocalRoots {
     }
 
     async existing(path: string): Promise<string> {
-        this.requireConfigured();
         const absolute = this.absolute(path);
         const canonical = await realpath(absolute).catch(error => {
             throw new CliError(
@@ -41,7 +40,6 @@ export class AllowedLocalRoots {
     }
 
     async destination(path: string): Promise<string> {
-        this.requireConfigured();
         const absolute = this.absolute(path);
         const existing = await lstat(absolute).catch(error => {
             if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
@@ -86,16 +84,8 @@ export class AllowedLocalRoots {
         return resolve(path);
     }
 
-    private requireConfigured(): void {
-        if (this.roots.length) return;
-        throw new CliError(
-            'This MCP server has no allowed local roots. Pass --root or set ZYNO_HOSTING_MCP_ROOTS before using a tool that reads or writes local files.',
-            2,
-            'missing_local_root'
-        );
-    }
-
     private requireInside(path: string): void {
+        if (!this.roots.length) return;
         if (!this.roots.some(root => path === root || path.startsWith(`${root}${sep}`))) {
             throw new CliError(`Local path is outside the configured MCP roots: ${path}`, 2, 'unsafe_local_path');
         }
