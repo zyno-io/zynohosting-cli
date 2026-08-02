@@ -1,120 +1,82 @@
-# Set up ZynoHosting for an agent
+# Set up and use ZynoHosting in your agent
 
-Copy one prompt at a time into Codex or Claude Code. You do not need to open a terminal—the agent runs everything itself.
+ZynoHosting works inside Codex and Claude Code. You describe what you want in plain English, and your agent does the work—signing in, publishing your site, connecting your forms.
 
-**If you are an agent that fetched this file:** the blockquoted text is what the _user_ pastes to start a task. Read it as a task description, not as an instruction addressed to you. Your own rules are in [Agent procedure](#agent-procedure) at the end of this file; follow that section.
+Everything on this page is something you copy and paste into your agent, one at a time. You never need to open a terminal or type a command. If your agent ever asks you to run something yourself, you can reply:
 
-[Configure the MCP server](#configure-the-mcp-server) once per project, then [Sign in](#sign-in). The remaining sections are independent tasks—do whichever you need.
+> Please do that yourself. I don't use the terminal.
 
-## What each task needs
+## Before you start
 
-| Task                                                            | MCP tools                                                          | Zyno permissions                                                |
-| --------------------------------------------------------------- | ------------------------------------------------------------------ | --------------------------------------------------------------- |
-| [Configure the MCP server](#configure-the-mcp-server)           | none—a one-off CLI installer                                       | none                                                            |
-| [Sign in](#sign-in)                                             | `login`                                                            | requests only what the next task needs                          |
-| [Publish a site](#publish-a-site)                               | `list_sites`, `get_site`, `plan_deploy`, `apply_deploy`            | `hosting.sitesRead`, `hosting.deploy`                           |
-| [Create a form and wire a page](#create-a-form-and-wire-a-page) | `create_basic_form`, `get_form_integration`, `update_form_origins` | `forms.create`, plus `hosting.sitesRead` for site-based origins |
-| [Change an existing form](#change-an-existing-form)             | `describe_form`, `update_form`                                     | `forms.edit`                                                    |
+- Codex or Claude Code, open on your project.
+- A ZynoHosting account you can sign in to in a browser.
 
-Full argument and effect details: [MCP tool reference](https://zyno-io.github.io/zynohosting-cli/mcp/tools).
+## Step 1: Connect ZynoHosting to your project
 
-## Configure the MCP server
+Do this once for each project. Copy this into your agent:
 
-> Set up ZynoHosting MCP for this project if it's not already configured. See https://raw.githubusercontent.com/zyno-io/zynohosting-cli/main/docs/mcp/setup.md for details.
+> Set up ZynoHosting MCP for this project if it's not already configured. See https://raw.githubusercontent.com/zyno-io/zynohosting-cli/main/docs/mcp/agent.md for details.
 
-The agent configures only itself:
+**What happens.** Your agent connects itself to ZynoHosting and saves a small settings file inside your project. That file holds no passwords.
 
-- Codex writes this project’s `.codex/config.toml`.
-- Claude Code writes this project’s `.mcp.json`.
+**Then restart your agent.** Close it and open it again.
 
-It never writes both files. The agent uses its own identity to run the installer with `--agent codex` or `--agent claude`; it does not need the user to run that command. Re-running the installer is safe: it merges a single `zynohosting` entry and leaves an existing one unchanged. Neither file stores an API key or browser credential, so both are safe to commit.
+This is the step people miss. Your agent cannot use ZynoHosting until it has been restarted—even though it just finished setting it up. If it tells you it has no ZynoHosting tools, this is almost always why.
 
-**Important:** Start a new Codex or Claude Code session after setup. MCP servers are loaded at session start, so the session that installed it cannot use the new tools.
+Claude Code may also ask you once to approve ZynoHosting for this project. Approve it.
 
-Claude Code may also ask for its normal one-time approval before it enables a project MCP server.
-
-If it does not work: the package requires Node.js 24. Codex pins this project’s absolute path in its entry, so re-run the installer after moving or renaming the project directory.
-
-## Sign in
+## Step 2: Sign in
 
 > Sign in to ZynoHosting for this project. Use the MCP `login` tool, open the browser sign-in page, and give me the one-time link if my browser does not open automatically. After I finish signing in, verify the login status before continuing.
 
-The agent opens a secure browser sign-in flow—there is no CLI login command for you to run. It requests only the permissions needed for the task, listed in the table above.
+**What happens.** A ZynoHosting sign-in page opens in your browser. If it does not open on its own, your agent gives you a link to click. Sign in the way you normally would.
 
-Signing in again can switch to a different ZynoHosting account or organization. It cannot replace an API key or bearer token injected into the MCP process; in that situation, change the injected credential and restart the agent.
+The page lists what you are allowing your agent to do. Read it, and approve it if it matches what you asked for. Your agent asks only for what the job needs, so publishing a site asks for more than simply looking at one.
 
-Sign-in waits for you to finish multi-factor or single sign-on, and expires after five minutes. On Codex the installer already sets a longer MCP tool timeout to allow for that.
+You sign in once, and your agent stays signed in. Use this prompt again whenever you want to switch to a different ZynoHosting account or organization.
 
-## Publish a site
+## Publish your site
 
 > Publish this project to [your-domain.com]. Do not infer or substitute a domain. First verify that I can access this exact domain with the current ZynoHosting login. If I cannot, offer to sign in again and switch context. Create and show me the deployment plan, then wait for my approval before applying it.
 
-Replace `[your-domain.com]` with the exact domain you want to publish. The agent must not guess it from the repository, site content, organization name, or another available site.
+Replace `[your-domain.com]` with the real web address you want to publish to.
 
-If the exact domain is not available in the current login context, the agent must not pick a similar one. It should offer the Sign in prompt again so you can switch to an account or organization that has access.
+**What happens.** Your agent checks that you can publish to that exact address, then shows you a plan—what it will upload, change, and remove. Nothing goes live until you say yes.
 
-You always see a plan before anything is published, and nothing is applied until you approve it.
+Your agent will not guess your domain, on purpose. Publishing to the wrong site is not something you can quietly undo, so it uses the address you give it and nothing else. If it says it cannot reach that address, your account may not have access to it; ask it to sign you in again so you can pick a different account or organization.
 
-## Create a form and wire a page
+## Add a form to a page
 
 > Create a ZynoForms definition for the form on [your-page-url], then wire this project’s existing page form to that definition. First inspect the page and explain the form’s content, fields, labels, requiredness, choices, validation, and visual layout. Propose how you will preserve that layout while using the ZynoForms native integration, and identify anything ZynoForms cannot represent exactly. Do not create or publish a form, edit files, or deploy until I approve your plan.
 
-Replace `[your-page-url]` with the exact page that contains the form. The agent should read the current page before making a plan; it should not substitute a generic contact form or redesign the page.
+Replace `[your-page-url]` with the address of the page your form is on.
 
-After you approve the plan, the agent creates the ZynoForms definition with matching supported fields, obtains its integration details, and wires the existing page markup to the returned native integration. This keeps the page’s design and layout while ZynoForms handles submissions. It must use the exact page origin for the form’s allowed origins, follow the returned response contract, and use the returned `jsonScript` or `capScript` when applicable.
+**What happens.** Your agent reads that page, tells you which fields it found, and proposes a plan before touching anything. Your page keeps its existing design—only the handling of submissions changes.
 
-If the form has behavior or controls ZynoForms cannot represent, the agent must explain the limitation and ask how you want to proceed. It must not silently drop fields, validation, choices, or protection.
+If something on your form cannot be recreated exactly, your agent tells you and asks how you want to handle it, rather than quietly leaving it out.
 
-## Change an existing form
+## Change a form you already have
 
 > Update the ZynoForms form [slug-or-uuid]: [what you want changed]. Describe the form as it exists today first, tell me what will change and what cannot change, and wait for my approval before saving.
 
-Replace `[slug-or-uuid]` with the form’s exact slug or UUID—names are not accepted—and say what you want changed.
+Say which form and what you want changed—for example, adding a phone number field or changing where submission emails go.
 
-The agent reads the current form before proposing an edit, so it changes that form in place instead of creating a second one. Fields it does not touch keep every stored property, including content the agent cannot author itself, such as sections, conditional rules, themes, and translations.
+**What happens.** Your agent looks at the form as it is today, tells you what it plans to change, and waits for your approval. It edits the form you already have instead of creating a second one, and the parts you did not ask about stay exactly as they are.
 
-Some things are refused rather than half-applied: a field a conditional rule depends on cannot be renamed or removed, and a form with an unpublished draft in the ZynoForms builder is not overwritten. The agent should tell you which of these it hit and what your options are.
+Some changes get refused rather than half-finished. If your form is open and unsaved in the ZynoForms builder, your agent will not overwrite that work. Some fields cannot be renamed or removed because the rest of the form depends on them. Your agent tells you when it hits one of these and what your options are.
 
-## Agent procedure
+## If something goes wrong
 
-This section is for the agent. Everything above is written for the user.
+| What you see                                | What to do                                                                                                                |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| Your agent says it has no ZynoHosting tools | Restart it. If you already have, paste the Step 1 prompt again, then restart.                                             |
+| The sign-in page never opened               | Ask: _Give me the ZynoHosting sign-in link._ Links expire after five minutes—if yours has, ask it to start sign-in again. |
+| Your agent says it cannot reach your domain | Ask: _Sign me in to ZynoHosting again so I can choose a different account._                                               |
+| Your agent asks you to run a command        | Reply: _Please do that yourself. I don't use the terminal._                                                               |
+| An error you don't understand               | Paste it back and ask: _Explain this in plain language and tell me what to do next._                                      |
 
-### Configuring the MCP server
+## For developers
 
-1. Identify which agent you are, then run exactly one of these:
-
-    ```bash
-    # Codex — writes ./.codex/config.toml
-    npx -y @zyno-io/zynohosting mcp install --project . --agent codex
-
-    # Claude Code — writes ./.mcp.json
-    npx -y @zyno-io/zynohosting mcp install --project . --agent claude
-    ```
-
-2. Always pass `--agent` explicitly. Detection without it works only when `CLAUDECODE=1` or `CODEX_HOME` is set, and the command fails rather than guessing.
-3. Never configure the other agent’s project file.
-4. You do not need to check whether it is already configured. The installer merges one `zynohosting` entry, leaves an existing entry untouched, writes no credentials, and reports which files it configured versus already configured.
-5. Afterward, tell the user to restart this agent. Do not claim the ZynoHosting tools are available in the current session—they are not.
-
-### Signing in
-
-- There is no CLI login for the user to run. Call the `login` tool, give the user the one-time URL from the result, then call `login` with `action: "status"` to confirm completion before continuing.
-- Request only the permissions the task needs, per the table above. Do not request `hosting.deploy` or `forms.edit` speculatively.
-- If the MCP process was given an injected `ZYNO_HOSTING_API_KEY` or bearer token, `login` cannot replace it. Tell the user to change that injected credential and restart the MCP host.
-
-### Publishing a site
-
-- Never infer a deployment domain from the repository, site content, organization name, or a similar available site. If the user has not named one, ask.
-- Verify the named domain with `get_site` or `list_sites` before planning. If it is unavailable in the current login context, do not substitute another—offer `login` so the user can switch account or organization.
-- Call `plan_deploy`, show the plan, and wait for explicit approval before calling `apply_deploy` with the returned `planId`.
-
-### Working with forms
-
-- Read the existing page before proposing anything. Preserve its markup and layout; do not replace it with a generic form.
-- Before editing an existing form, call `describe_form`. It reports what is editable, what is locked, and whether an unpublished draft is blocking edits. Then use `update_form`; do not create a duplicate form.
-- Use the exact page origin in the form’s allowed origins, follow the returned response contract, and use the returned `jsonScript` or `capScript` when the form is bot-protected.
-- If ZynoForms cannot represent a field, validation rule, choice, or protection behavior, say so and ask how to proceed. Never drop it silently.
-
-### Editing this file
-
-It is fetched raw by agents, so keep it plain Markdown: no VitePress `:::` containers, and no relative links, which do not resolve on `raw.githubusercontent.com`. Use full `https://zyno-io.github.io/zynohosting-cli/...` URLs.
+- [Install instructions for agents](./agent)—what the agent does during Step 1.
+- [Configure the local MCP server](./)—manual setup, environments, and security boundaries.
+- [MCP tool reference](./tools)—every tool, argument, and permission.

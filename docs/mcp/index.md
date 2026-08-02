@@ -6,7 +6,7 @@ The package includes a local stdio MCP server that exposes authorized ZynoHostin
 
 For an end user, the easiest option is to paste this instruction into the agent:
 
-> Set up ZynoHosting MCP for this project if it's not already configured. See https://raw.githubusercontent.com/zyno-io/zynohosting-cli/main/docs/mcp/setup.md for details.
+> Set up ZynoHosting MCP for this project if it's not already configured. See https://raw.githubusercontent.com/zyno-io/zynohosting-cli/main/docs/mcp/agent.md for details.
 
 The agent runs the installer for itself; the user does not need to use a terminal:
 
@@ -22,7 +22,9 @@ The installer merges a `zynohosting` server entry into only the selected agent�
 Restart Codex or Claude Code after the installer completes. The current agent session cannot discover MCP tools that were configured after it started.
 :::
 
-For the full agent instructions, browser login, and deployment-domain policy, see [Set up ZynoHosting for an agent](./setup).
+Copy-and-paste prompts for the whole workflow—setup, browser login, publishing, and forms—are on [Set up and use ZynoHosting in your agent](./setup), written for a non-technical user. What the agent itself does during installation is on [Install instructions for agents](./agent).
+
+Deployment-domain policy and form-editing policy are not documented for agents here: the server supplies them as MCP instructions and tool descriptions on every connection, so they reach every session rather than only the one that fetched a page.
 
 ## Start the server
 

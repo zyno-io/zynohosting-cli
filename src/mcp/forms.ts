@@ -180,7 +180,7 @@ export function registerFormsMcp(server: McpServer, clients: () => Promise<Forms
         {
             title: 'Create a basic published ZynoForm',
             description:
-                'Create and immediately publish a one-page form with text, textarea, email, phone, URL, hidden, number, date, select, radio, checkbox, or contact fields. Fields submit by stable key aliases; required defaults to true except for hidden URL-parameter fields. Exact origins or ZynoHosting site references may be allowed for browser JavaScript.',
+                'Create and immediately publish a one-page form with text, textarea, email, phone, URL, hidden, number, date, select, radio, checkbox, or contact fields. Fields submit by stable key aliases; required defaults to true except for hidden URL-parameter fields. Exact origins or ZynoHosting site references may be allowed for browser JavaScript. When a page already has its own form, read it first and keep its markup and layout instead of replacing it with a generic form.',
             inputSchema: createBasicFormInputSchema,
             annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }
         },
@@ -256,7 +256,7 @@ export function registerFormsMcp(server: McpServer, clients: () => Promise<Forms
         {
             title: 'Update a ZynoForm',
             description:
-                'Change a form’s name, link, heading, submit label, success message, or notification emails, and add, update, move, or remove fields addressed by key. Untouched fields keep their identity, and content this vocabulary cannot express is preserved. Publishes a new version by default. Removing a field does not affect existing submissions, which are pinned to the version they were made against.',
+                'Change a form’s name, link, heading, submit label, success message, or notification emails, and add, update, move, or remove fields addressed by key. Call describe_form first; it reports what is editable, what is locked, and whether an unpublished draft is blocking the edit. Untouched fields keep their identity, and content this vocabulary cannot express is preserved. Publishes a new version by default. Removing a field does not affect existing submissions, which are pinned to the version they were made against.',
             inputSchema: updateFormInputSchema,
             annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false }
         },

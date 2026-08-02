@@ -23,8 +23,12 @@ export interface McpServerOptions extends ConfigOverrides {
 }
 
 const MAX_PENDING_PLANS = 16;
-const SERVER_INSTRUCTIONS =
-    'Never infer a deployment domain from a repository, site content, organization name, or a similar available site. Before any site mutation, use an explicitly stated project domain or ask the user which domain they intend. Verify that domain with list_sites or get_site. If it is unavailable in the current login context, do not substitute another site; explain that access is unavailable and offer the login tool so the user can switch context. Use plan_deploy and present its operations before apply_deploy.';
+// Policy that applies once this server is connected belongs here or in a tool description, not in
+// documentation the agent fetches before installing. The riskiest tools echo one line of it.
+const SERVER_INSTRUCTIONS = [
+    'Never infer a deployment domain from a repository, site content, organization name, or a similar available site. Before any site mutation, use an explicitly stated project domain or ask the user which domain they intend. Verify that domain with list_sites or get_site. If it is unavailable in the current login context, do not substitute another site; explain that access is unavailable and offer the login tool so the user can switch context. Use plan_deploy and present its operations before apply_deploy.',
+    'When connecting a page to a form, read the existing page first and preserve its markup, layout, and styling rather than replacing it with a generic form. Allow that page’s exact origin, and follow the response contract and the jsonScript or capScript returned with the form. Read an existing form with describe_form before update_form and edit it in place rather than creating a second form. If ZynoForms cannot represent a field, validation rule, choice, or bot protection exactly, explain the limitation and ask the user how to proceed instead of dropping it.'
+].join(' ');
 
 export async function createHostingMcpServer(options: McpServerOptions): Promise<McpServer> {
     const deployments = new Map<string, PreparedDeployment>();

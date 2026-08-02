@@ -84,9 +84,9 @@ Continue with [Full deployments](../cli/deploy).
 
 The easiest setup for Codex or Claude Code is to paste this into the agent:
 
-> Set up ZynoHosting MCP for this project if it's not already configured. See https://raw.githubusercontent.com/zyno-io/zynohosting-cli/main/docs/mcp/setup.md for details.
+> Set up ZynoHosting MCP for this project if it's not already configured. See https://raw.githubusercontent.com/zyno-io/zynohosting-cli/main/docs/mcp/agent.md for details.
 
-The agent performs the installation and then asks the user to restart it. See [Set up ZynoHosting for an agent](../mcp/setup).
+The agent performs the installation and then asks the user to restart it. See [Set up and use ZynoHosting in your agent](../mcp/setup) for the copy-and-paste prompts that cover signing in, publishing, and forms.
 
 Restrict local-file access to a project root when the agent should not use the MCP process user's entire accessible filesystem:
 
