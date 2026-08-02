@@ -84,7 +84,7 @@ Continue with [Full deployments](../cli/deploy).
 
 The easiest setup for Codex or Claude Code is to paste this into the agent:
 
-> Set up ZynoHosting MCP for this project if it's not already configured. See https://zyno-io.github.io/zynohosting-cli/mcp/setup for details.
+> Set up ZynoHosting MCP for this project if it's not already configured. See https://raw.githubusercontent.com/zyno-io/zynohosting-cli/main/docs/mcp/setup.md for details.
 
 The agent performs the installation and then asks the user to restart it. See [Set up ZynoHosting for an agent](../mcp/setup).
 

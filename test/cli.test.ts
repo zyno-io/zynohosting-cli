@@ -31,4 +31,5 @@ test('advertises project-local MCP installation', () => {
     const install = mcp.commands.find(command => command.name() === 'install');
     assert(install);
     assert.match(install.helpInformation(), /--project <path>/);
+    assert.match(install.helpInformation(), /--agent <agent>/);
 });

@@ -6,15 +6,17 @@ The package includes a local stdio MCP server that exposes authorized ZynoHostin
 
 For an end user, the easiest option is to paste this instruction into the agent:
 
-> Set up ZynoHosting MCP for this project if it's not already configured. See https://zyno-io.github.io/zynohosting-cli/mcp/setup for details.
+> Set up ZynoHosting MCP for this project if it's not already configured. See https://raw.githubusercontent.com/zyno-io/zynohosting-cli/main/docs/mcp/setup.md for details.
 
-The agent runs the installer; the user does not need to use a terminal:
+The agent runs the installer for itself; the user does not need to use a terminal:
 
 ```bash
-npx -y @zyno-io/zynohosting mcp install --project .
+npx -y @zyno-io/zynohosting mcp install --project . --agent codex
+# or, for Claude Code:
+npx -y @zyno-io/zynohosting mcp install --project . --agent claude
 ```
 
-The installer merges a `zynohosting` server entry into Claude Code’s project `.mcp.json` and Codex’s trusted-project `.codex/config.toml`. It does not store API keys or browser credentials in either file. It leaves an existing ZynoHosting entry unchanged.
+The installer merges a `zynohosting` server entry into only the selected agent’s project file: Claude Code’s `.mcp.json` or Codex’s trusted-project `.codex/config.toml`. It does not store API keys or browser credentials and leaves an existing ZynoHosting entry unchanged.
 
 ::: warning
 Restart Codex or Claude Code after the installer completes. The current agent session cannot discover MCP tools that were configured after it started.

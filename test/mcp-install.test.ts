@@ -6,12 +6,13 @@ import { test } from 'node:test';
 
 import { installHostingMcp } from '../src/mcp/install.js';
 
-test('installs project-local Claude and Codex MCP configuration without secrets', async () => {
+test('installs only the selected project-local Claude MCP configuration without secrets', async () => {
     const project = await mkdtemp(join(tmpdir(), 'zynohosting-mcp-install-'));
     await writeFile(join(project, '.mcp.json'), JSON.stringify({ mcpServers: { existing: { command: 'example-mcp', args: ['serve'] } } }, null, 2));
 
-    const installed = await installHostingMcp({ project });
-    assert.deepEqual(installed.configured.sort(), [join(installed.project, '.codex', 'config.toml'), join(installed.project, '.mcp.json')].sort());
+    const installed = await installHostingMcp({ project, agent: 'claude' });
+    assert.equal(installed.agent, 'claude');
+    assert.deepEqual(installed.configured, [join(installed.project, '.mcp.json')]);
     assert.deepEqual(installed.alreadyConfigured, []);
 
     const claude = JSON.parse(await readFile(join(project, '.mcp.json'), 'utf8')) as {
@@ -24,28 +25,35 @@ test('installs project-local Claude and Codex MCP configuration without secrets'
     });
     assert.doesNotMatch(JSON.stringify(claude), /api.?key|access.?token/i);
 
+    await assert.rejects(readFile(join(project, '.codex', 'config.toml'), 'utf8'));
+});
+
+test('installs only the selected project-local Codex MCP configuration without secrets', async () => {
+    const project = await mkdtemp(join(tmpdir(), 'zynohosting-mcp-install-codex-'));
+
+    const installed = await installHostingMcp({ project, agent: 'codex' });
+    assert.equal(installed.agent, 'codex');
+    assert.deepEqual(installed.configured, [join(installed.project, '.codex', 'config.toml')]);
+    assert.deepEqual(installed.alreadyConfigured, []);
+
     const codex = await readFile(join(project, '.codex', 'config.toml'), 'utf8');
     assert.match(codex, /^\[mcp_servers\.zynohosting\]$/m);
     assert.match(codex, /command = "npx"/);
     assert.match(codex, new RegExp(JSON.stringify(installed.project).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     assert.match(codex, /tool_timeout_sec = 330/);
     assert.doesNotMatch(codex, /api.?key|access.?token/i);
+
+    await assert.rejects(readFile(join(project, '.mcp.json'), 'utf8'));
 });
 
 test('does not overwrite an existing ZynoHosting entry', async () => {
     const project = await mkdtemp(join(tmpdir(), 'zynohosting-mcp-install-existing-'));
     await writeFile(join(project, '.mcp.json'), JSON.stringify({ mcpServers: { zynohosting: { command: 'custom-zyno-mcp' } } }, null, 2));
-    await mkdir(join(project, '.codex'));
-    await writeFile(join(project, '.codex', 'config.toml'), '[mcp_servers.zynohosting]\ncommand = "custom-zyno-mcp"\n');
 
-    const installed = await installHostingMcp({ project });
+    const installed = await installHostingMcp({ project, agent: 'claude' });
     assert.deepEqual(installed.configured, []);
-    assert.deepEqual(
-        installed.alreadyConfigured.sort(),
-        [join(installed.project, '.codex', 'config.toml'), join(installed.project, '.mcp.json')].sort()
-    );
+    assert.deepEqual(installed.alreadyConfigured, [join(installed.project, '.mcp.json')]);
     assert.match(await readFile(join(project, '.mcp.json'), 'utf8'), /custom-zyno-mcp/);
-    assert.match(await readFile(join(project, '.codex', 'config.toml'), 'utf8'), /custom-zyno-mcp/);
 });
 
 test('recognizes structurally equivalent Codex server configuration', async () => {
@@ -59,10 +67,11 @@ test('recognizes structurally equivalent Codex server configuration', async () =
         await mkdir(join(project, '.codex'));
         await writeFile(join(project, '.codex', 'config.toml'), existingConfig);
 
-        const installed = await installHostingMcp({ project });
-        assert.deepEqual(installed.configured, [join(installed.project, '.mcp.json')]);
+        const installed = await installHostingMcp({ project, agent: 'codex' });
+        assert.deepEqual(installed.configured, []);
         assert.deepEqual(installed.alreadyConfigured, [join(installed.project, '.codex', 'config.toml')]);
         assert.equal(await readFile(join(project, '.codex', 'config.toml'), 'utf8'), existingConfig);
+        await assert.rejects(readFile(join(project, '.mcp.json'), 'utf8'));
     }
 });
 
@@ -72,9 +81,10 @@ test('does not mistake a multiline TOML string for an existing Codex server', as
     const existingConfig = 'notes = """\n[mcp_servers.zynohosting]\n"""\n';
     await writeFile(join(project, '.codex', 'config.toml'), existingConfig);
 
-    const installed = await installHostingMcp({ project });
-    assert.deepEqual(installed.configured.sort(), [join(installed.project, '.codex', 'config.toml'), join(installed.project, '.mcp.json')].sort());
+    const installed = await installHostingMcp({ project, agent: 'codex' });
+    assert.deepEqual(installed.configured, [join(installed.project, '.codex', 'config.toml')]);
     assert.match(await readFile(join(project, '.codex', 'config.toml'), 'utf8'), /\[mcp_servers\.zynohosting\]/);
+    await assert.rejects(readFile(join(project, '.mcp.json'), 'utf8'));
 });
 
 test('does not invalidate an inline Codex mcp_servers table', async () => {
@@ -84,6 +94,21 @@ test('does not invalidate an inline Codex mcp_servers table', async () => {
     const configPath = join(project, '.codex', 'config.toml');
     await writeFile(configPath, existingConfig);
 
-    await assert.rejects(installHostingMcp({ project }), /Could not parse Codex MCP configuration/);
+    await assert.rejects(installHostingMcp({ project, agent: 'codex' }), /Could not parse Codex MCP configuration/);
     assert.equal(await readFile(configPath, 'utf8'), existingConfig);
+});
+
+test('detects a known invoking agent and requires a target when it is unknown', async () => {
+    const claudeProject = await mkdtemp(join(tmpdir(), 'zynohosting-mcp-install-detect-claude-'));
+    const claude = await installHostingMcp({ project: claudeProject, env: { CLAUDECODE: '1' } });
+    assert.equal(claude.agent, 'claude');
+    await assert.rejects(readFile(join(claudeProject, '.codex', 'config.toml'), 'utf8'));
+
+    const codexProject = await mkdtemp(join(tmpdir(), 'zynohosting-mcp-install-detect-codex-'));
+    const codex = await installHostingMcp({ project: codexProject, env: { CODEX_HOME: '/tmp/codex' } });
+    assert.equal(codex.agent, 'codex');
+    await assert.rejects(readFile(join(codexProject, '.mcp.json'), 'utf8'));
+
+    const unknownProject = await mkdtemp(join(tmpdir(), 'zynohosting-mcp-install-detect-unknown-'));
+    await assert.rejects(installHostingMcp({ project: unknownProject, env: {} }), /Choose the target agent/);
 });

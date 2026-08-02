@@ -9,7 +9,7 @@ import { deleteFile, getFile, listFiles, putFile } from './commands/files.js';
 import { login, LoginOptions } from './commands/login.js';
 import { logout, LogoutOptions } from './commands/logout.js';
 import { getSite, listSites } from './commands/sites.js';
-import { installHostingMcp } from './mcp/install.js';
+import { installHostingMcp, McpInstallAgent } from './mcp/install.js';
 import { startHostingMcp } from './mcp/start.js';
 
 const PACKAGE_VERSION = readPackageVersion();
@@ -236,16 +236,24 @@ export function createProgram(): Command {
         });
 
     mcp.command('install')
-        .description('configure the local ZynoHosting MCP for Claude Code and Codex in this project')
+        .description('configure the local ZynoHosting MCP for one agent in this project')
         .option('--project <path>', 'project root to configure', '.')
-        .action(async (commandOptions: { project: string }) => {
-            const installed = await installHostingMcp({ project: commandOptions.project });
+        .option('--agent <agent>', 'target agent: codex or claude')
+        .action(async (commandOptions: { project: string; agent?: McpInstallAgent }) => {
+            const installed = await installHostingMcp({
+                project: commandOptions.project,
+                ...(commandOptions.agent ? { agent: commandOptions.agent } : {})
+            });
             for (const path of installed.configured) process.stdout.write(`Configured ${path}\n`);
             for (const path of installed.alreadyConfigured) process.stdout.write(`Already configured ${path}\n`);
-            process.stdout.write('Restart Codex or Claude Code before using the ZynoHosting MCP tools.\n');
+            process.stdout.write(`Restart ${installAgentName(installed.agent)} before using the ZynoHosting MCP tools.\n`);
         });
 
     return program;
+}
+
+function installAgentName(agent: McpInstallAgent): string {
+    return agent === 'claude' ? 'Claude Code' : 'Codex';
 }
 
 function commandContext(

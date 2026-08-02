@@ -151,9 +151,9 @@ The MCP server is local stdio only. It does not open a port or provide a hosted/
 
 For a non-technical user, paste this into Codex or Claude Code:
 
-> Set up ZynoHosting MCP for this project if it's not already configured. See https://zyno-io.github.io/zynohosting-cli/mcp/setup for details.
+> Set up ZynoHosting MCP for this project if it's not already configured. See https://raw.githubusercontent.com/zyno-io/zynohosting-cli/main/docs/mcp/setup.md for details.
 
-The agent runs `npx -y @zyno-io/zynohosting mcp install --project .` and configures Claude Code’s `.mcp.json` plus Codex’s `.codex/config.toml` without storing credentials. Restart the agent after it completes; MCP tools are not added to an already-running session.
+The agent configures only its own project file—`.mcp.json` for Claude Code or `.codex/config.toml` for Codex—without storing credentials. Restart the agent after it completes; MCP tools are not added to an already-running session.
 
 `ZYNO_HOSTING_MCP_ROOTS` is an optional local-computer allowlist for the MCP process. When it is unset, local-file tools can use any absolute path the MCP process user can access. When roots are configured, local file reads, writes, deploy sources, ignore files, and download destinations are constrained to them after canonical path resolution.
 

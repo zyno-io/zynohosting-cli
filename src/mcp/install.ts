@@ -8,23 +8,27 @@ import { CliError } from '../errors.js';
 const SERVER_NAME = 'zynohosting';
 const PACKAGE_NAME = '@zyno-io/zynohosting';
 
+export type McpInstallAgent = 'claude' | 'codex';
+
 export interface InstallMcpOptions {
     project?: string;
+    agent?: McpInstallAgent;
+    env?: NodeJS.ProcessEnv;
 }
 
 export interface InstallMcpResult {
     project: string;
+    agent: McpInstallAgent;
     configured: string[];
     alreadyConfigured: string[];
 }
 
 /**
- * Add the ZynoHosting stdio server to the project-local formats used by Claude
- * Code and Codex. The two clients deliberately use different file formats, so
- * keeping both entries here lets a non-technical user switch agents without
- * needing to understand either configuration surface.
+ * Add the ZynoHosting stdio server to the selected agent's project-local
+ * configuration. Do not add an unused configuration file for another agent.
  */
 export async function installHostingMcp(options: InstallMcpOptions = {}): Promise<InstallMcpResult> {
+    const agent = resolveInstallAgent(options.agent, options.env ?? process.env);
     const requestedProject = resolve(options.project ?? '.');
     const projectInfo = await lstat(requestedProject).catch(error => {
         throw new CliError(
@@ -38,15 +42,28 @@ export async function installHostingMcp(options: InstallMcpOptions = {}): Promis
     const installed: string[] = [];
     const alreadyConfigured: string[] = [];
 
-    const claudeConfig = join(project, '.mcp.json');
-    if (await installClaudeConfig(claudeConfig)) installed.push(claudeConfig);
-    else alreadyConfigured.push(claudeConfig);
+    if (agent === 'claude') {
+        const claudeConfig = join(project, '.mcp.json');
+        if (await installClaudeConfig(claudeConfig)) installed.push(claudeConfig);
+        else alreadyConfigured.push(claudeConfig);
+    } else {
+        const codexConfig = join(project, '.codex', 'config.toml');
+        if (await installCodexConfig(codexConfig, project)) installed.push(codexConfig);
+        else alreadyConfigured.push(codexConfig);
+    }
 
-    const codexConfig = join(project, '.codex', 'config.toml');
-    if (await installCodexConfig(codexConfig, project)) installed.push(codexConfig);
-    else alreadyConfigured.push(codexConfig);
+    return { project, agent, configured: installed, alreadyConfigured };
+}
 
-    return { project, configured: installed, alreadyConfigured };
+function resolveInstallAgent(agent: McpInstallAgent | undefined, env: NodeJS.ProcessEnv): McpInstallAgent {
+    if (agent === 'claude' || agent === 'codex') return agent;
+    if (agent !== undefined) throw new CliError('--agent must be either codex or claude.', 2, 'invalid_mcp_agent');
+    // Claude documents this marker for shell commands it starts. Codex exposes CODEX_HOME
+    // when configured, but neither client guarantees a universal child-process marker, so an
+    // unrecognized caller must select its target instead of causing two config-file writes.
+    if (env.CLAUDECODE === '1') return 'claude';
+    if (env.CODEX_HOME) return 'codex';
+    throw new CliError('Choose the target agent with --agent codex or --agent claude.', 2, 'mcp_agent_required');
 }
 
 async function installClaudeConfig(path: string): Promise<boolean> {
