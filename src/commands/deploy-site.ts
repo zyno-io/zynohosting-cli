@@ -2,7 +2,7 @@ import { domainToASCII } from 'node:url';
 
 import { AgentClient } from '../api/agent-client.js';
 import { ManagerClient } from '../api/manager-client.js';
-import { ConfigOverrides, resolveConfig } from '../config.js';
+import { ConfigOverrides, ResolvedConfig, resolveConfig } from '../config.js';
 import { createDeploymentArchive } from '../deploy/archive.js';
 import { coalesceOperations, DisplayOperation } from '../deploy/coalesce.js';
 import { hashInventoryFiles } from '../deploy/hash.js';
@@ -83,16 +83,19 @@ export async function prepareDeployment(
     siteRefInput: string,
     directory: string,
     options: DeploySiteOptions,
-    progress: (message: string) => void = () => {}
+    progress: (message: string) => void = () => {},
+    resolvedConfig?: ResolvedConfig
 ): Promise<PreparedDeployment> {
     const fqdn = normalizeSiteRef(siteRefInput);
     const timeoutMs = Math.max(1, options.timeoutSeconds ?? 600) * 1000;
-    const config = await resolveConfig({
-        ...(options.apiUrl ? { apiUrl: options.apiUrl } : {}),
-        ...(options.authApiUrl ? { authApiUrl: options.authApiUrl } : {}),
-        ...(options.apiKey ? { apiKey: options.apiKey } : {}),
-        ...(options.environment ? { environment: options.environment } : {})
-    });
+    const config =
+        resolvedConfig ??
+        (await resolveConfig({
+            ...(options.apiUrl ? { apiUrl: options.apiUrl } : {}),
+            ...(options.authApiUrl ? { authApiUrl: options.authApiUrl } : {}),
+            ...(options.apiKey ? { apiKey: options.apiKey } : {}),
+            ...(options.environment ? { environment: options.environment } : {})
+        }));
 
     progress('Authorizing deployment…');
     const manager = new ManagerClient(config.apiUrl, config.credential, Math.min(timeoutMs, 30_000));

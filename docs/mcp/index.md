@@ -2,6 +2,26 @@
 
 The package includes a local stdio MCP server that exposes authorized ZynoHosting operations to agents. It does not open a network port and there is no hosted/cloud MCP endpoint.
 
+## Set up Codex or Claude Code
+
+For an end user, the easiest option is to paste this instruction into the agent:
+
+> Set up ZynoHosting MCP for this project if it's not already configured. See https://zyno-io.github.io/zynohosting-cli/mcp/setup for details.
+
+The agent runs the installer; the user does not need to use a terminal:
+
+```bash
+npx -y @zyno-io/zynohosting mcp install --project .
+```
+
+The installer merges a `zynohosting` server entry into Claude Code’s project `.mcp.json` and Codex’s trusted-project `.codex/config.toml`. It does not store API keys or browser credentials in either file. It leaves an existing ZynoHosting entry unchanged.
+
+::: warning
+Restart Codex or Claude Code after the installer completes. The current agent session cannot discover MCP tools that were configured after it started.
+:::
+
+For the full agent instructions, browser login, and deployment-domain policy, see [Set up ZynoHosting for an agent](./setup).
+
 ## Start the server
 
 Direct executable:
@@ -34,7 +54,7 @@ Local roots are an optional allowlist for the filesystem of the computer running
 }
 ```
 
-The MCP process inherits the normal saved login unless the client replaces `HOME` or `ZYNO_HOSTING_CONFIG`. For a personal, long-running MCP, authorize only its required permissions and opt into secure renewal:
+The MCP process inherits the normal saved login unless the client replaces `HOME` or `ZYNO_HOSTING_CONFIG`. It can also start without a saved login: after the MCP is connected, the agent can call the `login` tool to launch Zyno’s browser sign-in flow. The tool returns the one-time URL as content, then the agent calls `login` with `action: "status"` after the browser callback completes. For a personal, long-running MCP, authorize only its required permissions and opt into secure renewal:
 
 ```bash
 zynohosting login \
@@ -118,10 +138,17 @@ Plans:
 - do not survive an MCP server restart;
 - are limited to 16 pending plans per server process.
 
+## Choose a deployment domain explicitly
+
+Agents must never infer a deployment domain from the repository, site content, organization name, or a similar available site. If the project does not explicitly name a deployment domain, the agent must ask the user before it calls `plan_deploy` or `apply_deploy`.
+
+After the user names a domain, the agent verifies it with `list_sites` or `get_site`. If it is unavailable in the current context, it must not substitute another domain. It should offer the `login` tool so the user can sign in again and switch context.
+
 ## Available tools
 
-The server exposes seventeen tools:
+The server exposes eighteen tools:
 
+- `login`
 - `list_sites`
 - `get_site`
 - `list_forms`

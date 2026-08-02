@@ -55,6 +55,7 @@ export default defineConfig({
                 {
                     text: 'Local MCP server',
                     items: [
+                        { text: 'Set up for an agent', link: '/mcp/setup' },
                         { text: 'Configure the server', link: '/mcp/' },
                         { text: 'Tool reference', link: '/mcp/tools' }
                     ]

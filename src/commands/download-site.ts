@@ -9,7 +9,7 @@ import tar from 'tar-stream';
 
 import { FileClient, responseHeader } from '../api/file-client.js';
 import { StreamingResponse } from '../api/http.js';
-import { ConfigOverrides } from '../config.js';
+import { ConfigOverrides, ResolvedConfig } from '../config.js';
 import { validateRelativePath } from '../deploy/inventory.js';
 import { CliError } from '../errors.js';
 import { Output } from '../output.js';
@@ -31,7 +31,12 @@ export interface PreparedDownload {
     client: FileClient;
 }
 
-export async function prepareDownload(siteRef: string, directory: string, options: DownloadSiteOptions): Promise<PreparedDownload> {
+export async function prepareDownload(
+    siteRef: string,
+    directory: string,
+    options: DownloadSiteOptions,
+    resolvedConfig?: ResolvedConfig
+): Promise<PreparedDownload> {
     const target = resolve(directory);
     await assertDownloadTarget(target);
     const scope = options.sensitive ? 'sensitive' : 'deployable';
@@ -39,7 +44,8 @@ export async function prepareDownload(siteRef: string, directory: string, option
         siteRef,
         [scope === 'sensitive' ? 'download:sensitive' : 'download:deployable'],
         options,
-        Math.max(1, options.timeoutSeconds ?? 600) * 1000
+        Math.max(1, options.timeoutSeconds ?? 600) * 1000,
+        resolvedConfig
     );
     return {
         planId: randomUUID(),

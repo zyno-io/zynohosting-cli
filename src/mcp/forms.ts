@@ -126,7 +126,13 @@ const updateBotProtectionInputSchema = z.object({
 type CreateBasicFormInput = z.infer<typeof createBasicFormInputSchema>;
 type UpdateFormInput = z.infer<typeof updateFormInputSchema>;
 
-export function registerFormsMcp(server: McpServer, forms: FormsClient, manager: ManagerClient, suiteApiUrl: string | undefined): void {
+export interface FormsMcpClients {
+    forms: FormsClient;
+    manager: ManagerClient;
+    suiteApiUrl?: string;
+}
+
+export function registerFormsMcp(server: McpServer, clients: () => Promise<FormsMcpClients>): void {
     server.registerResource(
         'zynoforms_embedding_guide',
         EMBEDDING_GUIDE_URI,
@@ -148,6 +154,7 @@ export function registerFormsMcp(server: McpServer, forms: FormsClient, manager:
             annotations: { readOnlyHint: true, openWorldHint: false }
         },
         async () => {
+            const { forms } = await clients();
             const listed = await forms.listForms();
             return result({ forms: listed.map(form => decorateFormSummary(form)) });
         }
@@ -162,6 +169,7 @@ export function registerFormsMcp(server: McpServer, forms: FormsClient, manager:
             annotations: { readOnlyHint: true, openWorldHint: false }
         },
         async ({ form }) => {
+            const { forms, suiteApiUrl } = await clients();
             const detailed = await getFormByReference(forms, form);
             return result(buildFormIntegration(detailed, requireSuiteApiUrl(suiteApiUrl)));
         }
@@ -177,6 +185,7 @@ export function registerFormsMcp(server: McpServer, forms: FormsClient, manager:
             annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }
         },
         async input => {
+            const { forms, manager, suiteApiUrl } = await clients();
             const siteOrigins = await originsForSites(manager, input.origin_sites);
             const corsOrigins = unique([...input.origins.map(normalizeWebOrigin), ...siteOrigins]);
             const requestedBotProtection = botProtectionMode(input.bot_protection);
@@ -212,6 +221,7 @@ export function registerFormsMcp(server: McpServer, forms: FormsClient, manager:
             annotations: { readOnlyHint: true, openWorldHint: false }
         },
         async ({ form, include_draft }) => {
+            const { forms } = await clients();
             const detailed = await getFormByReference(forms, form);
             const live = requireLiveDefinition(detailed);
             const structure = describeFormContent(live.content);
@@ -251,6 +261,7 @@ export function registerFormsMcp(server: McpServer, forms: FormsClient, manager:
             annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false }
         },
         async input => {
+            const { forms, suiteApiUrl } = await clients();
             const detailed = await getFormByReference(forms, input.form);
             requireExpectedDefinition(input.expected_definition_id, detailed);
 
@@ -337,6 +348,7 @@ export function registerFormsMcp(server: McpServer, forms: FormsClient, manager:
             annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false }
         },
         async input => {
+            const { forms, suiteApiUrl } = await clients();
             const detailed = await getFormByReference(forms, input.form);
             const wanted = botProtectionMode(input.bot_protection);
             const updated = detailed.botProtectionMode === wanted ? detailed : await forms.updateForm(detailed.id, { botProtectionMode: wanted });
@@ -374,6 +386,7 @@ export function registerFormsMcp(server: McpServer, forms: FormsClient, manager:
             annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false }
         },
         async input => {
+            const { forms, manager } = await clients();
             const detailed = await getFormByReference(forms, input.form);
             const [addSiteOrigins, removeSiteOrigins] = await Promise.all([
                 originsForSites(manager, input.add_sites),

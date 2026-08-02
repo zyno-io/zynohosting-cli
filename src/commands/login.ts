@@ -41,6 +41,7 @@ export interface LoginDependencies {
     env?: NodeJS.ProcessEnv;
     configFile?: string;
     openUrl?: (url: string) => Promise<void>;
+    onBrowserUrl?: (url: string) => void | Promise<void>;
     write?: (message: string) => void;
     renewalTokenStore?: RenewalTokenStore;
 }
@@ -112,18 +113,21 @@ export async function login(options: LoginOptions, dependencies: LoginDependenci
     browserUrl.searchParams.set('permissions', permissionKeys.join(','));
     if (renewable) browserUrl.searchParams.set('renewable', '1');
 
-    write('Opening your browser to sign in to Zyno…\n');
-    if (options.open === false) {
-        write(`Open this URL to continue:\n${browserUrl.toString()}\n`);
-    } else {
-        try {
-            await (dependencies.openUrl ?? openUrl)(browserUrl.toString());
-        } catch {
-            write(`The browser could not be opened automatically. Open this URL to continue:\n${browserUrl.toString()}\n`);
-        }
-    }
-
     try {
+        // Let programmatic callers return the one-time link to their user before attempting to
+        // launch a browser. This is essential for an MCP host where browser launching can fail.
+        await dependencies.onBrowserUrl?.(browserUrl.toString());
+        write('Opening your browser to sign in to Zyno…\n');
+        if (options.open === false) {
+            write(`Open this URL to continue:\n${browserUrl.toString()}\n`);
+        } else {
+            try {
+                await (dependencies.openUrl ?? openUrl)(browserUrl.toString());
+            } catch {
+                write(`The browser could not be opened automatically. Open this URL to continue:\n${browserUrl.toString()}\n`);
+            }
+        }
+
         await loopback.result;
         if (savedRenewableCredential) {
             write('ZynoHosting renewable login complete. The renewal credential was saved in your system credential store.\n');

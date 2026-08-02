@@ -12,8 +12,8 @@ hero:
           text: Get started
           link: /guide/getting-started
         - theme: alt
-          text: Configure MCP
-          link: /mcp/
+          text: Set up an agent
+          link: /mcp/setup
         - theme: alt
           text: View on GitHub
           link: https://github.com/zyno-io/zynohosting-cli

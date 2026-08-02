@@ -12,6 +12,7 @@ import tar from 'tar-stream';
 
 import { AllowedLocalRoots } from '../src/mcp/local-paths.js';
 import { createHostingMcpServer } from '../src/mcp/server.js';
+import { resolveMcpServerOptions } from '../src/mcp/start.js';
 
 test('serves site metadata and downloads files only inside allowed roots', async () => {
     const root = await mkdtemp(join(tmpdir(), 'zynohosting-mcp-'));
@@ -169,11 +170,12 @@ test('serves site metadata and downloads files only inside allowed roots', async
         assert(value && typeof value === 'object');
         return value;
     };
+    const configFile = join(root, 'hosting-config.json');
+    await writeFile(configFile, JSON.stringify({ apiUrl: `http://127.0.0.1:${address().port}`, apiKey: 'secret' }));
     const hosting = await createHostingMcpServer({
         roots: await AllowedLocalRoots.create([root]),
         version: '0.2.0',
-        apiUrl: `http://127.0.0.1:${address().port}`,
-        apiKey: 'secret'
+        env: { ZYNO_HOSTING_CONFIG: configFile }
     });
     const client = new Client({ name: 'test-client', version: '1.0.0' });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -193,6 +195,7 @@ test('serves site metadata and downloads files only inside allowed roots', async
             'list_files',
             'list_forms',
             'list_sites',
+            'login',
             'plan_deploy',
             'plan_download',
             'put_file',
@@ -375,6 +378,165 @@ test('allows unrestricted local paths when no local roots are configured', async
         await hosting.close();
         await new Promise<void>((resolve, reject) => httpServer.close(error => (error ? reject(error) : resolve())));
     }
+});
+
+test('starts without credentials and can complete browser login through MCP', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'zynohosting-mcp-login-'));
+    const configFile = join(root, 'hosting-config.json');
+    let authenticated = false;
+    let openedBrowserUrl: string | undefined;
+    const httpServer = createServer((request, response) => {
+        response.setHeader('Content-Type', 'application/json');
+        if (request.url === '/v1/sites' && request.method === 'GET') {
+            assert.equal(request.headers.authorization, 'Bearer header.payload.signature');
+            authenticated = true;
+            response.end(
+                JSON.stringify([
+                    {
+                        id: '11111111-1111-4111-8111-111111111111',
+                        fqdn: 'example.com',
+                        status: 'active',
+                        phpVersion: null
+                    }
+                ])
+            );
+            return;
+        }
+        response.statusCode = 404;
+        response.end(JSON.stringify({ message: 'not found' }));
+    });
+    await new Promise<void>(resolve => httpServer.listen(0, '127.0.0.1', resolve));
+    const address = httpServer.address();
+    assert(address && typeof address === 'object');
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+    const hosting = await createHostingMcpServer({
+        roots: await AllowedLocalRoots.create([root]),
+        version: '1.0.0',
+        apiUrl: baseUrl,
+        env: { ZYNO_HOSTING_CONFIG: configFile, ZYNO_HOSTING_LOGIN_URL: 'https://login.example.test/cli/login' },
+        loginDependencies: {
+            openUrl: async value => {
+                openedBrowserUrl = value;
+            }
+        }
+    });
+    const client = new Client({ name: 'login-mcp-test-client', version: '1.0.0' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await hosting.connect(serverTransport);
+    await client.connect(clientTransport);
+    try {
+        const tools = await client.listTools();
+        assert(tools.tools.some(tool => tool.name === 'login'));
+        const beforeLogin = await client.callTool({ name: 'list_sites', arguments: {} });
+        assert.equal(beforeLogin.isError, true);
+        assert.match(JSON.stringify(beforeLogin.content), /login MCP tool/);
+
+        const started = await client.callTool({ name: 'login', arguments: { permissions: ['hosting.sitesRead'], timeout_seconds: 5 } });
+        assert.equal(started.isError, undefined);
+        const startedContent = started.structuredContent as { authenticated: boolean; status: string; browserUrl: string };
+        assert.equal(startedContent.authenticated, false);
+        assert.equal(startedContent.status, 'pending');
+        const url = new URL(startedContent.browserUrl);
+        assert.equal(url.origin + url.pathname, 'https://login.example.test/cli/login');
+        const callback = url.searchParams.get('callback');
+        const state = url.searchParams.get('state');
+        assert(callback && state);
+        const response = await fetch(callback, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: new URLSearchParams({
+                jwt: 'header.payload.signature',
+                tenantId: '00000000-0000-0000-0000-000000000024',
+                expiresAt: String(Date.now() + 60_000),
+                state
+            })
+        });
+        assert.equal(response.status, 200);
+        assert.equal(openedBrowserUrl, startedContent.browserUrl);
+
+        let signedIn: Awaited<ReturnType<typeof client.callTool>> | undefined;
+        for (let attempt = 0; attempt < 20; attempt++) {
+            signedIn = await client.callTool({ name: 'login', arguments: { action: 'status' } });
+            if ((signedIn.structuredContent as { authenticated?: boolean }).authenticated) break;
+            await new Promise(resolve => setTimeout(resolve, 10));
+        }
+        assert(signedIn);
+        assert.equal(signedIn.isError, undefined);
+        assert.match(JSON.stringify(signedIn.structuredContent), /login is ready/i);
+        assert.match(await readFile(configFile, 'utf8'), /header\.payload\.signature/);
+
+        const sites = await client.callTool({ name: 'list_sites', arguments: {} });
+        assert.equal(sites.isError, undefined);
+        assert.match(JSON.stringify(sites.structuredContent), /example\.com/);
+        assert.equal(authenticated, true);
+    } finally {
+        await client.close();
+        await hosting.close();
+        await new Promise<void>((resolve, reject) => httpServer.close(error => (error ? reject(error) : resolve())));
+    }
+});
+
+test('reports a failed browser context switch instead of the prior login', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'zynohosting-mcp-login-switch-'));
+    const configFile = join(root, 'hosting-config.json');
+    const httpServer = createServer((request, response) => {
+        response.setHeader('Content-Type', 'application/json');
+        if (request.url === '/v1/sites' && request.method === 'GET') {
+            assert.equal(request.headers.authorization, 'Bearer prior-login-token');
+            response.end(JSON.stringify([]));
+            return;
+        }
+        response.statusCode = 404;
+        response.end(JSON.stringify({ message: 'not found' }));
+    });
+    await new Promise<void>(resolve => httpServer.listen(0, '127.0.0.1', resolve));
+    const address = httpServer.address();
+    assert(address && typeof address === 'object');
+    await writeFile(configFile, JSON.stringify({ apiUrl: `http://127.0.0.1:${address.port}`, accessToken: 'prior-login-token', scopedToken: true }));
+    const hosting = await createHostingMcpServer({
+        roots: await AllowedLocalRoots.create([root]),
+        version: '1.0.0',
+        env: { ZYNO_HOSTING_CONFIG: configFile, ZYNO_HOSTING_LOGIN_URL: 'https://login.example.test/cli/login' },
+        loginDependencies: {
+            onBrowserUrl: async () => {
+                throw new Error('The sign-in was denied.');
+            }
+        }
+    });
+    const client = new Client({ name: 'failed-login-switch-mcp-test-client', version: '1.0.0' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await hosting.connect(serverTransport);
+    await client.connect(clientTransport);
+    try {
+        const priorSites = await client.callTool({ name: 'list_sites', arguments: {} });
+        assert.equal(priorSites.isError, undefined);
+
+        const started = await client.callTool({ name: 'login', arguments: { timeout_seconds: 5 } });
+        assert.equal(started.isError, undefined);
+        assert.match(JSON.stringify(started.structuredContent), /browserUrl/);
+
+        let status: Awaited<ReturnType<typeof client.callTool>> | undefined;
+        for (let attempt = 0; attempt < 20; attempt++) {
+            status = await client.callTool({ name: 'login', arguments: { action: 'status' } });
+            if ((status.structuredContent as { status?: string }).status === 'failed') break;
+            await new Promise(resolve => setTimeout(resolve, 10));
+        }
+        assert(status);
+        assert.equal(status.isError, undefined);
+        assert.match(JSON.stringify(status.structuredContent), /sign-in failed.*denied/i);
+    } finally {
+        await client.close();
+        await hosting.close();
+        await new Promise<void>((resolve, reject) => httpServer.close(error => (error ? reject(error) : resolve())));
+    }
+});
+
+test('forwards a caller-supplied environment to MCP authentication setup', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'zynohosting-mcp-start-options-'));
+    const env = { ZYNO_HOSTING_MCP_ROOTS: root, ZYNO_HOSTING_CONFIG: join(root, 'hosting-config.json') };
+    const options = await resolveMcpServerOptions({ version: '1.0.0', env });
+    assert.equal(options.env, env);
+    assert.deepEqual(options.roots.list(), [await realpath(root)]);
 });
 
 async function requestText(request: AsyncIterable<unknown>): Promise<string> {

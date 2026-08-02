@@ -4,6 +4,20 @@ All tools return JSON as structured content and as a text content block. Argumen
 
 ## Site discovery
 
+### `login`
+
+Starts Zyno’s browser login flow from the MCP process and returns its one-time URL in the tool result, then saves the resulting scoped credential for subsequent MCP calls. Use it when no login is saved or when the explicitly requested domain is unavailable in the current login context. After the browser callback completes, call it with `action: "status"` to confirm the login is ready.
+
+| Input             | Required | Default             | Meaning                                                       |
+| ----------------- | -------- | ------------------- | ------------------------------------------------------------- |
+| `action`          | no       | `start`             | Start browser login, or use `status` to check its completion. |
+| `permissions`     | no       | `hosting.sitesRead` | Explicit Zyno permissions to request.                         |
+| `name`            | no       | host-based CLI name | Name shown on the authorization page.                         |
+| `renewable`       | no       | `false`             | Store a rotating renewal credential in the system key store.  |
+| `timeout_seconds` | no       | `300`               | Time to wait for browser sign-in to complete.                 |
+
+The tool cannot replace an API key or bearer token injected into the MCP process. Change that injected credential and restart the MCP host instead.
+
 ### `list_sites`
 
 Lists sites authorized for the current credential.
@@ -14,7 +28,7 @@ Lists sites authorized for the current credential.
 
 ### `get_site`
 
-Gets one authorized site by UUID or hostname.
+Gets one explicitly intended, authorized site by UUID or hostname. Do not use this as a way to select a likely deployment domain—ask the user whenever the project does not name one.
 
 ```json
 { "site": "example.com" }
@@ -320,7 +334,7 @@ Deletes one regular hosted file.
 
 ### `plan_deploy`
 
-Builds and stores an exact full-site synchronization plan without mutating the remote site.
+Builds and stores an exact full-site synchronization plan without mutating the remote site. The site must be the domain the user explicitly chose; never infer it from the project or choose a similar authorized domain.
 
 ```json
 {
@@ -394,4 +408,4 @@ Treat these tools as follows:
 | Remote mutation | `create_basic_form`, `update_form`, `update_form_bot_protection`, `update_form_origins`, file/deploy apply tools | Review form/site, fields, origins, paths, and plans.    |
 | Plan only       | `plan_deploy`, `plan_download`                                                                                   | Inspect the returned scope and operations before apply. |
 
-The MCP server enforces technical boundaries, but the calling agent or user remains responsible for choosing the intended site and reviewing destructive operations.
+The MCP server enforces technical boundaries, but the calling agent or user remains responsible for choosing the intended site and reviewing destructive operations. Never infer a deployment domain. If an explicitly named domain is unavailable, do not substitute another site; offer `login` so the user can switch contexts.

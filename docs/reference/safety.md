@@ -85,6 +85,8 @@ Successful writes, deletes, and full deployments queue cache invalidation. If th
 Technical controls do not choose the intended site or approve business impact. Before a mutation:
 
 - confirm the tenant, environment, and site hostname;
+- never infer the target hostname from a repository, its content, a brand name, or another authorized site; ask the user when it is not explicit;
+- if the named hostname is not available in the current login context, do not substitute another site; offer a new browser login to switch contexts;
 - review full deployment creates, replacements, and deletions;
 - use ETags for targeted changes;
 - protect sensitive download destinations;

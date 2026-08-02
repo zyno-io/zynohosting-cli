@@ -24,3 +24,11 @@ test('advertises scoped browser-login and revocation commands', () => {
     assert(logout);
     assert.match(logout.helpInformation(), /--auth-api-url <url>/);
 });
+
+test('advertises project-local MCP installation', () => {
+    const mcp = createProgram().commands.find(command => command.name() === 'mcp');
+    assert(mcp);
+    const install = mcp.commands.find(command => command.name() === 'install');
+    assert(install);
+    assert.match(install.helpInformation(), /--project <path>/);
+});

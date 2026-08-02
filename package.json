@@ -1,6 +1,6 @@
 {
     "name": "@zyno-io/zynohosting",
-    "version": "0.4.2",
+    "version": "0.4.3",
     "description": "CLI and local MCP server for managing ZynoHosting sites and ZynoForms integrations",
     "license": "UNLICENSED",
     "mcpName": "io.github.zyno-io/zynohosting",
@@ -43,6 +43,7 @@
         "commander": "^15.0.0",
         "hash-wasm": "^4.12.0",
         "ignore": "^7.0.6",
+        "smol-toml": "^1.7.1",
         "tar-stream": "^3.2.0",
         "zod": "^4.4.3"
     },

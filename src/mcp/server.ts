@@ -9,38 +9,82 @@ import { startCredentialRefreshLoop } from '../auth/credential-refresh.js';
 import { applyPreparedDeployment, prepareDeployment, PreparedDeployment } from '../commands/deploy-site.js';
 import { applyDownload, prepareDownload, PreparedDownload } from '../commands/download-site.js';
 import { createFileClient, purgeSiteCacheAfterMutation, writeResponseAtomically } from '../commands/files.js';
-import { ConfigOverrides, resolveConfig } from '../config.js';
-import { CliError, errorMessage } from '../errors.js';
+import { login, LoginDependencies } from '../commands/login.js';
+import { ConfigOverrides, ResolvedConfig, resolveConfig } from '../config.js';
+import { CliError, errorMessage, HttpError } from '../errors.js';
 import { registerFormsMcp } from './forms.js';
 import { AllowedLocalRoots } from './local-paths.js';
 
 export interface McpServerOptions extends ConfigOverrides {
     roots: AllowedLocalRoots;
     version: string;
+    env?: NodeJS.ProcessEnv;
+    loginDependencies?: Pick<LoginDependencies, 'onBrowserUrl' | 'openUrl' | 'renewalTokenStore'>;
 }
 
 const MAX_PENDING_PLANS = 16;
+const SERVER_INSTRUCTIONS =
+    'Never infer a deployment domain from a repository, site content, organization name, or a similar available site. Before any site mutation, use an explicitly stated project domain or ask the user which domain they intend. Verify that domain with list_sites or get_site. If it is unavailable in the current login context, do not substitute another site; explain that access is unavailable and offer the login tool so the user can switch context. Use plan_deploy and present its operations before apply_deploy.';
 
 export async function createHostingMcpServer(options: McpServerOptions): Promise<McpServer> {
-    const config = await resolveConfig(options);
-    const manager = new ManagerClient(config.apiUrl, config.credential);
-    const forms = new FormsClient(config.suiteApiUrl, config.credential);
     const deployments = new Map<string, PreparedDeployment>();
     const downloads = new Map<string, PreparedDownload>();
-    const server = new McpServer({ name: 'io.github.zyno-io/zynohosting', version: options.version }, { capabilities: { logging: {} } });
-    const stopCredentialRefresh = startCredentialRefreshLoop(config.credential, {
-        onError: async error => {
+    const server = new McpServer(
+        { name: 'io.github.zyno-io/zynohosting', version: options.version },
+        { capabilities: { logging: {} }, instructions: SERVER_INSTRUCTIONS }
+    );
+    const authentication = new McpAuthentication(
+        options,
+        async error => {
             if (!server.isConnected()) return;
             await server.sendLoggingMessage({
                 level: 'warning',
                 logger: 'zynohosting.auth',
                 data: `Background credential renewal failed: ${errorMessage(error)}`
             });
+        },
+        () => {
+            deployments.clear();
+            downloads.clear();
         }
-    });
-    server.server.onclose = stopCredentialRefresh;
+    );
+    server.server.onclose = () => authentication.close();
 
-    registerFormsMcp(server, forms, manager, config.suiteApiUrl);
+    server.registerTool(
+        'login',
+        {
+            title: 'Sign in to ZynoHosting',
+            description:
+                'Start or check the local browser sign-in flow for ZynoHosting. Starting returns the one-time URL in this tool result and attempts to open it in a browser. Use this before authenticated tools when no login is saved, or when the requested domain is unavailable in the current login context. A browser login cannot replace API-key or token credentials injected into this MCP process; change those credentials and restart instead.',
+            inputSchema: {
+                action: z.enum(['start', 'status']).default('start'),
+                permissions: z.array(z.string().min(1)).min(1).max(100).default(['hosting.sitesRead']),
+                name: z.string().min(1).max(255).optional(),
+                renewable: z.boolean().default(false),
+                timeout_seconds: z.number().int().min(1).max(600).default(300)
+            },
+            annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true }
+        },
+        async ({ action, permissions, name, renewable, timeout_seconds }) => {
+            if (action === 'status') return result(await authentication.loginStatus());
+
+            const pendingLogin = await authentication.beginLogin({
+                permissions,
+                ...(name ? { name } : {}),
+                renewable,
+                timeoutSeconds: timeout_seconds
+            });
+            return result({
+                authenticated: false,
+                status: 'pending',
+                browserUrl: pendingLogin.browserUrl,
+                message:
+                    'Open the one-time sign-in URL if a browser did not open. After you finish sign-in, call login with action "status" before using authenticated tools.'
+            });
+        }
+    );
+
+    registerFormsMcp(server, () => authentication.clients());
 
     server.registerTool(
         'list_sites',
@@ -49,18 +93,19 @@ export async function createHostingMcpServer(options: McpServerOptions): Promise
             description: 'List sites the current credential is authorized to inspect.',
             annotations: { readOnlyHint: true, openWorldHint: false }
         },
-        async () => result(await manager.listSites())
+        async () => result(await (await authentication.clients()).manager.listSites())
     );
 
     server.registerTool(
         'get_site',
         {
             title: 'Get a ZynoHosting site',
-            description: 'Get one authorized site by UUID or hostname.',
+            description:
+                'Get one explicitly intended site by UUID or hostname. Do not use this to pick a likely deployment target; ask the user when the project domain is not explicit.',
             inputSchema: { site: z.string().min(1) },
             annotations: { readOnlyHint: true, openWorldHint: false }
         },
-        async ({ site }) => result(await manager.getSite(site))
+        async ({ site }) => result(await authorizedSite((await authentication.clients()).manager, site))
     );
 
     server.registerTool(
@@ -76,7 +121,8 @@ export async function createHostingMcpServer(options: McpServerOptions): Promise
             annotations: { readOnlyHint: true, openWorldHint: false }
         },
         async ({ site, path, recursive }) => {
-            const { client } = await createFileClient(site, ['files:list'], options);
+            const { config } = await authentication.clients();
+            const { client } = await createFileClient(site, ['files:list'], options, undefined, config);
             return result(await client.list(path, recursive));
         }
     );
@@ -96,7 +142,8 @@ export async function createHostingMcpServer(options: McpServerOptions): Promise
         },
         async ({ site, remote_path, local_path, overwrite }) => {
             const destination = await options.roots.destination(local_path);
-            const { client } = await createFileClient(site, ['files:read'], options);
+            const { config } = await authentication.clients();
+            const { client } = await createFileClient(site, ['files:read'], options, undefined, config);
             const response = await client.get(remote_path);
             await writeResponseAtomically(response, destination, overwrite);
             return result({
@@ -128,7 +175,8 @@ export async function createHostingMcpServer(options: McpServerOptions): Promise
             const source = await options.roots.existing(local_path);
             const info = await lstat(source);
             if (!info.isFile() || info.isSymbolicLink()) throw new CliError('Local source is not a regular file', 2, 'invalid_source');
-            const files = await createFileClient(site, ['files:write'], options);
+            const { config } = await authentication.clients();
+            const files = await createFileClient(site, ['files:write'], options, undefined, config);
             const uploaded = await files.client.put(remote_path, createReadStream(source), {
                 ...(etag ? { ifMatch: etag } : {}),
                 ...(create_only ? { ifNoneMatch: '*' } : {})
@@ -151,7 +199,8 @@ export async function createHostingMcpServer(options: McpServerOptions): Promise
             annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false }
         },
         async ({ site, remote_path, etag }) => {
-            const files = await createFileClient(site, ['files:delete'], options);
+            const { config } = await authentication.clients();
+            const files = await createFileClient(site, ['files:delete'], options, undefined, config);
             const deleted = await files.client.delete(remote_path, etag);
             await purgeSiteCacheAfterMutation(files.manager, files.siteId, deleted);
             return result(deleted);
@@ -162,7 +211,8 @@ export async function createHostingMcpServer(options: McpServerOptions): Promise
         'plan_deploy',
         {
             title: 'Plan a full site deployment',
-            description: 'Build and store an exact deployment plan. This does not change the hosted site.',
+            description:
+                'Build and store an exact deployment plan for the domain the user explicitly chose. Never guess a site from the project or select a similar authorized domain. This does not change the hosted site.',
             inputSchema: {
                 site: z.string().min(1),
                 local_root: z.string().min(1).describe('Absolute local directory; inside an MCP root when roots are configured'),
@@ -178,13 +228,20 @@ export async function createHostingMcpServer(options: McpServerOptions): Promise
             const source = await options.roots.existing(local_root);
             const info = await lstat(source);
             if (!info.isDirectory() || info.isSymbolicLink()) throw new CliError('Deployment source is not a regular directory', 2, 'invalid_source');
-            const plan = await prepareDeployment(site, source, {
-                ...options,
-                yes: true,
-                allowEmpty: allow_empty,
-                ...(ignore.length ? { ignore } : {}),
-                ...(ignore_file ? { ignoreFile: await options.roots.existing(ignore_file) } : {})
-            });
+            const { config } = await authentication.clients();
+            const plan = await prepareDeployment(
+                site,
+                source,
+                {
+                    ...options,
+                    yes: true,
+                    allowEmpty: allow_empty,
+                    ...(ignore.length ? { ignore } : {}),
+                    ...(ignore_file ? { ignoreFile: await options.roots.existing(ignore_file) } : {})
+                },
+                undefined,
+                config
+            );
             deployments.set(plan.finalPlan.planId, plan);
             return result({
                 planId: plan.finalPlan.planId,
@@ -233,7 +290,8 @@ export async function createHostingMcpServer(options: McpServerOptions): Promise
             purgeExpired(deployments, downloads);
             requirePlanCapacity(deployments, downloads);
             const target = await options.roots.destination(local_root);
-            const plan = await prepareDownload(site, target, { ...options, sensitive: include_sensitive, yes: true });
+            const { config } = await authentication.clients();
+            const plan = await prepareDownload(site, target, { ...options, sensitive: include_sensitive, yes: true }, config);
             downloads.set(plan.planId, plan);
             return result({
                 planId: plan.planId,
@@ -264,6 +322,198 @@ export async function createHostingMcpServer(options: McpServerOptions): Promise
     );
 
     return server;
+}
+
+interface AuthenticatedMcpClients {
+    config: ResolvedConfig;
+    manager: ManagerClient;
+    forms: FormsClient;
+}
+
+interface PendingMcpLogin {
+    browserUrl: Promise<string>;
+    url?: string;
+    completion: Promise<ResolvedConfig>;
+}
+
+class McpAuthentication {
+    private current: AuthenticatedMcpClients | undefined;
+    private pending: Promise<AuthenticatedMcpClients> | undefined;
+    private pendingLogin: PendingMcpLogin | undefined;
+    private lastLoginError: unknown;
+    private stopRefresh: (() => void) | undefined;
+
+    constructor(
+        private readonly options: McpServerOptions,
+        private readonly onRefreshError: (error: unknown) => Promise<void>,
+        private readonly onLoginComplete: () => void
+    ) {}
+
+    async clients(): Promise<AuthenticatedMcpClients> {
+        if (this.current) return this.current;
+        this.pending ??= this.load().finally(() => {
+            this.pending = undefined;
+        });
+        return this.pending;
+    }
+
+    async beginLogin(input: { permissions: string[]; name?: string; renewable: boolean; timeoutSeconds: number }): Promise<{ browserUrl: string }> {
+        this.requireSwitchableCredentialSource();
+        if (this.pendingLogin) return { browserUrl: await this.pendingLogin.browserUrl };
+        this.lastLoginError = undefined;
+
+        let publishBrowserUrl!: (url: string) => void;
+        let failBeforeBrowserUrl!: (error: unknown) => void;
+        const browserUrl = new Promise<string>((resolve, reject) => {
+            publishBrowserUrl = resolve;
+            failBeforeBrowserUrl = reject;
+        });
+        const pendingLogin: PendingMcpLogin = {
+            browserUrl,
+            completion: Promise.resolve<ResolvedConfig>(undefined as never)
+        };
+        this.pendingLogin = pendingLogin;
+        pendingLogin.completion = login(
+            {
+                ...(this.options.apiUrl ? { apiUrl: this.options.apiUrl } : {}),
+                ...(this.options.suiteApiUrl ? { suiteApiUrl: this.options.suiteApiUrl } : {}),
+                ...(this.options.authApiUrl ? { authApiUrl: this.options.authApiUrl } : {}),
+                ...(this.options.environment ? { environment: this.options.environment } : {}),
+                ...(input.name ? { name: input.name } : {}),
+                permissionKeys: input.permissions,
+                renewable: input.renewable,
+                timeoutSeconds: input.timeoutSeconds
+            },
+            {
+                ...(this.options.loginDependencies ?? {}),
+                env: this.options.env ?? process.env,
+                // The MCP stdio transport owns stdout. Login progress and a fallback URL must never be
+                // emitted there because that would corrupt the protocol stream.
+                write: message => process.stderr.write(message),
+                onBrowserUrl: async url => {
+                    pendingLogin.url = url;
+                    publishBrowserUrl(url);
+                    await this.options.loginDependencies?.onBrowserUrl?.(url);
+                }
+            }
+        )
+            .then(async () => {
+                const config = await this.resolve();
+                this.setCurrent(config);
+                this.onLoginComplete();
+                return config;
+            })
+            .catch(error => {
+                this.lastLoginError = error;
+                failBeforeBrowserUrl(error);
+                throw error;
+            })
+            .finally(() => {
+                if (this.pendingLogin === pendingLogin) this.pendingLogin = undefined;
+            });
+        // The request itself returns the URL, so keep a later browser timeout or cancellation from
+        // becoming an unhandled rejection after the MCP tool result has been delivered.
+        void pendingLogin.completion.catch(() => {});
+        return { browserUrl: await pendingLogin.browserUrl };
+    }
+
+    async loginStatus(): Promise<Record<string, unknown>> {
+        if (this.pendingLogin) {
+            return {
+                authenticated: false,
+                status: 'pending',
+                ...(this.pendingLogin.url ? { browserUrl: this.pendingLogin.url } : {}),
+                message: 'Browser sign-in is still waiting for its secure local callback.'
+            };
+        }
+        if (this.lastLoginError) {
+            return { authenticated: false, status: 'failed', message: `Browser sign-in failed: ${errorMessage(this.lastLoginError)}` };
+        }
+        if (this.current) return authenticatedLoginStatus(this.current.config);
+        try {
+            return authenticatedLoginStatus((await this.clients()).config);
+        } catch (error) {
+            if (error instanceof CliError && error.code === 'missing_config') {
+                return { authenticated: false, status: 'not_started', message: 'No saved ZynoHosting login. Call login with action "start".' };
+            }
+            throw error;
+        }
+    }
+
+    close(): void {
+        this.stopRefresh?.();
+        this.stopRefresh = undefined;
+        this.current = undefined;
+        this.pendingLogin = undefined;
+    }
+
+    private async load(): Promise<AuthenticatedMcpClients> {
+        const config = await this.resolve();
+        return this.setCurrent(config);
+    }
+
+    private async resolve(): Promise<ResolvedConfig> {
+        try {
+            return await resolveConfig(this.options, this.options.env ?? process.env);
+        } catch (error) {
+            if (error instanceof CliError && error.code === 'missing_config') {
+                throw new CliError(
+                    'ZynoHosting is not signed in. Call the login MCP tool to open the browser sign-in flow.',
+                    error.exitCode,
+                    error.code
+                );
+            }
+            throw error;
+        }
+    }
+
+    private setCurrent(config: ResolvedConfig): AuthenticatedMcpClients {
+        this.stopRefresh?.();
+        this.stopRefresh = startCredentialRefreshLoop(config.credential, { onError: this.onRefreshError });
+        const current = {
+            config,
+            manager: new ManagerClient(config.apiUrl, config.credential),
+            forms: new FormsClient(config.suiteApiUrl, config.credential),
+            ...(config.suiteApiUrl ? { suiteApiUrl: config.suiteApiUrl } : {})
+        };
+        this.current = current;
+        return current;
+    }
+
+    private requireSwitchableCredentialSource(): void {
+        const env = this.options.env ?? process.env;
+        if (this.options.apiKey || this.options.accessToken || env.ZYNO_HOSTING_API_KEY || env.ZYNO_HOSTING_ACCESS_TOKEN) {
+            throw new CliError(
+                'This MCP process uses an API key or access token supplied by its command or environment, so browser login cannot switch its active context. Remove or replace that credential and restart the MCP host.',
+                2,
+                'fixed_credential_source'
+            );
+        }
+    }
+}
+
+function authenticatedLoginStatus(config: ResolvedConfig): Record<string, unknown> {
+    return {
+        authenticated: true,
+        status: 'authenticated',
+        expiresAt: config.credential.type === 'bearer' ? (config.credential.expiresAt ?? null) : null,
+        message: 'ZynoHosting login is ready. Any pending deployment or download plans were cleared because the login context changed.'
+    };
+}
+
+async function authorizedSite(manager: ManagerClient, site: string) {
+    try {
+        return await manager.getSite(site);
+    } catch (error) {
+        if (error instanceof HttpError && (error.status === 403 || error.status === 404)) {
+            throw new CliError(
+                `The current ZynoHosting login cannot access ${site}. Do not substitute another domain; ask the user whether to call login again and switch context.`,
+                error.exitCode,
+                'site_not_available'
+            );
+        }
+        throw error;
+    }
 }
 
 function result(value: unknown) {

@@ -149,6 +149,12 @@ The destination must be new or empty. Archive bytes are extracted as the hosting
 
 The MCP server is local stdio only. It does not open a port or provide a hosted/cloud MCP endpoint.
 
+For a non-technical user, paste this into Codex or Claude Code:
+
+> Set up ZynoHosting MCP for this project if it's not already configured. See https://zyno-io.github.io/zynohosting-cli/mcp/setup for details.
+
+The agent runs `npx -y @zyno-io/zynohosting mcp install --project .` and configures Claude Code’s `.mcp.json` plus Codex’s `.codex/config.toml` without storing credentials. Restart the agent after it completes; MCP tools are not added to an already-running session.
+
 `ZYNO_HOSTING_MCP_ROOTS` is an optional local-computer allowlist for the MCP process. When it is unset, local-file tools can use any absolute path the MCP process user can access. When roots are configured, local file reads, writes, deploy sources, ignore files, and download destinations are constrained to them after canonical path resolution.
 
 Direct invocation:
@@ -183,6 +189,7 @@ On macOS and Linux, multiple `ZYNO_HOSTING_MCP_ROOTS` use `:` as the delimiter. 
 
 The MCP tools are:
 
+- `login`
 - `list_sites`
 - `get_site`
 - `list_forms`
@@ -202,6 +209,8 @@ The MCP tools are:
 - `apply_download`
 
 Full deploys and downloads intentionally use separate plan/apply calls. Plans are held only in the local MCP process, contain no exposed bearer token, expire with their short-lived access session, and cannot be applied after the server restarts.
+
+The MCP can start without a saved login. The agent calls `login` to open the Zyno browser sign-in flow and receives the one-time URL in its tool result; after the browser callback, it calls `login` with `action: "status"` to confirm the login. It must never infer a deployment domain from the project or select a similar authorized site; it asks when the project does not state the target domain. If the stated domain is unavailable in the current login context, it must not substitute another one and should offer `login` again to switch contexts.
 
 ## Permissions
 

@@ -6,7 +6,7 @@ import { pipeline } from 'node:stream/promises';
 
 import { FileClient } from '../api/file-client.js';
 import { ManagerClient } from '../api/manager-client.js';
-import { ConfigOverrides } from '../config.js';
+import { ConfigOverrides, ResolvedConfig } from '../config.js';
 import { validateRelativePath } from '../deploy/inventory.js';
 import { CliError } from '../errors.js';
 import { formatBytes, Output } from '../output.js';
@@ -103,9 +103,12 @@ export async function createFileClient(
     siteRef: string,
     scopes: Array<'files:list' | 'files:read' | 'files:write' | 'files:delete' | 'download:deployable' | 'download:sensitive'>,
     options: ConfigOverrides,
-    timeoutMs = 600_000
+    timeoutMs = 600_000,
+    resolvedConfig?: ResolvedConfig
 ): Promise<{ client: FileClient; expiresAt: string; siteId: string; manager: Awaited<ReturnType<typeof managerClient>> }> {
-    const manager = await managerClient(options, Math.min(timeoutMs, 30_000));
+    const manager = resolvedConfig
+        ? new ManagerClient(resolvedConfig.apiUrl, resolvedConfig.credential, Math.min(timeoutMs, 30_000))
+        : await managerClient(options, Math.min(timeoutMs, 30_000));
     const session = await manager.createAccessSession(siteRef, scopes);
     return {
         client: new FileClient(session.endpoints.files, session.accessToken, timeoutMs),

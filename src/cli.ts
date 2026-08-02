@@ -9,6 +9,7 @@ import { deleteFile, getFile, listFiles, putFile } from './commands/files.js';
 import { login, LoginOptions } from './commands/login.js';
 import { logout, LogoutOptions } from './commands/logout.js';
 import { getSite, listSites } from './commands/sites.js';
+import { installHostingMcp } from './mcp/install.js';
 import { startHostingMcp } from './mcp/start.js';
 
 const PACKAGE_VERSION = readPackageVersion();
@@ -217,7 +218,7 @@ export function createProgram(): Command {
             });
         });
 
-    program
+    const mcp = program
         .command('mcp')
         .description('run the local ZynoHosting and ZynoForms MCP server')
         .option('--root <path>', 'restrict local-file MCP tools to this root (repeatable)', collect, [])
@@ -232,6 +233,16 @@ export function createProgram(): Command {
                 ...(context.apiKey ? { apiKey: context.apiKey } : {}),
                 ...(context.environment ? { environment: context.environment } : {})
             });
+        });
+
+    mcp.command('install')
+        .description('configure the local ZynoHosting MCP for Claude Code and Codex in this project')
+        .option('--project <path>', 'project root to configure', '.')
+        .action(async (commandOptions: { project: string }) => {
+            const installed = await installHostingMcp({ project: commandOptions.project });
+            for (const path of installed.configured) process.stdout.write(`Configured ${path}\n`);
+            for (const path of installed.alreadyConfigured) process.stdout.write(`Already configured ${path}\n`);
+            process.stdout.write('Restart Codex or Claude Code before using the ZynoHosting MCP tools.\n');
         });
 
     return program;
