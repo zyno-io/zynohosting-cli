@@ -7,7 +7,7 @@ import type { BearerCredential } from '../src/config.js';
 import { ManagerClient } from '../src/api/manager-client.js';
 import { attachCredentialRefresh } from '../src/auth/credential-refresh.js';
 
-test('uses a Zyno scoped Bearer token without tenant or masquerade headers', async () => {
+test('uses a scoped Bearer token without tenant or masquerade headers', async () => {
     const server = createServer((request, response) => {
         assert.equal(request.method, 'POST');
         assert.equal(request.url, '/v1/sites/example.com/access-sessions');

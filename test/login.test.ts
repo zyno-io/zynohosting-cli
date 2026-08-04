@@ -213,6 +213,38 @@ test('login rejects malformed and non-delegable permission requests before openi
     await assert.rejects(login({ permissionKeys: [] }, dependencies), /1–100 permissions/);
     await assert.rejects(login({ permissionKeys: ['not a key'] }, dependencies), /app\.capability/);
     await assert.rejects(login({ permissionKeys: ['msp.impersonate'] }, dependencies), /cannot be delegated/);
+    await assert.rejects(
+        login({ permissionKeys: ['hosting.sitesRead', 'hosting.sitesWrite'] }, dependencies),
+        /hosting\.sitesWrite is not a ZynoSuite permission\. Did you mean hosting\.filesWrite\?.*hosting\.downloadSensitive/s
+    );
+    await assert.rejects(login({ permissionKeys: ['storage.read'] }, dependencies), /is not a ZynoSuite permission/);
+});
+
+test('an aborted browser login stops waiting and closes its loopback listener', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'hosting-cli-cancelled-login-'));
+    const file = join(root, 'config.json');
+    const abort = new AbortController();
+    let callbackUrl = '';
+
+    await assert.rejects(
+        login(
+            { apiUrl: API_URL, loginUrl: LOGIN_URL, timeoutSeconds: 60, signal: abort.signal },
+            {
+                configFile: file,
+                write: () => {},
+                openUrl: async () => {},
+                onBrowserUrl: url => {
+                    callbackUrl = new URL(url).searchParams.get('callback') ?? '';
+                    abort.abort();
+                }
+            }
+        ),
+        /cancelled/i
+    );
+
+    assert(callbackUrl);
+    await assert.rejects(fetch(callbackUrl, { method: 'POST' }));
+    await assert.rejects(stat(file));
 });
 
 test('loopback rejects repeated callback fields and unexpected renewal credentials without settling login', async () => {
@@ -325,7 +357,7 @@ test('API-key login remains available for CI credentials', async () => {
 test('saved browser credentials resolve for deployments and expire locally', async () => {
     const root = await mkdtemp(join(tmpdir(), 'hosting-cli-config-'));
     const file = join(root, 'config.json');
-    const env = { ZYNO_HOSTING_CONFIG: file };
+    const env = { ZYNOHOSTING_CONFIG: file };
     await saveConfig({ apiUrl: API_URL, accessToken: JWT, tenantId: TENANT_ID, expiresAt: EXPIRATION }, file);
     assert.deepEqual(await resolveConfig({}, env), {
         apiUrl: API_URL,
@@ -342,7 +374,7 @@ test('an injected scoped Bearer token does not require tenant metadata', async (
     const root = await mkdtemp(join(tmpdir(), 'hosting-cli-injected-token-'));
     const file = join(root, 'config.json');
     const expiresAt = Date.now() + 60_000;
-    const resolved = await resolveConfig({ accessToken: JWT, expiresAt }, { ZYNO_HOSTING_CONFIG: file, ZYNO_HOSTING_ENVIRONMENT: 'alpha' });
+    const resolved = await resolveConfig({ accessToken: JWT, expiresAt }, { ZYNOHOSTING_CONFIG: file, ZYNOHOSTING_ENVIRONMENT: 'alpha' });
     assert.deepEqual(resolved.credential, { type: 'bearer', accessToken: JWT, expiresAt });
 });
 
@@ -351,7 +383,7 @@ test('an expiring renewable login rotates once across concurrent config resoluti
     const file = join(root, 'config.json');
     const renewalKey = '11111111-1111-4111-8111-111111111111';
     const store = new MemoryRenewalTokenStore([[renewalKey, 'zrt_old']]);
-    const env = { ZYNO_HOSTING_CONFIG: file };
+    const env = { ZYNOHOSTING_CONFIG: file };
     const newExpiration = Date.now() + 60 * 60 * 1000;
     let renewals = 0;
     await saveConfig(
@@ -396,12 +428,12 @@ test('an explicit SPA login URL works with a custom Hosting API hostname', () =>
 
 test('resolves environment API defaults while preserving explicit and saved URLs', () => {
     assert.equal(resolveApiUrl(undefined, {}, {}), 'https://hosting.api.zyno.app');
-    assert.equal(resolveApiUrl(undefined, {}, { ZYNO_HOSTING_ENVIRONMENT: 'alpha' }), API_URL);
-    assert.equal(resolveApiUrl(undefined, {}, { ZYNO_HOSTING_ENVIRONMENT: 'dev' }), 'http://localhost:39840');
+    assert.equal(resolveApiUrl(undefined, {}, { ZYNOHOSTING_ENVIRONMENT: 'alpha' }), API_URL);
+    assert.equal(resolveApiUrl(undefined, {}, { ZYNOHOSTING_ENVIRONMENT: 'dev' }), 'http://localhost:39840');
     assert.equal(resolveApiUrl(undefined, { apiUrl: 'https://hosting.example.com' }, {}), 'https://hosting.example.com');
-    assert.equal(resolveApiUrl(undefined, { apiUrl: 'https://hosting.example.com' }, { ZYNO_HOSTING_ENVIRONMENT: 'alpha' }), API_URL);
-    assert.equal(resolveApiUrl('https://override.example.com', {}, { ZYNO_HOSTING_ENVIRONMENT: 'alpha' }), 'https://override.example.com');
-    assert.throws(() => resolveApiUrl(undefined, {}, { ZYNO_HOSTING_ENVIRONMENT: 'staging' }), /Expected production, alpha, or dev/);
+    assert.equal(resolveApiUrl(undefined, { apiUrl: 'https://hosting.example.com' }, { ZYNOHOSTING_ENVIRONMENT: 'alpha' }), API_URL);
+    assert.equal(resolveApiUrl('https://override.example.com', {}, { ZYNOHOSTING_ENVIRONMENT: 'alpha' }), 'https://override.example.com');
+    assert.throws(() => resolveApiUrl(undefined, {}, { ZYNOHOSTING_ENVIRONMENT: 'staging' }), /Expected production, alpha, or dev/);
 });
 
 test('resolves matching Suite API defaults and honors explicit, environment, and saved overrides', () => {

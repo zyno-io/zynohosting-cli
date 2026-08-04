@@ -16,9 +16,9 @@ const program = new Command()
     .option('--root <path>', 'restrict local-file MCP tools to this root (repeatable)', collect, [])
     .option('--api-url <url>', 'Hosting Manager API URL')
     .option('--suite-api-url <url>', 'ZynoSuite API URL')
-    .option('--auth-api-url <url>', 'Zyno Auth API URL')
+    .option('--auth-api-url <url>', 'ZynoAuth API URL')
     .addOption(new Option('--environment <name>', 'Hosting environment').choices(['production', 'alpha', 'dev']))
-    .option('--api-key <key>', 'tenant API key (prefer ZYNO_HOSTING_API_KEY)');
+    .option('--api-key <key>', 'tenant API key (prefer ZYNOHOSTING_API_KEY)');
 
 try {
     program.parse(process.argv);

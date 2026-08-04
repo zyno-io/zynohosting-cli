@@ -15,13 +15,18 @@ import {
 import { CliError } from '../errors.js';
 import { openUrl } from '../login/browser.js';
 import { startLoopbackLogin } from '../login/loopback.js';
+import {
+    DELEGABLE_PERMISSION_KEYS,
+    isDelegablePermissionKey,
+    NON_DELEGABLE_PERMISSION_KEYS,
+    PERMISSION_KEY_PATTERN,
+    suggestPermissionKey
+} from '../permissions.js';
 
 const DEFAULT_ALPHA_LOGIN_URL = 'https://zyno.dev/cli/login';
 const DEFAULT_DEV_LOGIN_URL = 'http://localhost:5173/cli/login';
 const DEFAULT_PRODUCTION_LOGIN_URL = 'https://zyno.app/cli/login';
 const DEFAULT_PERMISSION_KEYS = ['hosting.sitesRead'];
-const NON_DELEGABLE_PERMISSION_KEYS = new Set(['msp.login', 'msp.impersonate', 'core.changePassword', 'core.manageFingerprints']);
-const PERMISSION_KEY_PATTERN = /^[a-z][a-zA-Z0-9]*\.[a-z][a-zA-Z0-9]*$/;
 
 export interface LoginOptions {
     apiUrl?: string;
@@ -35,6 +40,8 @@ export interface LoginOptions {
     renewable?: boolean;
     timeoutSeconds?: number;
     open?: boolean;
+    /** Abandons an in-flight browser flow: closes the loopback listener and rejects with `login_cancelled`. */
+    signal?: AbortSignal;
 }
 
 export interface LoginDependencies {
@@ -53,7 +60,7 @@ export async function login(options: LoginOptions, dependencies: LoginDependenci
     const apiUrl = resolveApiUrl(options.apiUrl, stored, env, options.environment);
     const suiteApiUrl = resolveSuiteApiUrl(options.suiteApiUrl, stored, apiUrl, env, options.environment);
     const authApiUrl = resolveAuthApiUrl(options.authApiUrl, stored, apiUrl, env, options.environment);
-    const apiKey = options.apiKey ?? env.ZYNO_HOSTING_API_KEY;
+    const apiKey = options.apiKey ?? env.ZYNOHOSTING_API_KEY;
     const write = dependencies.write ?? (message => process.stdout.write(message));
 
     if (apiKey) {
@@ -68,13 +75,14 @@ export async function login(options: LoginOptions, dependencies: LoginDependenci
     const renewable = options.renewable ?? false;
     if (renewable && !authApiUrl) {
         throw new CliError(
-            'The Zyno Auth API URL is required for a renewable login. Pass --auth-api-url or set ZYNO_AUTH_API_URL.',
+            'The ZynoAuth API URL is required for a renewable login. Pass --auth-api-url or set ZYNO_AUTH_API_URL.',
             2,
             'missing_auth_api_url'
         );
     }
     let savedRenewableCredential = false;
-    const loginPageUrl = resolveLoginPageUrl(options.loginUrl ?? env.ZYNO_HOSTING_LOGIN_URL, apiUrl);
+    const loginPageUrl = resolveLoginPageUrl(options.loginUrl ?? env.ZYNOHOSTING_LOGIN_URL, apiUrl);
+    if (options.signal?.aborted) throw new CliError('Browser login was cancelled', 3, 'login_cancelled');
     const loopback = await startLoopbackLogin({
         timeoutMs: Math.max(1, options.timeoutSeconds ?? 300) * 1000,
         renewable,
@@ -106,6 +114,9 @@ export async function login(options: LoginOptions, dependencies: LoginDependenci
             }
         }
     });
+    const cancel = () => void loopback.close();
+    options.signal?.addEventListener('abort', cancel, { once: true });
+    if (options.signal?.aborted) cancel();
     const browserUrl = new URL(loginPageUrl);
     browserUrl.searchParams.set('callback', loopback.callbackUrl);
     browserUrl.searchParams.set('state', loopback.state);
@@ -135,6 +146,7 @@ export async function login(options: LoginOptions, dependencies: LoginDependenci
             write('ZynoHosting login complete.\n');
         }
     } finally {
+        options.signal?.removeEventListener('abort', cancel);
         await loopback.close();
     }
 }
@@ -158,6 +170,15 @@ function validatePermissionKeys(values: string[]): string[] {
     }
     const prohibited = result.find(value => NON_DELEGABLE_PERMISSION_KEYS.has(value));
     if (prohibited) throw new CliError(`${prohibited} cannot be delegated to a CLI token.`, 2, 'non_delegable_permission');
+    const unknown = result.find(value => !isDelegablePermissionKey(value));
+    if (unknown) {
+        const suggestion = suggestPermissionKey(unknown);
+        throw new CliError(
+            `${unknown} is not a ZynoSuite permission.${suggestion ? ` Did you mean ${suggestion}?` : ''} Request only: ${DELEGABLE_PERMISSION_KEYS.join(', ')}.`,
+            2,
+            'unknown_permission'
+        );
+    }
     return result;
 }
 
@@ -192,7 +213,7 @@ function defaultLoginPageUrl(apiUrl: string): string {
     if (hostname === 'hosting.api.zyno.app') return DEFAULT_PRODUCTION_LOGIN_URL;
     if (new Set(['localhost', '127.0.0.1', '[::1]']).has(hostname)) return DEFAULT_DEV_LOGIN_URL;
     throw new CliError(
-        'The SPA login URL is not configured for this Hosting API. Pass --login-url or set ZYNO_HOSTING_LOGIN_URL.',
+        'The SPA login URL is not configured for this Hosting API. Pass --login-url or set ZYNOHOSTING_LOGIN_URL.',
         2,
         'missing_login_url'
     );

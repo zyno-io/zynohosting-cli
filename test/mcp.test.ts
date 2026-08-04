@@ -175,7 +175,7 @@ test('serves site metadata and downloads files only inside allowed roots', async
     const hosting = await createHostingMcpServer({
         roots: await AllowedLocalRoots.create([root]),
         version: '0.2.0',
-        env: { ZYNO_HOSTING_CONFIG: configFile }
+        env: { ZYNOHOSTING_CONFIG: configFile }
     });
     const client = new Client({ name: 'test-client', version: '1.0.0' });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -413,7 +413,7 @@ test('starts without credentials and can complete browser login through MCP', as
         roots: await AllowedLocalRoots.create([root]),
         version: '1.0.0',
         apiUrl: baseUrl,
-        env: { ZYNO_HOSTING_CONFIG: configFile, ZYNO_HOSTING_LOGIN_URL: 'https://login.example.test/cli/login' },
+        env: { ZYNOHOSTING_CONFIG: configFile, ZYNOHOSTING_LOGIN_URL: 'https://login.example.test/cli/login' },
         loginDependencies: {
             openUrl: async value => {
                 openedBrowserUrl = value;
@@ -496,7 +496,7 @@ test('reports a failed browser context switch instead of the prior login', async
     const hosting = await createHostingMcpServer({
         roots: await AllowedLocalRoots.create([root]),
         version: '1.0.0',
-        env: { ZYNO_HOSTING_CONFIG: configFile, ZYNO_HOSTING_LOGIN_URL: 'https://login.example.test/cli/login' },
+        env: { ZYNOHOSTING_CONFIG: configFile, ZYNOHOSTING_LOGIN_URL: 'https://login.example.test/cli/login' },
         loginDependencies: {
             onBrowserUrl: async () => {
                 throw new Error('The sign-in was denied.');
@@ -531,9 +531,65 @@ test('reports a failed browser context switch instead of the prior login', async
     }
 });
 
+test('a changed permission request supersedes the in-flight browser flow and can be cancelled', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'zynohosting-mcp-login-scope-'));
+    const configFile = join(root, 'hosting-config.json');
+    const hosting = await createHostingMcpServer({
+        roots: await AllowedLocalRoots.create([root]),
+        version: '1.0.0',
+        apiUrl: 'https://hosting.api-alpha.zyno.dev',
+        env: { ZYNOHOSTING_CONFIG: configFile, ZYNOHOSTING_LOGIN_URL: 'https://login.example.test/cli/login' },
+        loginDependencies: { openUrl: async () => {} }
+    });
+    const client = new Client({ name: 'login-scope-mcp-test-client', version: '1.0.0' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await hosting.connect(serverTransport);
+    await client.connect(clientTransport);
+    const call = async (args: Record<string, unknown>) => {
+        const response = await client.callTool({ name: 'login', arguments: args });
+        assert.equal(response.isError, undefined);
+        return response.structuredContent as { status?: string; browserUrl?: string; reused?: boolean; permissions?: string[] };
+    };
+    try {
+        const invented = await client.callTool({ name: 'login', arguments: { permissions: ['hosting.sitesWrite'], timeout_seconds: 30 } });
+        assert.equal(invented.isError, true);
+        assert.match(JSON.stringify(invented.content), /hosting\.filesWrite/);
+
+        const readOnly = await call({ permissions: ['hosting.sitesRead'], timeout_seconds: 30 });
+        assert.equal(readOnly.reused, false);
+        const repeated = await call({ permissions: ['hosting.sitesRead'], timeout_seconds: 30 });
+        assert.equal(repeated.reused, true);
+        assert.equal(repeated.browserUrl, readOnly.browserUrl);
+
+        const deploy = await call({ permissions: ['hosting.deploy', 'hosting.sitesRead'], timeout_seconds: 30 });
+        assert.equal(deploy.reused, false);
+        assert.notEqual(deploy.browserUrl, readOnly.browserUrl);
+        assert.deepEqual(deploy.permissions, ['hosting.deploy', 'hosting.sitesRead']);
+        const deployUrl = new URL(deploy.browserUrl!);
+        assert.equal(deployUrl.searchParams.get('permissions'), 'hosting.deploy,hosting.sitesRead');
+        // The superseded flow must be dead, not merely unreferenced.
+        const supersededCallback = new URL(readOnly.browserUrl!).searchParams.get('callback')!;
+        await assert.rejects(fetch(supersededCallback, { method: 'POST' }));
+
+        const pending = await call({ action: 'status' });
+        assert.equal(pending.status, 'pending');
+        assert.deepEqual(pending.permissions, ['hosting.deploy', 'hosting.sitesRead']);
+
+        const cancelled = await call({ action: 'cancel' });
+        assert.equal(cancelled.status, 'cancelled');
+        await assert.rejects(fetch(deployUrl.searchParams.get('callback')!, { method: 'POST' }));
+        // A cancellation the caller asked for is not reported as a login failure afterwards.
+        assert.equal((await call({ action: 'status' })).status, 'not_started');
+        assert.equal((await call({ action: 'cancel' })).status, 'not_pending');
+    } finally {
+        await client.close();
+        await hosting.close();
+    }
+});
+
 test('forwards a caller-supplied environment to MCP authentication setup', async () => {
     const root = await mkdtemp(join(tmpdir(), 'zynohosting-mcp-start-options-'));
-    const env = { ZYNO_HOSTING_MCP_ROOTS: root, ZYNO_HOSTING_CONFIG: join(root, 'hosting-config.json') };
+    const env = { ZYNOHOSTING_MCP_ROOTS: root, ZYNOHOSTING_CONFIG: join(root, 'hosting-config.json') };
     const options = await resolveMcpServerOptions({ version: '1.0.0', env });
     assert.equal(options.env, env);
     assert.deepEqual(options.roots.list(), [await realpath(root)]);

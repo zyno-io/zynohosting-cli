@@ -27,7 +27,7 @@ zynohosting login \
   --permission hosting.deploy
 ```
 
-The authorization page rejects the complete request if a permission is unknown, unavailable to the user, malformed, or non-delegable. It never silently filters the list. `msp.login`, `msp.impersonate`, `core.changePassword`, and `core.manageFingerprints` cannot be delegated.
+`zynohosting login --help` lists every requestable permission with its capability; [Permissions](../reference/permissions) explains the model and gives least-privilege sets. Only those keys exist—an invented one such as `hosting.sitesWrite` is rejected locally, before a browser opens, with the closest valid key named. The authorization page likewise rejects the complete request if a permission is unknown, unavailable to the user, malformed, or non-delegable. Neither silently filters the list. `msp.login`, `msp.impersonate`, `core.changePassword`, and `core.manageFingerprints` cannot be delegated.
 
 If a browser cannot be opened automatically:
 
@@ -73,7 +73,7 @@ For a saved scoped token, logout calls `POST /identity/scoped-tokens/revoke` wit
 Use an environment variable in CI:
 
 ```bash
-export ZYNO_HOSTING_API_KEY='your-tenant-api-key'
+export ZYNOHOSTING_API_KEY='your-tenant-api-key'
 zynohosting sites list
 ```
 
@@ -104,7 +104,7 @@ The default path is:
 | macOS and Linux | `$XDG_CONFIG_HOME/zyno/hosting-cli.json`, or `~/.config/zyno/hosting-cli.json` |
 | Windows         | `%APPDATA%\Zyno\hosting-cli.json`                                              |
 
-Set `ZYNO_HOSTING_CONFIG` to use a different file. On POSIX systems, the CLI creates the directory with mode `0700` and the file with mode `0600`.
+Set `ZYNOHOSTING_CONFIG` to use a different file. On POSIX systems, the CLI creates the directory with mode `0700` and the file with mode `0600`.
 
 ## Environments
 
@@ -118,27 +118,27 @@ zynohosting --environment alpha sites list
 Or set it once for the process:
 
 ```bash
-export ZYNO_HOSTING_ENVIRONMENT=alpha
+export ZYNOHOSTING_ENVIRONMENT=alpha
 ```
 
-| Environment  | Hosting API                          | ZynoSuite API                      | Zyno Auth API                     |
+| Environment  | Hosting API                          | ZynoSuite API                      | ZynoAuth API                      |
 | ------------ | ------------------------------------ | ---------------------------------- | --------------------------------- |
 | `production` | `https://hosting.api.zyno.app`       | `https://suite.api.zyno.app`       | `https://auth.api.zyno.app`       |
 | `alpha`      | `https://hosting.api-alpha.zyno.dev` | `https://suite.api-alpha.zyno.dev` | `https://auth.api-alpha.zyno.dev` |
 | `dev`        | `http://localhost:39840`             | `http://localhost:39874`           | `http://localhost:39827`          |
 
-An explicit `--api-url` or `ZYNO_HOSTING_API_URL` overrides the Hosting API. Form tools also accept `--suite-api-url` or `ZYNO_SUITE_API_URL`; renewal accepts `--auth-api-url` or `ZYNO_AUTH_API_URL`. Standard environments and recognized standard Hosting API URLs select matching companion endpoints automatically. Custom remote URLs must use HTTPS; HTTP is accepted only for localhost.
+An explicit `--api-url` or `ZYNOHOSTING_API_URL` overrides the Hosting API. Form tools also accept `--suite-api-url` or `ZYNO_SUITE_API_URL`; renewal accepts `--auth-api-url` or `ZYNO_AUTH_API_URL`. Standard environments and recognized standard Hosting API URLs select matching companion endpoints automatically. Custom remote URLs must use HTTPS; HTTP is accepted only for localhost.
 
 ## Environment-based user tokens
 
-Advanced integrations may inject a scoped Zyno access token directly:
+Advanced integrations may inject a scoped ZynoSuite access token directly:
 
 ```bash
-export ZYNO_HOSTING_ACCESS_TOKEN='...'
-export ZYNO_HOSTING_TOKEN_EXPIRES_AT='1784246400000'
+export ZYNOHOSTING_ACCESS_TOKEN='...'
+export ZYNOHOSTING_TOKEN_EXPIRES_AT='1784246400000'
 ```
 
-`ZYNO_HOSTING_TOKEN_EXPIRES_AT` is an epoch-millisecond timestamp. `ZYNO_HOSTING_TENANT_ID` is optional metadata and is never sent as `x-zs-tid`; the scoped JWT is already tenant-bound. Injected tokens cannot auto-renew because the CLI has no renewal credential. Most users should use `zynohosting login` instead.
+`ZYNOHOSTING_TOKEN_EXPIRES_AT` is an epoch-millisecond timestamp. `ZYNOHOSTING_TENANT_ID` is optional metadata and is never sent as `x-zs-tid`; the scoped JWT is already tenant-bound. Injected tokens cannot auto-renew because the CLI has no renewal credential. Most users should use `zynohosting login` instead.
 
 The CLI sends scoped JWTs only as `Authorization: Bearer <jwt>`. It never sends masquerade headers. If another client elects to send `x-zs-tid`, it must match the JWT’s bound tenant.
 

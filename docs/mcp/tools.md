@@ -8,15 +8,52 @@ All tools return JSON as structured content and as a text content block. Argumen
 
 Starts Zyno’s browser login flow from the MCP process and returns its one-time URL in the tool result, then saves the resulting scoped credential for subsequent MCP calls. Use it when no login is saved or when the explicitly requested domain is unavailable in the current login context. After the browser callback completes, call it with `action: "status"` to confirm the login is ready.
 
-| Input             | Required | Default             | Meaning                                                       |
-| ----------------- | -------- | ------------------- | ------------------------------------------------------------- |
-| `action`          | no       | `start`             | Start browser login, or use `status` to check its completion. |
-| `permissions`     | no       | `hosting.sitesRead` | Explicit Zyno permissions to request.                         |
-| `name`            | no       | host-based CLI name | Name shown on the authorization page.                         |
-| `renewable`       | no       | `false`             | Store a rotating renewal credential in the system key store.  |
-| `timeout_seconds` | no       | `300`               | Time to wait for browser sign-in to complete.                 |
+| Input             | Required | Default             | Meaning                                                           |
+| ----------------- | -------- | ------------------- | ----------------------------------------------------------------- |
+| `action`          | no       | `start`             | `start`, `status` to check completion, or `cancel` to abandon it. |
+| `permissions`     | no       | `hosting.sitesRead` | Explicit permissions to request, from the list below.             |
+| `name`            | no       | host-based CLI name | Name shown on the authorization page.                             |
+| `renewable`       | no       | `false`             | Store a rotating renewal credential in the system key store.      |
+| `timeout_seconds` | no       | `300`               | Time to wait for browser sign-in to complete.                     |
 
-The tool cannot replace an API key or bearer token injected into the MCP process. Change that injected credential and restart the MCP host instead.
+`permissions` is an enumeration. These are the only valid values; a plausible-looking key such as `hosting.sitesWrite` does not exist, and one invalid entry rejects the whole request rather than granting the remainder:
+
+| Permission                  | Capability                                                    |
+| --------------------------- | ------------------------------------------------------------- |
+| `hosting.sitesRead`         | List and inspect sites (required by every hosting operation). |
+| `hosting.filesRead`         | List files and read individual files.                         |
+| `hosting.filesWrite`        | Create and replace individual files.                          |
+| `hosting.filesDelete`       | Delete individual files.                                      |
+| `hosting.deploy`            | Plan and apply full deployments.                              |
+| `hosting.download`          | Download the deployable snapshot.                             |
+| `hosting.downloadSensitive` | Include protected and user-generated content in a download.   |
+| `hosting.analyticsRead`     | Read hosting analytics.                                       |
+| `hosting.analyticsManage`   | Change analytics configuration.                               |
+| `forms.create`              | Create and publish a basic form.                              |
+| `forms.edit`                | Edit a form, its bot protection, and its allowed origins.     |
+
+Request the narrowest complete set for the stated task, always including `hosting.sitesRead` for hosting work:
+
+| Task                  | Permissions                                                                   |
+| --------------------- | ----------------------------------------------------------------------------- |
+| Inspect a site        | `hosting.sitesRead`                                                           |
+| Read files            | `hosting.sitesRead`, `hosting.filesRead`                                      |
+| Edit individual files | `hosting.sitesRead`, `hosting.filesRead`, `hosting.filesWrite`                |
+| Remove files          | add `hosting.filesDelete`                                                     |
+| Deploy a directory    | `hosting.sitesRead`, `hosting.deploy`                                         |
+| Download a snapshot   | `hosting.sitesRead`, `hosting.download`                                       |
+| Include user content  | add `hosting.downloadSensitive`                                               |
+| Build or edit a form  | `forms.create`, `forms.edit`, and `hosting.sitesRead` to add a site’s origins |
+
+A token’s scope is fixed for its lifetime; a missing permission means logging out and signing in again.
+
+Only one browser flow runs at a time, and the result says which one you received:
+
+- `start` with the same `permissions`, `name`, and `renewable` as the flow already in flight returns that same URL with `"reused": true`.
+- `start` with any different request cancels the in-flight flow—closing its loopback listener and invalidating its URL—and returns a new URL with `"reused": false`. The requested scope is never silently replaced by the earlier one.
+- `cancel` ends the in-flight flow and reports `cancelled`; it reports `not_pending` when nothing is in flight, and the normal authenticated status when the browser completed sign-in first.
+
+`status` echoes the pending request’s `permissions` so a long-running flow can be checked against what was asked for. The tool cannot replace an API key or bearer token injected into the MCP process. Change that injected credential and restart the MCP host instead.
 
 ### `list_sites`
 

@@ -40,7 +40,7 @@ Registry-friendly package invocation:
 npx -y @zyno-io/zynohosting mcp --root /absolute/path/to/project
 ```
 
-Local roots are an optional allowlist for the filesystem of the computer running the MCP process. When `ZYNO_HOSTING_MCP_ROOTS` and `--root` are both omitted, local-file tools can use any absolute path that process user can access. Configure one or more existing roots to limit every local source, destination, deployment root, and ignore file to those directories after canonical path resolution.
+Local roots are an optional allowlist for the filesystem of the computer running the MCP process. When `ZYNOHOSTING_MCP_ROOTS` and `--root` are both omitted, local-file tools can use any absolute path that process user can access. Configure one or more existing roots to limit every local source, destination, deployment root, and ignore file to those directories after canonical path resolution.
 
 ## Generic client configuration
 
@@ -51,14 +51,14 @@ Local roots are an optional allowlist for the filesystem of the computer running
             "command": "npx",
             "args": ["-y", "@zyno-io/zynohosting", "mcp"],
             "env": {
-                "ZYNO_HOSTING_MCP_ROOTS": "/absolute/path/to/project"
+                "ZYNOHOSTING_MCP_ROOTS": "/absolute/path/to/project"
             }
         }
     }
 }
 ```
 
-The MCP process inherits the normal saved login unless the client replaces `HOME` or `ZYNO_HOSTING_CONFIG`. It can also start without a saved login: after the MCP is connected, the agent can call the `login` tool to launch Zyno’s browser sign-in flow. The tool returns the one-time URL as content, then the agent calls `login` with `action: "status"` after the browser callback completes. For a personal, long-running MCP, authorize only its required permissions and opt into secure renewal:
+The MCP process inherits the normal saved login unless the client replaces `HOME` or `ZYNOHOSTING_CONFIG`. It can also start without a saved login: after the MCP is connected, the agent can call the `login` tool to launch Zyno’s browser sign-in flow. The tool returns the one-time URL as content, then the agent calls `login` with `action: "status"` after the browser callback completes. For a personal, long-running MCP, authorize only its required permissions and opt into secure renewal:
 
 ```bash
 zynohosting login \
@@ -70,7 +70,7 @@ zynohosting login \
   --renewable
 ```
 
-The MCP automatically rotates the one-time renewal credential through the operating system credential store. It schedules renewal in the background before the access token expires even if no tools are called, and it checks again before every authenticated request. The background timer does not keep the MCP process alive after its host closes the stdio session. For unattended service agents, inject `ZYNO_HOSTING_API_KEY` through the client’s secret configuration instead.
+The MCP automatically rotates the one-time renewal credential through the operating system credential store. It schedules renewal in the background before the access token expires even if no tools are called, and it checks again before every authenticated request. The background timer does not keep the MCP process alive after its host closes the stdio session. For unattended service agents, inject `ZYNOHOSTING_API_KEY` through the client’s secret configuration instead.
 
 ::: warning
 MCP client configuration frequently lives in a user profile. Do not commit API keys or access tokens in project configuration.
@@ -86,19 +86,19 @@ zynohosting-mcp \
   --root /absolute/path/to/site-b
 ```
 
-Or use the platform path delimiter in `ZYNO_HOSTING_MCP_ROOTS`:
+Or use the platform path delimiter in `ZYNOHOSTING_MCP_ROOTS`:
 
 ```bash
 # macOS and Linux
-export ZYNO_HOSTING_MCP_ROOTS='/srv/site-a:/srv/site-b'
+export ZYNOHOSTING_MCP_ROOTS='/srv/site-a:/srv/site-b'
 
 # Windows PowerShell
-$env:ZYNO_HOSTING_MCP_ROOTS='C:\sites\a;C:\sites\b'
+$env:ZYNOHOSTING_MCP_ROOTS='C:\sites\a;C:\sites\b'
 ```
 
 Roots must already exist and must be real directories rather than symbolic links. Duplicate canonical roots are collapsed.
 
-Omit both `--root` and `ZYNO_HOSTING_MCP_ROOTS` to leave local-file tools unrestricted to the MCP process user's accessible filesystem. This is useful for a trusted personal MCP; use roots when the agent should be confined to specific projects.
+Omit both `--root` and `ZYNOHOSTING_MCP_ROOTS` to leave local-file tools unrestricted to the MCP process user's accessible filesystem. This is useful for a trusted personal MCP; use roots when the agent should be confined to specific projects.
 
 ## Select an environment
 
@@ -113,7 +113,7 @@ The MCP binary accepts:
 | `--root <path>`         | Restrict local-file tools to this root; repeatable.    |
 | `--api-url <url>`       | Override the Hosting Manager URL.                      |
 | `--suite-api-url <url>` | Override the ZynoSuite API URL used by form tools.     |
-| `--auth-api-url <url>`  | Override the Zyno Auth URL used for token renewal.     |
+| `--auth-api-url <url>`  | Override the ZynoAuth URL used for token renewal.      |
 | `--environment <name>`  | Select `production`, `alpha`, or `dev`.                |
 | `--api-key <key>`       | Supply a tenant API key. Prefer environment injection. |
 

@@ -12,6 +12,7 @@ import { createFileClient, purgeSiteCacheAfterMutation, writeResponseAtomically 
 import { login, LoginDependencies } from '../commands/login.js';
 import { ConfigOverrides, ResolvedConfig, resolveConfig } from '../config.js';
 import { CliError, errorMessage, HttpError } from '../errors.js';
+import { DELEGABLE_PERMISSION_KEYS, permissionCapabilityLines } from '../permissions.js';
 import { registerFormsMcp } from './forms.js';
 import { AllowedLocalRoots } from './local-paths.js';
 
@@ -58,11 +59,20 @@ export async function createHostingMcpServer(options: McpServerOptions): Promise
         'login',
         {
             title: 'Sign in to ZynoHosting',
-            description:
-                'Start or check the local browser sign-in flow for ZynoHosting. Starting returns the one-time URL in this tool result and attempts to open it in a browser. Use this before authenticated tools when no login is saved, or when the requested domain is unavailable in the current login context. A browser login cannot replace API-key or token credentials injected into this MCP process; change those credentials and restart instead.',
+            description: [
+                'Start, check, or cancel the local browser sign-in flow for ZynoHosting. Starting returns the one-time URL in this tool result and attempts to open it in a browser. Use this before authenticated tools when no login is saved, or when the requested domain is unavailable in the current login context. A browser login cannot replace API-key or token credentials injected into this MCP process; change those credentials and restart instead.',
+                `Request only these permissions — no others exist, and one invalid key rejects the whole request instead of granting the rest:\n${permissionCapabilityLines()}`,
+                'Include hosting.sitesRead in every hosting request. Ask for the narrowest complete set for the stated task: editing individual files needs hosting.filesRead and hosting.filesWrite (add hosting.filesDelete only to remove files); a full deploy needs hosting.deploy; a backup needs hosting.download, plus hosting.downloadSensitive only when user-generated content is wanted. A token cannot be widened later, so a missing permission means revoking and signing in again.',
+                'One browser flow runs at a time. Starting with the same permissions, name, and renewable flag returns that same in-flight URL with "reused": true; starting with a different request cancels the in-flight flow and returns a new URL, so the user must use the newest link. Use action "cancel" to abandon a flow the user is not going to finish.'
+            ].join('\n\n'),
             inputSchema: {
-                action: z.enum(['start', 'status']).default('start'),
-                permissions: z.array(z.string().min(1)).min(1).max(100).default(['hosting.sitesRead']),
+                action: z.enum(['start', 'status', 'cancel']).default('start'),
+                permissions: z
+                    .array(z.enum(DELEGABLE_PERMISSION_KEYS))
+                    .min(1)
+                    .max(DELEGABLE_PERMISSION_KEYS.length)
+                    .default(['hosting.sitesRead'])
+                    .describe('ZynoSuite permissions to request, from the enumerated list; the narrowest set that completes the stated task.'),
                 name: z.string().min(1).max(255).optional(),
                 renewable: z.boolean().default(false),
                 timeout_seconds: z.number().int().min(1).max(600).default(300)
@@ -71,6 +81,7 @@ export async function createHostingMcpServer(options: McpServerOptions): Promise
         },
         async ({ action, permissions, name, renewable, timeout_seconds }) => {
             if (action === 'status') return result(await authentication.loginStatus());
+            if (action === 'cancel') return result(await authentication.cancelLogin());
 
             const pendingLogin = await authentication.beginLogin({
                 permissions,
@@ -81,9 +92,12 @@ export async function createHostingMcpServer(options: McpServerOptions): Promise
             return result({
                 authenticated: false,
                 status: 'pending',
+                permissions: [...new Set(permissions)].sort(),
                 browserUrl: pendingLogin.browserUrl,
-                message:
-                    'Open the one-time sign-in URL if a browser did not open. After you finish sign-in, call login with action "status" before using authenticated tools.'
+                reused: pendingLogin.reused,
+                message: pendingLogin.reused
+                    ? 'An identical browser sign-in was already in flight, so this is that same one-time URL, not a new one. Its permissions match this request. After sign-in, call login with action "status".'
+                    : 'Open the one-time sign-in URL if a browser did not open. Any earlier sign-in URL from this server is now cancelled. After you finish sign-in, call login with action "status" before using authenticated tools.'
             });
         }
     );
@@ -334,10 +348,18 @@ interface AuthenticatedMcpClients {
     forms: FormsClient;
 }
 
+interface LoginRequest {
+    permissions: string[];
+    name?: string;
+    renewable: boolean;
+}
+
 interface PendingMcpLogin {
     browserUrl: Promise<string>;
     url?: string;
     completion: Promise<ResolvedConfig>;
+    request: LoginRequest;
+    abort: AbortController;
 }
 
 class McpAuthentication {
@@ -361,9 +383,27 @@ class McpAuthentication {
         return this.pending;
     }
 
-    async beginLogin(input: { permissions: string[]; name?: string; renewable: boolean; timeoutSeconds: number }): Promise<{ browserUrl: string }> {
+    async beginLogin(input: {
+        permissions: string[];
+        name?: string;
+        renewable: boolean;
+        timeoutSeconds: number;
+    }): Promise<{ browserUrl: string; reused: boolean }> {
         this.requireSwitchableCredentialSource();
-        if (this.pendingLogin) return { browserUrl: await this.pendingLogin.browserUrl };
+        const request: LoginRequest = {
+            permissions: [...new Set(input.permissions)].sort(),
+            ...(input.name ? { name: input.name } : {}),
+            renewable: input.renewable
+        };
+        // A different scope must never be answered with the in-flight URL: that browser flow would
+        // mint the earlier permissions while the caller believes it requested new ones. Re-check
+        // after each await, because another call can install its own flow while this one waits.
+        while (this.pendingLogin) {
+            if (sameLoginRequest(this.pendingLogin.request, request)) {
+                return { browserUrl: await this.pendingLogin.browserUrl, reused: true };
+            }
+            await this.abortPendingLogin();
+        }
         this.lastLoginError = undefined;
 
         let publishBrowserUrl!: (url: string) => void;
@@ -374,7 +414,9 @@ class McpAuthentication {
         });
         const pendingLogin: PendingMcpLogin = {
             browserUrl,
-            completion: Promise.resolve<ResolvedConfig>(undefined as never)
+            completion: Promise.resolve<ResolvedConfig>(undefined as never),
+            request,
+            abort: new AbortController()
         };
         this.pendingLogin = pendingLogin;
         pendingLogin.completion = login(
@@ -383,10 +425,11 @@ class McpAuthentication {
                 ...(this.options.suiteApiUrl ? { suiteApiUrl: this.options.suiteApiUrl } : {}),
                 ...(this.options.authApiUrl ? { authApiUrl: this.options.authApiUrl } : {}),
                 ...(this.options.environment ? { environment: this.options.environment } : {}),
-                ...(input.name ? { name: input.name } : {}),
-                permissionKeys: input.permissions,
-                renewable: input.renewable,
-                timeoutSeconds: input.timeoutSeconds
+                ...(request.name ? { name: request.name } : {}),
+                permissionKeys: request.permissions,
+                renewable: request.renewable,
+                timeoutSeconds: input.timeoutSeconds,
+                signal: pendingLogin.abort.signal
             },
             {
                 ...(this.options.loginDependencies ?? {}),
@@ -418,7 +461,20 @@ class McpAuthentication {
         // The request itself returns the URL, so keep a later browser timeout or cancellation from
         // becoming an unhandled rejection after the MCP tool result has been delivered.
         void pendingLogin.completion.catch(() => {});
-        return { browserUrl: await pendingLogin.browserUrl };
+        return { browserUrl: await pendingLogin.browserUrl, reused: false };
+    }
+
+    async cancelLogin(): Promise<Record<string, unknown>> {
+        if (!this.pendingLogin) {
+            return { authenticated: Boolean(this.current), status: 'not_pending', message: 'No browser sign-in is in flight.' };
+        }
+        // The browser can win the race with a cancellation already on its way to the listener.
+        if (await this.abortPendingLogin()) return await this.loginStatus();
+        return {
+            authenticated: false,
+            status: 'cancelled',
+            message: 'The browser sign-in was cancelled and its local callback listener was closed. Its one-time URL no longer works.'
+        };
     }
 
     async loginStatus(): Promise<Record<string, unknown>> {
@@ -426,6 +482,7 @@ class McpAuthentication {
             return {
                 authenticated: false,
                 status: 'pending',
+                permissions: this.pendingLogin.request.permissions,
                 ...(this.pendingLogin.url ? { browserUrl: this.pendingLogin.url } : {}),
                 message: 'Browser sign-in is still waiting for its secure local callback.'
             };
@@ -448,7 +505,26 @@ class McpAuthentication {
         this.stopRefresh?.();
         this.stopRefresh = undefined;
         this.current = undefined;
+        // Abort so the loopback listener and its one-time URL die with the MCP session.
+        this.pendingLogin?.abort.abort();
         this.pendingLogin = undefined;
+    }
+
+    /** Ends the in-flight browser flow. Resolves true when it had already completed successfully. */
+    private async abortPendingLogin(): Promise<boolean> {
+        const pendingLogin = this.pendingLogin;
+        if (!pendingLogin) return false;
+        pendingLogin.abort.abort();
+        const completed = await pendingLogin.completion.then(
+            () => true,
+            () => false
+        );
+        if (this.pendingLogin === pendingLogin) this.pendingLogin = undefined;
+        // A cancellation the caller asked for is not a failure to report on the next status call.
+        if (!completed && this.lastLoginError instanceof CliError && this.lastLoginError.code === 'login_cancelled') {
+            this.lastLoginError = undefined;
+        }
+        return completed;
     }
 
     private async load(): Promise<AuthenticatedMcpClients> {
@@ -486,7 +562,7 @@ class McpAuthentication {
 
     private requireSwitchableCredentialSource(): void {
         const env = this.options.env ?? process.env;
-        if (this.options.apiKey || this.options.accessToken || env.ZYNO_HOSTING_API_KEY || env.ZYNO_HOSTING_ACCESS_TOKEN) {
+        if (this.options.apiKey || this.options.accessToken || env.ZYNOHOSTING_API_KEY || env.ZYNOHOSTING_ACCESS_TOKEN) {
             throw new CliError(
                 'This MCP process uses an API key or access token supplied by its command or environment, so browser login cannot switch its active context. Remove or replace that credential and restart the MCP host.',
                 2,
@@ -494,6 +570,15 @@ class McpAuthentication {
             );
         }
     }
+}
+
+function sameLoginRequest(a: LoginRequest, b: LoginRequest): boolean {
+    return (
+        a.renewable === b.renewable &&
+        a.name === b.name &&
+        a.permissions.length === b.permissions.length &&
+        a.permissions.every((permission, index) => permission === b.permissions[index])
+    );
 }
 
 function authenticatedLoginStatus(config: ResolvedConfig): Record<string, unknown> {

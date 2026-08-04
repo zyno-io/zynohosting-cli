@@ -53,7 +53,7 @@ export interface ResolveConfigDependencies {
 }
 
 export function configPath(env: NodeJS.ProcessEnv = process.env): string {
-    if (env.ZYNO_HOSTING_CONFIG) return env.ZYNO_HOSTING_CONFIG;
+    if (env.ZYNOHOSTING_CONFIG) return env.ZYNOHOSTING_CONFIG;
     if (process.platform === 'win32') return join(env.APPDATA ?? join(homedir(), 'AppData', 'Roaming'), 'Zyno', 'hosting-cli.json');
     return join(env.XDG_CONFIG_HOME ?? join(homedir(), '.config'), 'zyno', 'hosting-cli.json');
 }
@@ -130,23 +130,23 @@ async function resolveConfigWithSource(
         ? undefined
         : credentialFrom(
               {
-                  ...(env.ZYNO_HOSTING_API_KEY ? { apiKey: env.ZYNO_HOSTING_API_KEY } : {}),
-                  ...(env.ZYNO_HOSTING_ACCESS_TOKEN ? { accessToken: env.ZYNO_HOSTING_ACCESS_TOKEN } : {}),
-                  ...(env.ZYNO_HOSTING_TENANT_ID ? { tenantId: env.ZYNO_HOSTING_TENANT_ID } : {}),
-                  ...(env.ZYNO_HOSTING_TOKEN_EXPIRES_AT ? { expiresAt: parseExpiration(env.ZYNO_HOSTING_TOKEN_EXPIRES_AT) } : {})
+                  ...(env.ZYNOHOSTING_API_KEY ? { apiKey: env.ZYNOHOSTING_API_KEY } : {}),
+                  ...(env.ZYNOHOSTING_ACCESS_TOKEN ? { accessToken: env.ZYNOHOSTING_ACCESS_TOKEN } : {}),
+                  ...(env.ZYNOHOSTING_TENANT_ID ? { tenantId: env.ZYNOHOSTING_TENANT_ID } : {}),
+                  ...(env.ZYNOHOSTING_TOKEN_EXPIRES_AT ? { expiresAt: parseExpiration(env.ZYNOHOSTING_TOKEN_EXPIRES_AT) } : {})
               },
               'environment'
           );
     const storedCredential = overrideCredential || environmentCredential ? undefined : credentialFrom(stored, 'saved configuration');
     const credential = overrideCredential ?? environmentCredential ?? storedCredential;
     if (!credential) {
-        throw new CliError('Hosting credentials are not configured. Run `zynohosting login` or set ZYNO_HOSTING_API_KEY.', 2, 'missing_config');
+        throw new CliError('Hosting credentials are not configured. Run `zynohosting login` or set ZYNOHOSTING_API_KEY.', 2, 'missing_config');
     }
 
     if (credential === storedCredential && credential.type === 'bearer' && stored.renewalKey) {
         if (!authApiUrl) {
             throw new CliError(
-                'The Zyno Auth API URL is required to renew this login. Pass --auth-api-url or set ZYNO_AUTH_API_URL.',
+                'The ZynoAuth API URL is required to renew this login. Pass --auth-api-url or set ZYNO_AUTH_API_URL.',
                 2,
                 'missing_auth_api_url'
             );
@@ -174,9 +174,9 @@ export function resolveApiUrl(
     env: NodeJS.ProcessEnv = process.env,
     environmentOverride?: HostingEnvironment
 ): string {
-    const environmentValue = environmentOverride ?? env.ZYNO_HOSTING_ENVIRONMENT;
+    const environmentValue = environmentOverride ?? env.ZYNOHOSTING_ENVIRONMENT;
     const environment = environmentValue === undefined ? undefined : parseEnvironment(environmentValue);
-    const apiUrl = override ?? env.ZYNO_HOSTING_API_URL ?? (environment ? API_URLS[environment] : stored.apiUrl) ?? API_URLS.production;
+    const apiUrl = override ?? env.ZYNOHOSTING_API_URL ?? (environment ? API_URLS[environment] : stored.apiUrl) ?? API_URLS.production;
     return normalizeApiUrl(apiUrl);
 }
 
@@ -187,7 +187,7 @@ export function resolveSuiteApiUrl(
     env: NodeJS.ProcessEnv = process.env,
     environmentOverride?: HostingEnvironment
 ): string | undefined {
-    const environmentValue = environmentOverride ?? env.ZYNO_HOSTING_ENVIRONMENT;
+    const environmentValue = environmentOverride ?? env.ZYNOHOSTING_ENVIRONMENT;
     const environment = environmentValue === undefined ? undefined : parseEnvironment(environmentValue);
     const inferred = Object.entries(API_URLS).find(([, hostingUrl]) => hostingUrl === resolvedHostingApiUrl)?.[0] as HostingEnvironment | undefined;
     const storedMatchesHosting = stored.apiUrl === undefined || stored.apiUrl.replace(/\/+$/, '') === resolvedHostingApiUrl;
@@ -206,7 +206,7 @@ export function resolveAuthApiUrl(
     env: NodeJS.ProcessEnv = process.env,
     environmentOverride?: HostingEnvironment
 ): string | undefined {
-    const environmentValue = environmentOverride ?? env.ZYNO_HOSTING_ENVIRONMENT;
+    const environmentValue = environmentOverride ?? env.ZYNOHOSTING_ENVIRONMENT;
     const environment = environmentValue === undefined ? undefined : parseEnvironment(environmentValue);
     const inferred = Object.entries(API_URLS).find(([, hostingUrl]) => hostingUrl === resolvedHostingApiUrl)?.[0] as HostingEnvironment | undefined;
     const storedMatchesHosting = stored.apiUrl === undefined || stored.apiUrl.replace(/\/+$/, '') === resolvedHostingApiUrl;
@@ -259,7 +259,7 @@ async function refreshStoredCredential(options: RefreshStoredCredentialOptions):
     await withRefreshLock(options.file, async () => {
         const latest = await loadStoredConfig(options.file);
         if (latest.renewalKey !== options.renewalKey) {
-            throw new CliError('The saved Zyno login changed while it was being renewed. Retry the command.', 3, 'login_changed');
+            throw new CliError('The saved ZynoSuite login changed while it was being renewed. Retry the command.', 3, 'login_changed');
         }
         if (latest.accessToken && latest.expiresAt && latest.expiresAt > Date.now() + 5 * 60 * 1000) {
             options.credential.accessToken = latest.accessToken;
@@ -270,7 +270,7 @@ async function refreshStoredCredential(options: RefreshStoredCredentialOptions):
 
         const renewalToken = await options.renewalTokenStore.get(options.renewalKey);
         if (!renewalToken) {
-            throw new CliError('The saved Zyno CLI renewal credential could not be found. Run `zynohosting login` again.', 3, 'renewal_missing');
+            throw new CliError('The saved ZynoSuite CLI renewal credential could not be found. Run `zynohosting login` again.', 3, 'renewal_missing');
         }
         const renewed = await options.scopedTokenClient.renew(renewalToken);
         await options.renewalTokenStore.set(options.renewalKey, renewed.renewalToken);
@@ -297,7 +297,7 @@ async function withRefreshLock<T>(file: string, operation: () => Promise<T>): Pr
                 continue;
             }
             if (Date.now() >= deadline) {
-                throw new CliError('Timed out waiting for another Zyno CLI process to finish renewing the login.', 3, 'renewal_locked');
+                throw new CliError('Timed out waiting for another ZynoSuite CLI process to finish renewing the login.', 3, 'renewal_locked');
             }
             await delay(100);
         }
@@ -322,7 +322,7 @@ function validateRenewalKey(value: string): void {
 function parseExpiration(value: string): number {
     const result = Number(value);
     if (!Number.isSafeInteger(result) || result <= 0) {
-        throw new CliError('ZYNO_HOSTING_TOKEN_EXPIRES_AT must be an epoch-millisecond timestamp', 2, 'invalid_config');
+        throw new CliError('ZYNOHOSTING_TOKEN_EXPIRES_AT must be an epoch-millisecond timestamp', 2, 'invalid_config');
     }
     return result;
 }

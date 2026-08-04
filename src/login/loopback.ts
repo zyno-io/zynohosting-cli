@@ -131,8 +131,8 @@ async function handleCallback(
     if (hasRepeatedValue(form, 'error')) return rejectRequest(response, 400, 'Invalid login response');
     const loginError = form.get('error');
     if (loginError) {
-        successResponse(response, 'Zyno login was not completed. You can close this window.');
-        return new CliError(`Zyno login failed: ${loginError.slice(0, 500).replace(/[\u0000-\u001f\u007f]/g, ' ')}`, 3, 'login_failed');
+        successResponse(response, 'ZynoSuite login was not completed. You can close this window.');
+        return new CliError(`ZynoSuite login failed: ${loginError.slice(0, 500).replace(/[\u0000-\u001f\u007f]/g, ' ')}`, 3, 'login_failed');
     }
 
     if (!['jwt', 'tenantId', 'expiresAt'].every(key => hasSingleValue(form, key))) {
@@ -159,7 +159,7 @@ async function handleCallback(
         await onCredential?.(credential);
     } catch (error) {
         failureResponse(response, 'ZynoHosting could not save this login. Return to the terminal for details.');
-        return error instanceof Error ? error : new CliError('Could not save the Zyno login', 1, 'login_save_failed');
+        return error instanceof Error ? error : new CliError('Could not save the ZynoSuite login', 1, 'login_save_failed');
     }
 
     successResponse(response, 'ZynoHosting login complete. You can close this window.');

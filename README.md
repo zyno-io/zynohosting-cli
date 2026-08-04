@@ -53,7 +53,7 @@ Revoke the saved scoped grant and remove its local credentials with `zynohosting
 For CI or another non-interactive environment, inject a tenant API key:
 
 ```bash
-export ZYNO_HOSTING_API_KEY='...'
+export ZYNOHOSTING_API_KEY='...'
 ```
 
 The CLI also accepts `--environment production|alpha|dev` and `--api-url`. Credentials are resolved in this order:
@@ -64,16 +64,16 @@ The CLI also accepts `--environment production|alpha|dev` and `--api-url`. Crede
 
 Relevant environment variables are:
 
-- `ZYNO_HOSTING_API_KEY`
-- `ZYNO_HOSTING_ACCESS_TOKEN`
-- `ZYNO_HOSTING_TENANT_ID`
-- `ZYNO_HOSTING_TOKEN_EXPIRES_AT`
-- `ZYNO_HOSTING_API_URL`
+- `ZYNOHOSTING_API_KEY`
+- `ZYNOHOSTING_ACCESS_TOKEN`
+- `ZYNOHOSTING_TENANT_ID`
+- `ZYNOHOSTING_TOKEN_EXPIRES_AT`
+- `ZYNOHOSTING_API_URL`
 - `ZYNO_SUITE_API_URL`
 - `ZYNO_AUTH_API_URL`
-- `ZYNO_HOSTING_ENVIRONMENT`
-- `ZYNO_HOSTING_CONFIG`
-- `ZYNO_HOSTING_LOGIN_URL`
+- `ZYNOHOSTING_ENVIRONMENT`
+- `ZYNOHOSTING_CONFIG`
+- `ZYNOHOSTING_LOGIN_URL`
 
 ## Sites
 
@@ -155,7 +155,7 @@ For a non-technical user, paste this into Codex or Claude Code:
 
 The agent configures only its own project file—`.mcp.json` for Claude Code or `.codex/config.toml` for Codex—without storing credentials. Restart the agent after it completes; MCP tools are not added to an already-running session. That prompt points at [install instructions written for the agent](./docs/mcp/agent.md); the matching [prompts for the user](https://zyno-io.github.io/zynohosting-cli/mcp/setup) cover signing in, publishing, and forms.
 
-`ZYNO_HOSTING_MCP_ROOTS` is an optional local-computer allowlist for the MCP process. When it is unset, local-file tools can use any absolute path the MCP process user can access. When roots are configured, local file reads, writes, deploy sources, ignore files, and download destinations are constrained to them after canonical path resolution.
+`ZYNOHOSTING_MCP_ROOTS` is an optional local-computer allowlist for the MCP process. When it is unset, local-file tools can use any absolute path the MCP process user can access. When roots are configured, local file reads, writes, deploy sources, ignore files, and download destinations are constrained to them after canonical path resolution.
 
 Direct invocation:
 
@@ -178,14 +178,14 @@ Example client configuration:
             "command": "npx",
             "args": ["-y", "@zyno-io/zynohosting", "mcp"],
             "env": {
-                "ZYNO_HOSTING_MCP_ROOTS": "/absolute/path/to/project"
+                "ZYNOHOSTING_MCP_ROOTS": "/absolute/path/to/project"
             }
         }
     }
 }
 ```
 
-On macOS and Linux, multiple `ZYNO_HOSTING_MCP_ROOTS` use `:` as the delimiter. Windows uses `;`. Repeated `--root` arguments are also supported.
+On macOS and Linux, multiple `ZYNOHOSTING_MCP_ROOTS` use `:` as the delimiter. Windows uses `;`. Repeated `--root` arguments are also supported.
 
 The MCP tools are:
 
@@ -210,7 +210,7 @@ The MCP tools are:
 
 Full deploys and downloads intentionally use separate plan/apply calls. Plans are held only in the local MCP process, contain no exposed bearer token, expire with their short-lived access session, and cannot be applied after the server restarts.
 
-The MCP can start without a saved login. The agent calls `login` to open the Zyno browser sign-in flow and receives the one-time URL in its tool result; after the browser callback, it calls `login` with `action: "status"` to confirm the login. It must never infer a deployment domain from the project or select a similar authorized site; it asks when the project does not state the target domain. If the stated domain is unavailable in the current login context, it must not substitute another one and should offer `login` again to switch contexts.
+The MCP can start without a saved login. The agent calls `login` to open the ZynoSuite browser sign-in flow and receives the one-time URL in its tool result; after the browser callback, it calls `login` with `action: "status"` to confirm the login. It must never infer a deployment domain from the project or select a similar authorized site; it asks when the project does not state the target domain. If the stated domain is unavailable in the current login context, it must not substitute another one and should offer `login` again to switch contexts.
 
 ## Permissions
 
@@ -234,7 +234,9 @@ The form discovery and integration tools use the same tenant credential against 
 
 Tenant admins receive the normal administrative defaults. Non-admin credentials receive only the operations explicitly granted to them.
 
-CLI-token requests cannot include `msp.login`, `msp.impersonate`, `core.changePassword`, or `core.manageFingerprints`. The browser also refuses unknown permissions and permissions the current user does not possess; it never partially grants a request.
+That table is the complete set. `zynohosting login --help` prints it, and the MCP `login` tool enumerates it in its schema, so an invented key such as `hosting.sitesWrite` is rejected locally—naming the closest valid key—before a browser opens. CLI-token requests cannot include `msp.login`, `msp.impersonate`, `core.changePassword`, or `core.manageFingerprints`. The browser also refuses unknown permissions and permissions the current user does not possess; it never partially grants a request.
+
+Only one MCP browser flow runs at a time. Repeating `login` with the same request returns the same one-time URL (`"reused": true`); requesting different permissions cancels the in-flight flow and issues a new URL rather than handing back the earlier scope. `action: "cancel"` abandons a flow and closes its loopback listener.
 
 ## JSON output
 

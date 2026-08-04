@@ -10,7 +10,7 @@ Both clients use the same Hosting Manager API, permission model, and short-lived
 ## Requirements
 
 - Node.js 24
-- a Zyno account or tenant API key
+- a ZynoSuite account or tenant API key
 - access to at least one ZynoHosting site
 
 ## Install the CLI
@@ -39,7 +39,7 @@ zynohosting login --permission hosting.sitesRead
 CI jobs should inject a tenant API key rather than save a browser session:
 
 ```bash
-export ZYNO_HOSTING_API_KEY='your-tenant-api-key'
+export ZYNOHOSTING_API_KEY='your-tenant-api-key'
 ```
 
 See [Authentication](./authentication) for credential precedence, environments, and non-interactive setup.
@@ -105,7 +105,7 @@ These options apply to the CLI and may be placed before a command:
 | `-V`, `--version`       | Print the installed package version.                                    |
 | `--api-url <url>`       | Override the Hosting Manager API URL.                                   |
 | `--suite-api-url <url>` | Override the ZynoSuite API URL.                                         |
-| `--auth-api-url <url>`  | Override the Zyno Auth API URL.                                         |
+| `--auth-api-url <url>`  | Override the ZynoAuth API URL.                                          |
 | `--environment <name>`  | Select `production`, `alpha`, or `dev`.                                 |
 | `--api-key <key>`       | Supply a tenant API key. Prefer the environment variable in automation. |
 | `--json`                | Emit machine-readable output where the command supports it.             |

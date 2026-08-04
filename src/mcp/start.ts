@@ -20,7 +20,7 @@ export async function startHostingMcp(options: StartMcpOptions): Promise<void> {
 
 export async function resolveMcpServerOptions(options: StartMcpOptions): Promise<McpServerOptions> {
     const env = options.env ?? process.env;
-    const envRoots = env.ZYNO_HOSTING_MCP_ROOTS?.split(delimiter).filter(Boolean) ?? [];
+    const envRoots = env.ZYNOHOSTING_MCP_ROOTS?.split(delimiter).filter(Boolean) ?? [];
     const roots = await AllowedLocalRoots.create([...(options.roots ?? []), ...envRoots]);
     return {
         roots,

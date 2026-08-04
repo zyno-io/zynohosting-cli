@@ -7,12 +7,12 @@
         "url": "https://github.com/zyno-io/zynohosting-cli",
         "source": "github"
     },
-    "version": "0.4.4",
+    "version": "0.4.5",
     "packages": [
         {
             "registryType": "npm",
             "identifier": "@zyno-io/zynohosting",
-            "version": "0.4.4",
+            "version": "0.4.5",
             "transport": {
                 "type": "stdio"
             },
@@ -28,14 +28,14 @@
                     "isRequired": false,
                     "format": "string",
                     "isSecret": false,
-                    "name": "ZYNO_HOSTING_MCP_ROOTS"
+                    "name": "ZYNOHOSTING_MCP_ROOTS"
                 },
                 {
                     "description": "Optional tenant API key. Omit it when using credentials saved by zynohosting login.",
                     "isRequired": false,
                     "format": "string",
                     "isSecret": true,
-                    "name": "ZYNO_HOSTING_API_KEY"
+                    "name": "ZYNOHOSTING_API_KEY"
                 },
                 {
                     "description": "Optional ZynoSuite API URL override for form tools. Standard production, alpha, and dev environments are inferred automatically.",
@@ -45,7 +45,7 @@
                     "name": "ZYNO_SUITE_API_URL"
                 },
                 {
-                    "description": "Optional Zyno Auth API URL override for scoped-token renewal. Standard production, alpha, and dev environments are inferred automatically.",
+                    "description": "Optional ZynoAuth API URL override for scoped-token renewal. Standard production, alpha, and dev environments are inferred automatically.",
                     "isRequired": false,
                     "format": "string",
                     "isSecret": false,

@@ -18,6 +18,8 @@ ZynoHosting and ZynoForms automation use tenant permissions at their APIs. Hosti
 | `forms.create`              | Create and immediately publish a basic form.                            |
 | `forms.edit`                | Change a form’s name, fields, Cap protection, and allowed CORS origins. |
 
+That table is the complete set of keys a CLI token can request. `zynohosting login --help` prints it and the MCP `login` tool enumerates it in its schema, so a plausible-looking invention such as `hosting.sitesWrite` fails locally—naming the closest real key—before any browser opens.
+
 Browser login can issue a token only for permissions currently resolved for that user. A tenant may disable CLI-token minting and renewal for non-admin users. The browser rejects the whole request if any key is unknown, unavailable, malformed, or non-delegable; it does not partially grant the remainder.
 
 Never request `msp.login`, `msp.impersonate`, `core.changePassword`, or `core.manageFingerprints`. Those capabilities cannot be delegated to scoped CLI tokens.

@@ -59,7 +59,7 @@ test('logout self-revokes a scoped grant, removes its renewal credential, and re
     assert.deepEqual(await loadStoredConfig(file), { apiUrl: API_URL, suiteApiUrl: SUITE_API_URL, authApiUrl: AUTH_API_URL });
 });
 
-test('logout preserves credentials when self-revocation cannot reach Zyno Auth', async () => {
+test('logout preserves credentials when self-revocation cannot reach ZynoAuth', async () => {
     const root = await mkdtemp(join(tmpdir(), 'hosting-cli-logout-failure-'));
     const file = join(root, 'config.json');
     const store = new MemoryStore([[RENEWAL_KEY, 'zrt_secret']]);

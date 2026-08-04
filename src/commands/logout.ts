@@ -30,7 +30,7 @@ export interface LogoutDependencies {
 export async function logout(options: LogoutOptions = {}, dependencies: LogoutDependencies = {}): Promise<void> {
     const baseEnv = dependencies.env ?? process.env;
     const file = dependencies.configFile ?? configPath(baseEnv);
-    const env = { ...baseEnv, ZYNO_HOSTING_CONFIG: file };
+    const env = { ...baseEnv, ZYNOHOSTING_CONFIG: file };
     const write = dependencies.write ?? (message => process.stdout.write(message));
     const stored = await loadStoredConfig(file);
     if (!stored.apiKey && !stored.accessToken && !stored.renewalKey) {
@@ -45,7 +45,7 @@ export async function logout(options: LogoutOptions = {}, dependencies: LogoutDe
     if (stored.scopedToken && stored.accessToken && !accessAlreadyExpired) {
         if (!client || !authApiUrl) {
             throw new CliError(
-                'The Zyno Auth API URL is required to revoke this login. Pass --auth-api-url or set ZYNO_AUTH_API_URL.',
+                'The ZynoAuth API URL is required to revoke this login. Pass --auth-api-url or set ZYNO_AUTH_API_URL.',
                 2,
                 'missing_auth_api_url'
             );

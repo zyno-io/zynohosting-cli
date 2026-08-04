@@ -90,7 +90,7 @@ Always inspect the dry-run plan before using `--allow-empty`.
 
 ```bash
 set -euo pipefail
-export ZYNO_HOSTING_API_KEY="$HOSTING_DEPLOY_KEY"
+export ZYNOHOSTING_API_KEY="$HOSTING_DEPLOY_KEY"
 
 zynohosting --environment production deploy example.com ./dist \
   --dry-run \

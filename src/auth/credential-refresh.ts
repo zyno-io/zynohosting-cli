@@ -127,7 +127,7 @@ export async function ensureFreshCredential(credential: ManagerCredential): Prom
 }
 
 function expired(): CliError {
-    return new CliError('Your Zyno CLI login has expired. Run `zynohosting login` again.', 3, 'login_expired');
+    return new CliError('Your ZynoSuite CLI login has expired. Run `zynohosting login` again.', 3, 'login_expired');
 }
 
 function unavailable(reason: 'invalid' | 'policy'): CliError {

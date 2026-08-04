@@ -11,6 +11,7 @@ import { logout, LogoutOptions } from './commands/logout.js';
 import { getSite, listSites } from './commands/sites.js';
 import { installHostingMcp, McpInstallAgent } from './mcp/install.js';
 import { startHostingMcp } from './mcp/start.js';
+import { permissionCapabilityLines } from './permissions.js';
 
 const PACKAGE_VERSION = readPackageVersion();
 
@@ -22,22 +23,22 @@ export function createProgram(): Command {
         .version(PACKAGE_VERSION)
         .option('--api-url <url>', 'Hosting Manager API URL')
         .option('--suite-api-url <url>', 'ZynoSuite API URL')
-        .option('--auth-api-url <url>', 'Zyno Auth API URL')
+        .option('--auth-api-url <url>', 'ZynoAuth API URL')
         .addOption(environmentOption())
-        .option('--api-key <key>', 'tenant API key (prefer ZYNO_HOSTING_API_KEY)')
+        .option('--api-key <key>', 'tenant API key (prefer ZYNOHOSTING_API_KEY)')
         .option('--json', 'emit machine-readable JSON');
 
     program
         .command('login')
-        .description('sign in through Zyno or save a CI API key')
+        .description('sign in through ZynoSuite or save a CI API key')
         .option('--api-url <url>', 'Hosting Manager API URL')
         .option('--suite-api-url <url>', 'ZynoSuite API URL')
-        .option('--auth-api-url <url>', 'Zyno Auth API URL')
+        .option('--auth-api-url <url>', 'ZynoAuth API URL')
         .addOption(environmentOption())
         .option('--api-key <key>', 'tenant API key instead of browser login')
-        .option('--login-url <url>', 'Zyno SPA login page URL')
+        .option('--login-url <url>', 'ZynoSuite SPA login page URL')
         .option('--name <description>', 'name shown on the authorization screen')
-        .option('--permission <key>', 'permission to request (repeatable)', collect, [])
+        .option('--permission <key>', 'permission to request, repeatable (see the list below)', collect, [])
         .option('--renewable', 'securely store a renewable credential in the system credential store')
         .option('--no-open', 'print the login URL instead of opening a browser')
         .addOption(new Option('--timeout <seconds>', 'browser login timeout').argParser(positiveInteger).default(300))
@@ -62,14 +63,28 @@ export function createProgram(): Command {
                 timeoutSeconds: commandOptions.timeout,
                 ...(commandOptions.open === undefined ? {} : { open: commandOptions.open })
             });
-        });
+        })
+        .addHelpText(
+            'after',
+            [
+                '',
+                'Permissions (the complete list; any other key is rejected before the browser opens):',
+                permissionCapabilityLines()
+                    .split('\n')
+                    .map(line => `  ${line}`)
+                    .join('\n'),
+                '',
+                'Every hosting permission also needs hosting.sitesRead. Request the narrowest complete set:',
+                'a token cannot be widened later, so changing scope means logging out and signing in again.'
+            ].join('\n')
+        );
 
     program
         .command('logout')
         .description('revoke the saved scoped token and remove local credentials')
         .option('--api-url <url>', 'Hosting Manager API URL')
         .option('--suite-api-url <url>', 'ZynoSuite API URL')
-        .option('--auth-api-url <url>', 'Zyno Auth API URL')
+        .option('--auth-api-url <url>', 'ZynoAuth API URL')
         .addOption(environmentOption())
         .action(async (commandOptions: LogoutOptions) => {
             const context = commandContext(program, commandOptions);
