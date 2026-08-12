@@ -4,6 +4,14 @@ import { request as requestHttp, type IncomingHttpHeaders, type IncomingMessage 
 import { request as requestHttps } from 'node:https';
 
 import { HttpError } from '../errors.js';
+import { userAgent } from './user-agent.js';
+
+/** Identify the client on every request unless a caller set its own. */
+function withUserAgent(headers: HeadersInit | undefined): Headers {
+    const result = new Headers(headers);
+    if (!result.has('user-agent')) result.set('user-agent', userAgent());
+    return result;
+}
 
 export interface RequestOptions {
     method?: string;
@@ -42,7 +50,7 @@ export async function request(url: string, options: RequestOptions = {}): Promis
             method: options.method ?? 'GET',
             signal: controller.signal,
             redirect: 'error',
-            ...(options.headers === undefined ? {} : { headers: options.headers })
+            headers: withUserAgent(options.headers)
         };
         if (options.body !== undefined) {
             init.body = options.body as BodyInit;
@@ -71,7 +79,7 @@ export function requestStream(url: string, options: RequestOptions = {}): Promis
             target,
             {
                 method: options.method ?? 'GET',
-                headers: options.headers === undefined ? undefined : Object.fromEntries(new Headers(options.headers).entries())
+                headers: Object.fromEntries(withUserAgent(options.headers).entries())
             },
             response => {
                 responseReceived = true;

@@ -1,9 +1,10 @@
 {
     "name": "@zyno-io/zynohosting",
-    "version": "0.4.5",
+    "version": "0.5.0",
     "description": "CLI and local MCP server for managing ZynoHosting sites and ZynoForms integrations",
-    "license": "UNLICENSED",
+    "license": "MIT",
     "mcpName": "io.github.zyno-io/zynohosting",
+    "mcpbMinimumVersion": "0.0.0",
     "repository": {
         "type": "git",
         "url": "git+https://github.com/zyno-io/zynohosting-cli.git"
@@ -18,6 +19,7 @@
     },
     "files": [
         "dist",
+        "LICENSE",
         "README.md",
         "server.json"
     ],
@@ -48,8 +50,10 @@
         "zod": "^4.4.3"
     },
     "devDependencies": {
+        "@anthropic-ai/mcpb": "2.1.2",
         "@types/node": "^24.0.0",
         "@types/tar-stream": "^3.1.4",
+        "esbuild": "0.28.2",
         "oxfmt": "^0.56.0",
         "tsx": "^4.20.6",
         "typescript": "~6.0.0",

@@ -8,6 +8,7 @@ import type { RenewalTokenStore } from '../src/auth/renewal-token-store.js';
 
 import { login, resolveLoginPageUrl } from '../src/commands/login.js';
 import { loadStoredConfig, resolveApiUrl, resolveAuthApiUrl, resolveConfig, resolveSuiteApiUrl, saveConfig } from '../src/config.js';
+import { CliError } from '../src/errors.js';
 import { startLoopbackLogin } from '../src/login/loopback.js';
 
 const API_URL = 'https://hosting.api-alpha.zyno.dev';
@@ -22,6 +23,10 @@ test('browser login accepts a one-shot SPA form POST and saves Bearer credential
     const file = join(root, 'config.json');
     let openedUrl = '';
     const output: string[] = [];
+    // login() catches everything openUrl throws, because a browser that will not
+    // launch must not fail the sign-in. That also swallows assertion failures, so
+    // they are captured here and re-thrown once login() has returned.
+    let callbackFailure: unknown;
 
     await login(
         { apiUrl: API_URL, loginUrl: LOGIN_URL, timeoutSeconds: 5 },
@@ -29,33 +34,39 @@ test('browser login accepts a one-shot SPA form POST and saves Bearer credential
             configFile: file,
             write: message => output.push(message),
             openUrl: async value => {
-                openedUrl = value;
-                const url = new URL(value);
-                const callback = url.searchParams.get('callback');
-                const state = url.searchParams.get('state');
-                assert(callback);
-                assert(state);
-                assert.equal(url.origin + url.pathname, LOGIN_URL);
-                assert.equal(url.searchParams.get('apiUrl'), null);
-                assert.match(url.searchParams.get('name') ?? '', /^ZynoHosting CLI\/MCP — /);
-                assert.equal(url.searchParams.get('permissions'), 'hosting.sitesRead');
-                assert.equal(url.searchParams.get('renewable'), null);
-                const response = await fetch(callback, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                    body: new URLSearchParams({
-                        jwt: JWT,
-                        tenantId: TENANT_ID,
-                        expiresAt: String(Date.now() + 60_000),
-                        state
-                    })
-                });
-                assert.equal(response.status, 200);
-                assert.match(await response.text(), /login complete/i);
+                try {
+                    openedUrl = value;
+                    const url = new URL(value);
+                    const callback = url.searchParams.get('callback');
+                    const state = url.searchParams.get('state');
+                    assert(callback);
+                    assert(state);
+                    assert.equal(url.origin + url.pathname, LOGIN_URL);
+                    assert.equal(url.searchParams.get('apiUrl'), null);
+                    assert.match(url.searchParams.get('name') ?? '', /^ZynoHosting CLI\/MCP — /);
+                    assert.equal(url.searchParams.get('permissions'), 'hosting.sitesRead');
+                    assert.equal(url.searchParams.get('renewable'), null);
+                    const response = await fetch(callback, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                        body: new URLSearchParams({
+                            jwt: JWT,
+                            tenantId: TENANT_ID,
+                            expiresAt: String(Date.now() + 60_000),
+                            state
+                        })
+                    });
+                    assert.equal(response.status, 200);
+                    assert.match(await response.text(), /Signed in/i);
+                } catch (error) {
+                    callbackFailure = error;
+                    throw error;
+                }
             }
         }
     );
 
+    if (callbackFailure) throw callbackFailure;
     assert(openedUrl);
     const stored = await loadStoredConfig(file);
     assert.equal(stored.apiUrl, API_URL);
@@ -97,6 +108,38 @@ test('loopback listener ignores an invalid state and accepts the valid callback'
                 expiresAt: String(EXPIRATION),
                 state
             })
+        });
+    }
+});
+
+test('loopback distinguishes a provider cancellation from a provider failure', async () => {
+    const cancelled = await startLoopbackLogin({ timeoutMs: 5_000 });
+    try {
+        const response = await postError(cancelled.callbackUrl, cancelled.state, 'access_denied');
+        assert.equal(response.status, 200);
+        const page = await response.text();
+        assert.match(page, /Sign-in cancelled/);
+        await assert.rejects(cancelled.result, (error: unknown) => error instanceof CliError && error.code === 'login_cancelled');
+    } finally {
+        await cancelled.close();
+    }
+
+    const failed = await startLoopbackLogin({ timeoutMs: 5_000 });
+    try {
+        const response = await postError(failed.callbackUrl, failed.state, 'server_error');
+        assert.equal(response.status, 500);
+        const page = await response.text();
+        assert.match(page, /Sign-in failed/);
+        await assert.rejects(failed.result, (error: unknown) => error instanceof CliError && error.code === 'login_failed');
+    } finally {
+        await failed.close();
+    }
+
+    async function postError(callback: string, state: string, error: string): Promise<Response> {
+        return fetch(callback, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: new URLSearchParams({ state, error })
         });
     }
 });

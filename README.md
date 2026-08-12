@@ -155,6 +155,10 @@ For a non-technical user, paste this into Codex or Claude Code:
 
 The agent configures only its own project file—`.mcp.json` for Claude Code or `.codex/config.toml` for Codex—without storing credentials. Restart the agent after it completes; MCP tools are not added to an already-running session. That prompt points at [install instructions written for the agent](./docs/mcp/agent.md); the matching [prompts for the user](https://zyno-io.github.io/zynohosting-cli/mcp/setup) cover signing in, publishing, and forms.
 
+Claude Code means the terminal CLI, the IDE extensions, and the Code tab of the Claude desktop app; one project file serves all three, and all three need Node.js 24 installed.
+
+The desktop app's Chat and Cowork tabs are a separate client that cannot install anything from a conversation. They use the signed desktop extension instead, which the user installs by opening [`zynohosting.mcpb`](https://github.com/zyno-io/zynohosting-cli/releases/latest/download/zynohosting.mcpb). It carries the server as a single bundled file, runs on the Node runtime inside Claude Desktop so nothing else has to be installed, and stages newer signed releases so installs do not go stale. See [Configure the local MCP server](https://zyno-io.github.io/zynohosting-cli/mcp/#set-up-the-claude-desktop-app).
+
 `ZYNOHOSTING_MCP_ROOTS` is an optional local-computer allowlist for the MCP process. When it is unset, local-file tools can use any absolute path the MCP process user can access. When roots are configured, local file reads, writes, deploy sources, ignore files, and download destinations are constrained to them after canonical path resolution.
 
 Direct invocation:
@@ -245,3 +249,7 @@ Most CLI commands accept `--json`. Deploy emits newline-delimited progress, plan
 ## Public API and release process
 
 The [public documentation site](https://zyno-io.github.io/zynohosting-cli/) covers CLI commands, MCP tools, configuration, permissions, and safety. The manager and node-agent contract is documented in [BACKEND_PLAN.md](./BACKEND_PLAN.md). Maintainer release setup and the tag-only mirror design are documented in [RELEASING.md](./RELEASING.md).
+
+## License
+
+MIT. See [LICENSE](./LICENSE). ZynoHosting and ZynoForms are services of Signal24 LLC dba Zyno Consulting; the license covers this client, not the services it connects to.

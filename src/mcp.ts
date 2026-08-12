@@ -5,15 +5,25 @@ import { readFileSync } from 'node:fs';
 
 import type { HostingEnvironment } from './config.js';
 
+import { configureUserAgent } from './api/user-agent.js';
 import { CliError, errorMessage } from './errors.js';
 import { startHostingMcp } from './mcp/start.js';
 
-const version = readPackageVersion();
+// The desktop update payload is imported from its verified bytes through a data
+// URL, which deliberately has no package.json beside it. Its build replaces
+// this constant; npm/CLI builds fall back to their installed package metadata.
+declare const __ZYNO_MCPB_VERSION__: string;
+const version = typeof __ZYNO_MCPB_VERSION__ === 'string' ? __ZYNO_MCPB_VERSION__ : readPackageVersion();
+configureUserAgent({ surface: 'mcp', version });
 const program = new Command()
     .name('zynohosting-mcp')
     .description('Local stdio MCP server for ZynoHosting and ZynoForms')
     .version(version)
     .option('--root <path>', 'restrict local-file MCP tools to this root (repeatable)', collect, [])
+    // Bare positional roots exist for hosts that expand a list into argv. The
+    // desktop bundle's directory picker produces one argument per folder with no
+    // flag between them, so a flag-only form would silently keep just the first.
+    .argument('[roots...]', 'additional local roots, equivalent to repeating --root')
     .option('--api-url <url>', 'Hosting Manager API URL')
     .option('--suite-api-url <url>', 'ZynoSuite API URL')
     .option('--auth-api-url <url>', 'ZynoAuth API URL')
@@ -31,7 +41,9 @@ try {
         environment?: HostingEnvironment;
     }>();
     await startHostingMcp({
-        roots: args.root,
+        // Duplicates collapse during canonical resolution, so the two forms can
+        // be combined without the caller having to keep them distinct.
+        roots: [...args.root, ...program.args],
         version,
         ...(args.apiUrl ? { apiUrl: args.apiUrl } : {}),
         ...(args.suiteApiUrl ? { suiteApiUrl: args.suiteApiUrl } : {}),

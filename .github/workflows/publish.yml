@@ -49,6 +49,73 @@ jobs:
                   yarn verify-package
                   npm pack --dry-run
 
+            - name: Build and sign the desktop extension
+              id: desktop-extension
+              shell: bash
+              env:
+                  MCPB_SIGN_KEY_B64: ${{ secrets.MCPB_SIGN_KEY_B64 }}
+                  MCPB_SIGN_CERT_B64: ${{ secrets.MCPB_SIGN_CERT_B64 }}
+                  # Optional, and only during a signing-key rotation: the outgoing
+                  # certificate. The bundle is signed by the incoming key and new
+                  # manual installs trust both; installed launchers cannot learn a
+                  # new key because staged updates replace server.js only.
+                  MCPB_TRUST_CERT_B64: ${{ secrets.MCPB_TRUST_CERT_B64 }}
+              run: |
+                  set -euo pipefail
+                  SIGNING_DIR="$(mktemp -d)"
+                  trap 'rm -rf "$SIGNING_DIR"' EXIT
+
+                  # Missing secrets must not fail npm or registry publication.
+                  # The unsigned build is verified locally but is never attached
+                  # to a GitHub release under the canonical download names.
+                  if [ -n "${MCPB_SIGN_KEY_B64}" ] && [ -n "${MCPB_SIGN_CERT_B64}" ]; then
+                    printf '%s' "${MCPB_SIGN_KEY_B64}" | base64 -d > "${SIGNING_DIR}/key.pem"
+                    printf '%s' "${MCPB_SIGN_CERT_B64}" | base64 -d > "${SIGNING_DIR}/cert.pem"
+                    chmod 0600 "${SIGNING_DIR}/key.pem"
+                    export MCPB_SIGN_KEY="${SIGNING_DIR}/key.pem"
+                    export MCPB_SIGN_CERT="${SIGNING_DIR}/cert.pem"
+                    if [ -n "${MCPB_TRUST_CERT_B64}" ]; then
+                      printf '%s' "${MCPB_TRUST_CERT_B64}" | base64 -d > "${SIGNING_DIR}/trust.pem"
+                      export MCPB_TRUSTED_CERTS="${SIGNING_DIR}/trust.pem"
+                    fi
+                  else
+                    echo "::warning::MCPB signing secrets are not configured; skipping GitHub release assets."
+                  fi
+
+                  node scripts/build-mcpb.mjs
+                  node scripts/verify-mcpb.mjs
+                  if [ -f build/server.js.sig ]; then
+                    echo "signed=true" >> "${GITHUB_OUTPUT}"
+                  else
+                    echo "signed=false" >> "${GITHUB_OUTPUT}"
+                  fi
+
+            - name: Attach the desktop extension to the release
+              if: steps.desktop-extension.outputs.signed == 'true'
+              shell: bash
+              env:
+                  GH_TOKEN: ${{ github.token }}
+              run: |
+                  set -euo pipefail
+                  VERSION="$(node -p "require('./package.json').version")"
+                  TAG="v${VERSION}"
+                  if ! gh release view "${TAG}" >/dev/null 2>&1; then
+                    gh release create "${TAG}" --title "${TAG}" --generate-notes --latest
+                  fi
+                  # Installed bundles poll releases/latest/download/update.json, so the
+                  # descriptor has to ride on the release marked latest, and --clobber
+                  # keeps a re-run from failing on an asset that is already there.
+                  # An unversioned copy as well, because releases/latest/download
+                  # can only resolve a filename it knows in advance, and the
+                  # documentation needs one link that never goes stale.
+                  cp "build/zynohosting-${VERSION}.mcpb" build/zynohosting.mcpb
+
+                  # server.js and its detached signature are what an already
+                  # installed launcher stages; the .mcpb is for new installs.
+                  ASSETS=("build/zynohosting-${VERSION}.mcpb" build/zynohosting.mcpb build/update.json build/server.js build/server.js.sig)
+
+                  gh release upload "${TAG}" "${ASSETS[@]}" --clobber
+
             - name: Publish the public npm package
               shell: bash
               run: |

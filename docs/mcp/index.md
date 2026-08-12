@@ -4,6 +4,8 @@ The package includes a local stdio MCP server that exposes authorized ZynoHostin
 
 ## Set up Codex or Claude Code
 
+Claude Code here means every surface of that client—the terminal CLI, the IDE extensions, and the Code tab of the Claude desktop app. All three read the same project `.mcp.json`, so the instruction below is the whole setup for any of them. The desktop app's Chat and Cowork tabs are a separate client with separate configuration; see [Set up the Claude desktop app](#set-up-the-claude-desktop-app).
+
 For an end user, the easiest option is to paste this instruction into the agent:
 
 > Set up ZynoHosting MCP for this project if it's not already configured. See https://raw.githubusercontent.com/zyno-io/zynohosting-cli/main/docs/mcp/agent.md for details.
@@ -25,6 +27,20 @@ Restart Codex or Claude Code after the installer completes. The current agent se
 Copy-and-paste prompts for the whole workflow—setup, browser login, publishing, and forms—are on [Set up and use ZynoHosting in your agent](./setup), written for a non-technical user. What the agent itself does during installation is on [Install instructions for agents](./agent).
 
 Deployment-domain policy and form-editing policy are not documented for agents here: the server supplies them as MCP instructions and tool descriptions on every connection, so they reach every session rather than only the one that fetched a page.
+
+## Set up the Claude desktop app
+
+The desktop app's Chat and Cowork tabs do not read a project `.mcp.json`, and no conversation in them can run the installer, so `mcp install` has no target there. They install [the desktop extension](https://github.com/zyno-io/zynohosting-cli/releases/latest/download/zynohosting.mcpb) instead: a signed `.mcpb` bundle the user opens, which Claude Desktop installs in one step.
+
+The bundle carries the server and its dependencies as a single generated file and runs on the Node runtime that ships inside Claude Desktop, so the user installs no toolchain. That is the substantive difference from a `claude_desktop_config.json` entry naming `npx`, which resolves against the PATH the app inherits from the desktop session and therefore needs Node 24 installed system-wide — and the app does not source a login shell, which makes nvm, fnm, and some Homebrew layouts invisible to it even when `npx` works in the user's terminal.
+
+Local roots are optional and multi-valued. The extension's install dialog offers a directory picker backed by `user_config.project_roots`, and an empty selection passes no root at all, matching the unrestricted default everywhere else. Requiring a root here would be the wrong default: people add sites over time and cannot name those folders when they install.
+
+The bundle's `mcp_config.args` passes roots as bare arguments rather than `--root` pairs, because the host expands a configured list only when an argument is exactly `${user_config.key}`. A `--root` flag in front would keep the first folder and silently drop every other. `zynohosting-mcp` accepts both forms.
+
+An extension keeps itself current: it verifies and stages newer signed releases and adopts them on the next launch. A `claude_desktop_config.json` entry using `npx` also tracks the newest published version, but a hand-installed bundle without the launcher would not, which is why the update path exists. See [Releasing](../reference/releasing) for how the release assets are produced.
+
+Connection failures are logged to `~/Library/Logs/Claude/mcp-server-zynohosting.log` or `%APPDATA%\Claude\logs`, and the launcher writes its own diagnostics there, including any staged runtime it refused.
 
 ## Start the server
 

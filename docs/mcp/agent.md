@@ -16,6 +16,8 @@ It covers one thing: installing the local ZynoHosting MCP server. Everything tha
     npx -y @zyno-io/zynohosting mcp install --project . --agent claude
     ```
 
+    `--agent claude` covers every Claude Code surface: the terminal CLI, the IDE extensions, and the Code tab of the Claude desktop app. They are one client reading one project file. If you cannot run shell commands at all, you are not in Claude Code—see “Agents without a shell” below and do not run the installer.
+
 2. Always pass `--agent` explicitly. Without it, the installer identifies the caller only when `CLAUDECODE=1` or `CODEX_HOME` is set, and otherwise fails rather than guessing.
 3. Never configure the other agent’s project file. One agent, one file.
 4. You do not need to check whether it is already configured. The installer merges a single `zynohosting` entry, leaves an existing entry untouched, writes no credentials, and reports which paths it configured versus which were already configured.
@@ -32,6 +34,21 @@ It covers one thing: installing the local ZynoHosting MCP server. Everything tha
 Neither file holds an API key or any other credential, so both are safe to commit.
 
 Codex gets the raised tool timeout because browser sign-in waits up to five minutes for the user to complete multi-factor or single sign-on, which is longer than Codex’s default MCP tool timeout.
+
+## Agents without a shell
+
+The Chat and Cowork tabs of the Claude desktop app cannot run this installer, and nothing said inside a conversation can add an MCP server to them. If that is where you are, do not run the install, do not write a configuration file through any other tool, and do not report success. Tell the user to install the desktop extension instead:
+
+1. Download https://github.com/zyno-io/zynohosting-cli/releases/latest/download/zynohosting.mcpb
+2. Double-click the downloaded file. Claude opens an install window; they click Install.
+3. The install window offers to limit ZynoHosting to particular folders. Tell them to leave it empty unless they specifically want to confine it, because an empty list lets them publish any folder and add new sites later without changing settings.
+4. Confirm the result with them: the **+** button beside the message box, then Connectors, then Manage connectors, should list ZynoHosting.
+
+They install nothing else. The extension carries the server and runs on the runtime inside Claude Desktop, so Node.js is not required for this path, and the extension keeps itself up to date after that.
+
+If they also use the Code tab, mention it as an alternative: open the project there and paste the setup request again, and the installer writes a project `.mcp.json` that keeps the configuration with the project. That path does require Node.js 24 on their computer.
+
+The extension is available in the Code tab as well, so a user who installs it does not need the project install too. Prefer the project install when the work is tied to a repository, and the extension when it is not.
 
 ## When it fails
 

@@ -36,9 +36,57 @@ The public release job remains skipped until `GITHUB_MIRROR_SSH_KEY_B64` is conf
 
 The first npm publication may require a one-time owner bootstrap before npm allows trusted-publisher configuration. Remove any long-lived npm publication token after OIDC is working.
 
+## Desktop extension signing
+
+The `.mcpb` desktop extension is built and signed in GitHub Actions, because that is where the release lives and where `GITHUB_TOKEN` can attach assets. Add two repository secrets under **Settings → Secrets and variables → Actions**:
+
+- `MCPB_SIGN_KEY_B64` — base64 of the signing private key, single line.
+- `MCPB_SIGN_CERT_B64` — base64 of the signing certificate.
+
+Create the key pair once with `node scripts/create-signing-cert.mjs`, which writes an RSA-4096 code-signing certificate to `~/.config/zynohosting/signing` and refuses to overwrite an existing one. Keep the private key in the team password manager: losing it means the next release ships under a different publisher identity, and leaking it lets anyone publish as Zyno Consulting.
+
+The identity must stay stable across releases. `mcpb sign --self-signed` is never used, because it mints a throwaway certificate with a placeholder subject on every run. Two things depend on the certificate specifically:
+
+- installed extensions verify staged updates against the public key compiled into the launcher, so a key change strands every existing install on its current version until the user reinstalls;
+- the certificate is what an organization would add to its trust store to have the extension report as signed rather than unsigned.
+
+Without these secrets the workflow still succeeds for npm, the MCP Registry, documentation, and mirroring. It builds and verifies an unsigned bundle as a diagnostic, but it does not create the GitHub release or attach any desktop-extension assets under the canonical download names. The previous signed GitHub release therefore remains the latest downloadable extension until the secrets are restored and the tag workflow is rerun.
+
+### Rotating the signing key
+
+The certificate expires 2036-08-09. Expiry alone changes nothing for installed extensions, which pin the public key rather than the certificate and so have no validity window to enforce — deliberately, because enforcing one would stop every install from updating on a single date instead of when something is actually wrong. The certificate's dates do matter to Claude Desktop when it verifies a freshly downloaded `.mcpb`.
+
+Replacing the key — on expiry, on compromise, or if it is lost — requires every existing user to install a new `.mcpb`, and there is no way around that.
+
+An update stages `server.js` only. The trusted keys are compiled into the launcher, which is the extension's entry point and is replaced solely by installing the bundle again. So a release cannot teach an installed launcher a key it did not ship with, however that release is signed. After the signing key changes, existing installs keep working on the version they have and quietly stop updating.
+
+Drive the migration with the version gate rather than hoping:
+
+1. Generate the new key pair into a different `MCPB_SIGN_DIR`.
+2. Set `MCPB_TRUST_CERT_B64` to the **outgoing** certificate and swap `MCPB_SIGN_KEY_B64` and `MCPB_SIGN_CERT_B64` to the incoming pair. New downloads then accept payloads signed by either key, which keeps releases made during the transition usable.
+3. Raise `mcpbMinimumVersion` to the first release signed by the new key and ship. Installed extensions cannot stage that release, but they do read the descriptor, so every tool call tells the user to download the current version — which is exactly the action required.
+4. Once the installed base has moved, clear `MCPB_TRUST_CERT_B64`.
+
+The build accepts several trusted certificates through `MCPB_TRUSTED_CERTS`, a list separated by the platform path delimiter; the workflow materialises `MCPB_TRUST_CERT_B64` into it.
+
+Note the asymmetry: the version gate reads an unsigned descriptor, so a forged one can at worst make clients refuse to work, never make them run something. Staging is the opposite — it acts on what it downloads, so a release signs the version bound to the payload digest, and a runtime cannot be replayed under a version it was not signed for.
+
+Do not mistake the outgoing-certificate overlap for an automatic migration: it applies only to newly downloaded bundles. Every launcher built with only the outgoing key still has to be replaced manually; the raised version gate is what makes that requirement visible to those users.
+
 ## Releasing
 
 Change `version` in both `package.json` and `server.json` in the same GitLab default-branch commit. The package verification script enforces the match.
+
+`mcpbMinimumVersion` in `package.json` is the force-update lever. Raising it makes every older extension refuse to operate and tell the user to update, so raise it only for a genuine incompatibility, and only once enough of the installed base has moved. It can also be lowered by editing `update.json` on the latest GitHub release, without shipping a build.
+
+When signing succeeds, the GitHub tag workflow attaches these release assets. It publishes none of them when signing secrets are missing, so an unsigned bundle can never replace the canonical extension:
+
+| Asset                        | Purpose                                                                                                      |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `zynohosting-{version}.mcpb` | The signed extension, versioned for the release listing.                                                     |
+| `zynohosting.mcpb`           | The same file under a stable name, so documentation can link to `releases/latest/download/zynohosting.mcpb`. |
+| `server.js`, `server.js.sig` | The runtime an installed extension stages, and its detached signature.                                       |
+| `update.json`                | Version policy and payload locations, read from `releases/latest/download/update.json`.                      |
 
 The GitLab pipeline:
 

@@ -5,6 +5,7 @@ import { z } from 'zod';
 
 import { FormsClient } from '../api/forms-client.js';
 import { ManagerClient } from '../api/manager-client.js';
+import { resolveDistribution } from '../api/user-agent.js';
 import { startCredentialRefreshLoop } from '../auth/credential-refresh.js';
 import { applyPreparedDeployment, prepareDeployment, PreparedDeployment } from '../commands/deploy-site.js';
 import { applyDownload, prepareDownload, PreparedDownload } from '../commands/download-site.js';
@@ -15,12 +16,14 @@ import { CliError, errorMessage, HttpError } from '../errors.js';
 import { DELEGABLE_PERMISSION_KEYS, permissionCapabilityLines } from '../permissions.js';
 import { registerFormsMcp } from './forms.js';
 import { AllowedLocalRoots } from './local-paths.js';
+import { UpdatePolicy } from './update-check.js';
 
 export interface McpServerOptions extends ConfigOverrides {
     roots: AllowedLocalRoots;
     version: string;
     env?: NodeJS.ProcessEnv;
     loginDependencies?: Pick<LoginDependencies, 'onBrowserUrl' | 'openUrl' | 'renewalTokenStore'>;
+    updatePolicy?: UpdatePolicy;
 }
 
 const MAX_PENDING_PLANS = 16;
@@ -54,6 +57,31 @@ export async function createHostingMcpServer(options: McpServerOptions): Promise
         }
     );
     server.server.onclose = () => authentication.close();
+
+    // Only a desktop bundle can go stale: an installed .mcpb is frozen until it
+    // stages a newer runtime, while npm and npx resolve the newest version on
+    // every launch. Enforcing a minimum elsewhere would tell a Claude Code user
+    // to install a bundle they never had, and would make every CLI process fetch
+    // a release descriptor it has no use for.
+    const environment = options.env ?? process.env;
+    const enforcesMinimumVersion = resolveDistribution(environment) === 'mcpb' && environment.ZYNOHOSTING_DISABLE_UPDATE !== '1';
+    const updatePolicy = options.updatePolicy ?? (enforcesMinimumVersion ? new UpdatePolicy({ version: options.version }) : undefined);
+
+    // Gate at registration rather than in each handler, so the form tools
+    // registered elsewhere are covered too and a tool added later cannot forget.
+    if (updatePolicy) {
+        updatePolicy.refresh();
+        const registerToolDirectly = server.registerTool.bind(server);
+        server.registerTool = ((name: string, config: never, handler: (...args: never[]) => unknown) =>
+            registerToolDirectly(name, config, ((...args: never[]) => {
+                // Never awaited: a slow or unreachable descriptor host must not add
+                // latency to an operation, and unknown policy always permits.
+                updatePolicy.refresh();
+                const demand = updatePolicy.requiredUpdate();
+                if (demand) return { isError: true, content: [{ type: 'text' as const, text: demand }] };
+                return handler(...args);
+            }) as never)) as typeof server.registerTool;
+    }
 
     server.registerTool(
         'login',

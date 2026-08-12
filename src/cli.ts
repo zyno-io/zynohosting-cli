@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 
 import type { HostingEnvironment } from './config.js';
 
+import { configureUserAgent } from './api/user-agent.js';
 import { deploySite, DeploySiteOptions } from './commands/deploy-site.js';
 import { downloadSite, DownloadSiteOptions } from './commands/download-site.js';
 import { deleteFile, getFile, listFiles, putFile } from './commands/files.js';
@@ -14,6 +15,7 @@ import { startHostingMcp } from './mcp/start.js';
 import { permissionCapabilityLines } from './permissions.js';
 
 const PACKAGE_VERSION = readPackageVersion();
+configureUserAgent({ surface: 'cli', version: PACKAGE_VERSION });
 
 export function createProgram(): Command {
     const program = new Command();
@@ -237,10 +239,16 @@ export function createProgram(): Command {
         .command('mcp')
         .description('run the local ZynoHosting and ZynoForms MCP server')
         .option('--root <path>', 'restrict local-file MCP tools to this root (repeatable)', collect, [])
-        .action(async (commandOptions: { root: string[] }) => {
+        .argument('[roots...]', 'additional local roots, equivalent to repeating --root')
+        .action(async (positionalRoots: string[], commandOptions: { root: string[] }) => {
+            // This process is an MCP server, not the CLI, even though it was
+            // reached through the CLI binary. `npx ... mcp` is the documented
+            // invocation, so without this every npm-installed MCP server would
+            // identify itself as a CLI to the API.
+            configureUserAgent({ surface: 'mcp', version: PACKAGE_VERSION });
             const context = commandContext(program, {});
             await startHostingMcp({
-                roots: commandOptions.root,
+                roots: [...commandOptions.root, ...positionalRoots],
                 version: PACKAGE_VERSION,
                 ...(context.apiUrl ? { apiUrl: context.apiUrl } : {}),
                 ...(context.suiteApiUrl ? { suiteApiUrl: context.suiteApiUrl } : {}),

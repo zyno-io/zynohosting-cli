@@ -2,6 +2,7 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { createServer, IncomingMessage, Server, ServerResponse } from 'node:http';
 
 import { CliError } from '../errors.js';
+import { renderCallbackPage } from './callback-page.js';
 
 const CALLBACK_PATH = '/callback';
 const MAX_BODY_BYTES = 16 * 1024;
@@ -9,6 +10,7 @@ const TOKEN_MAX_LENGTH = 12 * 1024;
 const RENEWAL_TOKEN_MAX_LENGTH = 16 * 1024;
 const MAX_ACCESS_LIFETIME_MS = 2 * 60 * 60 * 1000;
 const TENANT_ID_PATTERN = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
+const CANCELLATION_ERRORS = new Set(['access_denied', 'cancelled', 'canceled', 'user_cancelled', 'user_canceled']);
 
 export interface UserCredential {
     accessToken: string;
@@ -131,8 +133,14 @@ async function handleCallback(
     if (hasRepeatedValue(form, 'error')) return rejectRequest(response, 400, 'Invalid login response');
     const loginError = form.get('error');
     if (loginError) {
-        successResponse(response, 'ZynoSuite login was not completed. You can close this window.');
-        return new CliError(`ZynoSuite login failed: ${loginError.slice(0, 500).replace(/[\u0000-\u001f\u007f]/g, ' ')}`, 3, 'login_failed');
+        if (!acceptCallback()) return rejectRequest(response, 409, 'A login callback is already being processed');
+        const providerError = loginError.slice(0, 500).replace(/[\u0000-\u001f\u007f]/g, ' ');
+        if (CANCELLATION_ERRORS.has(providerError.toLowerCase())) {
+            cancelledResponse(response, 'You did not finish signing in to ZynoSuite, so nothing was changed.');
+            return new CliError('ZynoSuite login was cancelled', 3, 'login_cancelled');
+        }
+        failureResponse(response, 'ZynoSuite could not complete this sign-in. Return to where you started for details.');
+        return new CliError(`ZynoSuite login failed: ${providerError}`, 3, 'login_failed');
     }
 
     if (!['jwt', 'tenantId', 'expiresAt'].every(key => hasSingleValue(form, key))) {
@@ -158,11 +166,11 @@ async function handleCallback(
     try {
         await onCredential?.(credential);
     } catch (error) {
-        failureResponse(response, 'ZynoHosting could not save this login. Return to the terminal for details.');
+        failureResponse(response, 'ZynoHosting could not save this login. Return to where you started for details.');
         return error instanceof Error ? error : new CliError('Could not save the ZynoSuite login', 1, 'login_save_failed');
     }
 
-    successResponse(response, 'ZynoHosting login complete. You can close this window.');
+    successResponse(response, 'ZynoHosting is now connected to your account. Return to where you started to continue.');
     return credential;
 }
 
@@ -217,17 +225,24 @@ function rejectRequest(response: ServerResponse, status: number, message: string
 function successResponse(response: ServerResponse, message: string): void {
     response.statusCode = 200;
     response.setHeader('Content-Type', 'text/html; charset=utf-8');
-    response.end(
-        `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>ZynoHosting CLI</title><p>${message}</p><script>window.close()</script>`
-    );
+    response.end(renderCallbackPage('complete', message, { autoClose: true }));
+}
+
+/**
+ * The callback arrived and was well formed, but the user did not finish signing
+ * in. That is a 200 because nothing went wrong with the request, and it must not
+ * look like success on the page.
+ */
+function cancelledResponse(response: ServerResponse, message: string): void {
+    response.statusCode = 200;
+    response.setHeader('Content-Type', 'text/html; charset=utf-8');
+    response.end(renderCallbackPage('cancelled', message));
 }
 
 function failureResponse(response: ServerResponse, message: string): void {
     response.statusCode = 500;
     response.setHeader('Content-Type', 'text/html; charset=utf-8');
-    response.end(
-        `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>ZynoHosting CLI</title><p>${message}</p>`
-    );
+    response.end(renderCallbackPage('failed', message));
 }
 
 function setResponseSecurityHeaders(response: ServerResponse): void {

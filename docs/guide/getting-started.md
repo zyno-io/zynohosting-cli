@@ -86,7 +86,9 @@ The easiest setup for Codex or Claude Code is to paste this into the agent:
 
 > Set up ZynoHosting MCP for this project if it's not already configured. See https://raw.githubusercontent.com/zyno-io/zynohosting-cli/main/docs/mcp/agent.md for details.
 
-The agent performs the installation and then asks the user to restart it. See [Set up and use ZynoHosting in your agent](../mcp/setup) for the copy-and-paste prompts that cover signing in, publishing, and forms.
+The agent performs the installation and then asks the user to restart it. This covers Claude Code wherever it runs, including the Code tab of the Claude desktop app. The desktop app's Chat and Cowork tabs cannot install anything from a conversation; they install the signed desktop extension instead, described in [Set up the Claude desktop app](../mcp/#set-up-the-claude-desktop-app).
+
+See [Set up and use ZynoHosting in your agent](../mcp/setup) for the copy-and-paste prompts that cover signing in, publishing, and forms.
 
 Restrict local-file access to a project root when the agent should not use the MCP process user's entire accessible filesystem:
 

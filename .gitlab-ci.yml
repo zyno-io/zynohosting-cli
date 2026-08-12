@@ -65,6 +65,10 @@ mirror_release_tag:
     needs:
         - test
         - publish_canary
+        # A release tag is immutable. Do not mirror it until the desktop bundle
+        # has packaged and booted successfully, or a bundle-only failure would
+        # strand the version on a tag that a corrective commit cannot move.
+        - build_mcpb
     resource_group: zynohosting-public-release
     rules:
         - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $GITHUB_MIRROR_SSH_KEY_B64'
@@ -118,3 +122,40 @@ mirror_release_tag:
               git tag --force "$TAG" "$SOURCE_TAG_SHA"
               GIT_SSH_COMMAND="$GITHUB_SSH_COMMAND" git push "$GITHUB_URL" "refs/tags/${TAG}:refs/tags/${TAG}"
             fi
+
+build_mcpb:
+    stage: test
+    needs: []
+    rules:
+        - if: '$CI_COMMIT_TAG'
+          when: never
+        - when: on_success
+    script:
+        - |
+            set -eu
+            yarn --immutable
+
+            # Unsigned here on purpose. The signed release build runs in GitHub
+            # Actions, which holds the signing key and can attach assets to the
+            # release. This job exists so a bundle that cannot be packaged, or
+            # that packs but will not start, fails in the main pipeline rather
+            # than at release time.
+            node scripts/build-mcpb.mjs
+            node scripts/verify-mcpb.mjs
+    artifacts:
+        name: 'zynohosting-mcpb-${CI_COMMIT_SHORT_SHA}'
+        paths:
+            - build/*.mcpb
+            - build/update.json
+            - build/server.js
+        expire_in: 1 week
+
+osv scan:
+    stage: test
+    allow_failure: true
+    image:
+        name: ghcr.io/google/osv-scanner:latest
+        entrypoint: ['']
+    before_script: []
+    script:
+        - /osv-scanner scan source --recursive .
