@@ -48,6 +48,20 @@ Event types are:
 
 Consume one JSON object per line rather than parsing the complete standard output as a single document.
 
+## Promotion output
+
+`promote --yes --json` emits `promotion_plan`, progress events, then `promotion_result` only after
+serving reconciliation succeeds. The plan contains both URLs and the expected production
+deployment ID. The result contains `deploymentId`, `operationId`, and `status: "succeeded"`.
+`promote --dry-run --json` emits the plan and `dry_run_complete` without a mutation.
+
+Deployment plan/result events now include `target` (`production` or `preview`) and the URL when
+advertised by the manager.
+
+Promotion errors include `preview_unavailable` for an older manager, `promotion_failed` for a
+failed serving reconciliation, and `promotion_pending` when an accepted operation is still pending.
+The latter includes its operation ID and status path; inspect that operation before resubmitting.
+
 ## Exit codes
 
 | Exit code | Category                                                                   |

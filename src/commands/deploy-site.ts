@@ -14,6 +14,7 @@ import {
     ApplyResult,
     DEFAULT_HASH_ALGORITHM,
     DeploymentSession,
+    DeploymentTarget,
     FALLBACK_MANDATORY_IGNORES,
     FinalDeploymentPlan,
     HashAlgorithm,
@@ -21,6 +22,7 @@ import {
 } from '../protocol.js';
 
 export interface DeploySiteOptions extends ConfigOverrides {
+    preview?: boolean;
     yes?: boolean;
     dryRun?: boolean;
     json?: boolean;
@@ -32,6 +34,7 @@ export interface DeploySiteOptions extends ConfigOverrides {
 }
 
 export interface PreparedDeployment {
+    target: DeploymentTarget;
     fqdn: string;
     source: string;
     manager: ManagerClient;
@@ -50,6 +53,8 @@ export async function deploySite(fqdnInput: string, directory: string, options: 
     const output = new Output(options.json ?? false);
     const plan = await prepareDeployment(fqdnInput, directory, options, message => output.progress(message));
     output.showPlan({
+        target: plan.target,
+        ...(plan.session.url ? { url: plan.session.url } : {}),
         fqdn: plan.fqdn,
         source: plan.source,
         ignores: plan.ignoreSources,
@@ -76,7 +81,7 @@ export async function deploySite(fqdnInput: string, directory: string, options: 
         return;
     }
     const result = await applyPreparedDeployment(plan, message => output.progress(message));
-    output.applied(result);
+    output.applied(result, plan.target, plan.session.url);
 }
 
 export async function prepareDeployment(
@@ -99,7 +104,8 @@ export async function prepareDeployment(
 
     progress('Authorizing deployment…');
     const manager = new ManagerClient(config.apiUrl, config.credential, Math.min(timeoutMs, 30_000));
-    const session = await manager.createDeploymentSession(fqdn);
+    const target = options.preview ? 'preview' : 'production';
+    const session = await manager.createDeploymentSession(fqdn, target);
     const agent = new AgentClient(session.baseUrl, session.accessToken, timeoutMs);
 
     progress('Loading cluster deployment capabilities…');
@@ -159,6 +165,7 @@ export async function prepareDeployment(
     }
     const displayOperations = coalesceOperations(inventory.files, finalPlan.operations);
     return {
+        target,
         fqdn,
         source: inventory.root,
         manager,
@@ -235,7 +242,7 @@ function chooseHashAlgorithm(supported: readonly HashAlgorithm[]): HashAlgorithm
     throw new CliError(`Agent does not support a CLI hash algorithm (${supported.join(', ') || 'none advertised'})`, 5, 'unsupported_hash_algorithm');
 }
 
-function normalizeSiteRef(value: string): string {
+export function normalizeSiteRef(value: string): string {
     const trimmed = value.trim();
     if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(trimmed)) return trimmed.toLowerCase();
     const result = domainToASCII(value.trim().toLowerCase());

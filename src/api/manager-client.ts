@@ -8,6 +8,11 @@ import {
     AutomationSite,
     PROTOCOL_VERSION,
     DeploymentSession,
+    DeploymentTarget,
+    PromotionAccepted,
+    ReconciliationOperation,
+    parsePromotionAccepted,
+    parseReconciliation,
     parseAccessSession,
     parseAutomationSite,
     parseAutomationSites
@@ -45,7 +50,7 @@ export class ManagerClient {
         );
     }
 
-    async createAccessSession(siteRef: string, scopes: AgentAccessScope[]): Promise<AccessSession> {
+    async createAccessSession(siteRef: string, scopes: AgentAccessScope[], target: DeploymentTarget = 'production'): Promise<AccessSession> {
         const requestedScopes = [...new Set(scopes)];
         const value = await requestJson(`${this.apiUrl}/v1/sites/${encodeURIComponent(siteRef)}/access-sessions`, {
             method: 'POST',
@@ -55,24 +60,58 @@ export class ManagerClient {
                 'Content-Type': 'application/json',
                 Accept: 'application/json'
             },
-            body: JSON.stringify({ protocolVersion: PROTOCOL_VERSION, scopes: requestedScopes })
+            body: JSON.stringify({ protocolVersion: PROTOCOL_VERSION, scopes: requestedScopes, ...(target === 'preview' ? { target } : {}) })
         });
         const session = parseAccessSession(value);
+        if ((target === 'preview' && session.target !== 'preview') || (session.target !== undefined && session.target !== target)) {
+            throw new CliError(
+                'Manager did not authorize the requested deployment target; update the manager before using preview',
+                5,
+                'invalid_manager_response'
+            );
+        }
         if (session.scopes.length !== requestedScopes.length || requestedScopes.some(scope => !session.scopes.includes(scope))) {
             throw new CliError('Manager returned an access session with unexpected scopes', 5, 'invalid_manager_response');
         }
         return session;
     }
 
-    async createDeploymentSession(siteRef: string): Promise<DeploymentSession> {
-        const session = await this.createAccessSession(siteRef, ['deploy:inventory', 'deploy:hash', 'deploy:apply']);
+    async createDeploymentSession(siteRef: string, target: DeploymentTarget = 'production'): Promise<DeploymentSession> {
+        const session = await this.createAccessSession(siteRef, ['deploy:inventory', 'deploy:hash', 'deploy:apply'], target);
+        const url = session.site.deployments?.[target].url;
         return {
             protocolVersion: session.protocolVersion,
             siteId: session.site.id,
             baseUrl: session.endpoints.deploy,
             accessToken: session.accessToken,
-            expiresAt: session.expiresAt
+            expiresAt: session.expiresAt,
+            target,
+            ...(url ? { url } : {})
         };
+    }
+
+    async promoteSite(siteId: string, expectedProductionDeploymentId: string | null): Promise<PromotionAccepted> {
+        const accepted = parsePromotionAccepted(
+            await requestJson(`${this.apiUrl}/v1/sites/${encodeURIComponent(siteId)}/promote`, {
+                method: 'POST',
+                timeoutMs: this.timeoutMs,
+                headers: { ...(await authorizationHeaders(this.credential)), 'Content-Type': 'application/json', Accept: 'application/json' },
+                body: JSON.stringify({ expectedProductionDeploymentId })
+            })
+        );
+        if (accepted.result.id !== siteId) throw new CliError('Manager returned a promotion for another site', 5, 'invalid_manager_response');
+        return accepted;
+    }
+
+    async getReconciliation(operationId: string): Promise<ReconciliationOperation> {
+        const operation = parseReconciliation(
+            await requestJson(`${this.apiUrl}/reconciliations/${encodeURIComponent(operationId)}`, {
+                timeoutMs: this.timeoutMs,
+                headers: { ...(await authorizationHeaders(this.credential)), Accept: 'application/json' }
+            })
+        );
+        if (operation.id !== operationId) throw new CliError('Manager returned another reconciliation operation', 5, 'invalid_manager_response');
+        return operation;
     }
 
     async purgeSiteCache(siteId: string): Promise<void> {

@@ -4,7 +4,8 @@
 
 - list sites authorized for the current tenant credential;
 - inspect, download, upload, and delete individual files;
-- preview and apply complete manifest-driven deployments;
+- plan and apply complete deployments to production or an isolated preview slot;
+- promote current preview content to production;
 - download a complete deployable snapshot or, with the extra permission, all user content;
 - discover, create, inspect, edit, embed, and configure published ZynoForms;
 - expose the same operations to agents through a local stdio MCP server.
@@ -129,6 +130,27 @@ The mandatory deployment scope excludes platform-managed configuration, uploads,
 
 An empty local deployment requires `--allow-empty` before it may delete the remote deployable scope.
 
+## Preview and promote
+
+```bash
+zynohosting deploy example.com ./dist --preview --dry-run
+zynohosting deploy example.com ./dist --preview --yes
+zynohosting sites get example.com
+zynohosting promote example.com --dry-run
+zynohosting promote example.com --yes
+```
+
+`deploy` keeps its existing production meaning. `--preview` writes only the preview slot, served at
+the stable wildcard URL shown in the plan and site details. `--dry-run` only displays a plan for
+the chosen slot. Preview uploads never promote automatically.
+
+`promote` copies current preview files to a separate production deployment and waits for the
+manager's serving reconciliation. Later preview edits leave the promoted files unchanged. It
+retains the previous production content through the manager's existing storage model. PHP settings
+and databases remain shared; promotion does not copy databases. Both operations use the existing
+`hosting.deploy` permission, alongside `hosting.sitesRead` for site inspection. See
+[preview and promotion details](docs/cli/deploy.md#preview-sites-and-promotion).
+
 ## Complete download
 
 The default snapshot mirrors the deployable scope:
@@ -209,6 +231,8 @@ The MCP tools are:
 - `delete_file`
 - `plan_deploy`
 - `apply_deploy`
+- `plan_promote`
+- `apply_promote`
 - `plan_download`
 - `apply_download`
 
@@ -226,7 +250,7 @@ The tenant credential is limited by explicit Hosting and Forms permissions:
 | `hosting.filesRead`         | List files and download individual files                  |
 | `hosting.filesWrite`        | Create and replace individual files                       |
 | `hosting.filesDelete`       | Delete individual files                                   |
-| `hosting.deploy`            | Plan and apply full deployments                           |
+| `hosting.deploy`            | Deploy production/preview content and promote preview     |
 | `hosting.download`          | Download the deployable snapshot                          |
 | `hosting.downloadSensitive` | Include protected and user-generated content              |
 | `hosting.analyticsRead`     | Read hosting analytics                                    |

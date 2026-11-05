@@ -24,7 +24,7 @@ Starts Zyno’s browser login flow from the MCP process and returns its one-time
 | `hosting.filesRead`         | List files and read individual files.                         |
 | `hosting.filesWrite`        | Create and replace individual files.                          |
 | `hosting.filesDelete`       | Delete individual files.                                      |
-| `hosting.deploy`            | Plan and apply full deployments.                              |
+| `hosting.deploy`            | Deploy production/preview content and promote preview.        |
 | `hosting.download`          | Download the deployable snapshot.                             |
 | `hosting.downloadSensitive` | Include protected and user-generated content in a download.   |
 | `hosting.analyticsRead`     | Read hosting analytics.                                       |
@@ -373,10 +373,15 @@ Deletes one regular hosted file.
 
 Builds and stores an exact full-site synchronization plan without mutating the remote site. The site must be the domain the user explicitly chose; never infer it from the project or choose a similar authorized domain.
 
+The optional `target` is `production` by default. Choose `preview` to deploy only the independent
+preview slot; the plan and apply result include the selected target and its stable URL. A preview
+apply never promotes automatically.
+
 ```json
 {
     "site": "example.com",
     "local_root": "/absolute/project/dist",
+    "target": "preview",
     "ignore": ["*.map"],
     "allow_empty": false
 }
@@ -386,6 +391,7 @@ Builds and stores an exact full-site synchronization plan without mutating the r
 | ------------- | -------- | -------------------- | --------------------------------------------------------------------- |
 | `site`        | yes      | —                    | Site UUID or hostname.                                                |
 | `local_root`  | yes      | —                    | Existing real directory inside an MCP root.                           |
+| `target`      | no       | `production`         | `production` or the separate `preview` slot.                          |
 | `ignore`      | no       | `[]`                 | Additional gitignore-style patterns.                                  |
 | `ignore_file` | no       | `.zynohostingignore` | Absolute path to an alternate ignore file inside an allowed MCP root. |
 | `allow_empty` | no       | `false`              | Permit an empty deployable scope to delete remote content.            |
@@ -401,6 +407,37 @@ Applies an in-memory deployment plan:
 ```
 
 The plan must come from `plan_deploy` in the same MCP process and must still be valid. A successful apply consumes it and queues cache invalidation. Permission: `hosting.deploy`.
+
+## Preview promotion
+
+### `plan_promote`
+
+```json
+{ "site": "example.com" }
+```
+
+Reads the explicitly chosen site's current production deployment and both URLs, then stores a
+plan for up to 15 minutes in this MCP process. It does not change either slot. The result includes
+`planId`, `siteId`, `productionUrl`, `previewUrl`, `expectedProductionDeploymentId`, and expiry.
+Present both URLs before applying. Preview content is copied at apply time; planning does not
+freeze the preview files. Permission: `hosting.sitesRead`.
+
+### `apply_promote`
+
+```json
+{ "plan_id": "c1224591-e7c0-4c44-b1ee-b8afc5676542" }
+```
+
+Copies current preview to a separate production deployment through the manager's promote API,
+then waits for serving reconciliation before reporting success. The manager rejects production
+changes since planning. Later preview edits leave the promoted files unchanged. A failed
+reconciliation is reported as a tool error; an accepted operation can be polled again by retrying
+the same plan for up to an hour. Successful apply consumes the plan. Unknown, expired, consumed,
+or other-process plan IDs are rejected. Permission: `hosting.deploy`.
+
+Promotion shares the site's PHP settings and database; it does not copy application data. The
+manager retains previous files without adding a new history/rollback API. See
+[the CLI feature details](../cli/deploy#preview-sites-and-promotion).
 
 ## Complete downloads
 
@@ -438,11 +475,11 @@ The plan must come from `plan_download` in the same MCP process. A successful ap
 
 Treat these tools as follows:
 
-| Category        | Tools                                                                                                            | Review expectation                                      |
-| --------------- | ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
-| Remote read     | `list_sites`, `get_site`, `list_forms`, `get_form_integration`, `describe_form`                                  | Safe for routine discovery.                             |
-| Local write     | `get_file`, `apply_download`                                                                                     | Confirm the destination and overwrite behavior.         |
-| Remote mutation | `create_basic_form`, `update_form`, `update_form_bot_protection`, `update_form_origins`, file/deploy apply tools | Review form/site, fields, origins, paths, and plans.    |
-| Plan only       | `plan_deploy`, `plan_download`                                                                                   | Inspect the returned scope and operations before apply. |
+| Category        | Tools                                                                                                            | Review expectation                                         |
+| --------------- | ---------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| Remote read     | `list_sites`, `get_site`, `list_forms`, `get_form_integration`, `describe_form`                                  | Safe for routine discovery.                                |
+| Local write     | `get_file`, `apply_download`                                                                                     | Confirm the destination and overwrite behavior.            |
+| Remote mutation | `create_basic_form`, `update_form`, `update_form_bot_protection`, `update_form_origins`, file/deploy apply tools | Review form/site, fields, origins, paths, and plans.       |
+| Plan only       | `plan_deploy`, `plan_download`, `plan_promote`                                                                   | Inspect the returned target, scope, and URLs before apply. |
 
 The MCP server enforces technical boundaries, but the calling agent or user remains responsible for choosing the intended site and reviewing destructive operations. Never infer a deployment domain. If an explicitly named domain is unavailable, do not substitute another site; offer `login` so the user can switch contexts.

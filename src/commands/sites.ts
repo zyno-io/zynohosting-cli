@@ -23,6 +23,11 @@ export async function getSite(siteRef: string, options: SiteCommandOptions): Pro
     else {
         process.stdout.write(`${site.fqdn}\n`);
         process.stdout.write(`ID: ${site.id}\nStatus: ${site.status}\nPHP: ${site.phpVersion ?? 'static'}\n`);
+        if (site.deployments) {
+            process.stdout.write(
+                `Production: ${site.deployments.production.url ?? 'unavailable'}\nPreview: ${site.deployments.preview.url ?? 'unavailable'}\n`
+            );
+        }
         if (site.hostnames?.length) {
             process.stdout.write('Hostnames:\n');
             for (const hostname of site.hostnames) process.stdout.write(`  ${hostname.name} (${hostname.type})\n`);

@@ -2,7 +2,7 @@
 
 A full deployment synchronizes the deployable portion of a local directory to a hosted site. It always creates an exact plan before any remote mutation.
 
-## Preview a deployment
+## Inspect a deployment plan
 
 ```bash
 zynohosting deploy example.com ./dist --dry-run
@@ -25,6 +25,50 @@ zynohosting deploy example.com ./dist --yes
 ```
 
 `deploy-site` is an alias for `deploy`.
+
+## Preview sites and promotion
+
+The default target is production, preserving existing scripts. Add `--preview` to synchronize
+the separate preview slot instead:
+
+```bash
+zynohosting deploy example.com ./dist --preview --dry-run
+zynohosting deploy example.com ./dist --preview --yes
+zynohosting sites get example.com
+```
+
+The plan and result identify the target and its URL. Preview keeps the site's existing stable
+`<username>.<cluster>.<vanity>` URL, backed by wildcard DNS/TLS. Its files start empty when the
+manager enables this feature. Uploading or editing them leaves production content unchanged.
+An older manager that does not explicitly grant the preview target is rejected before upload.
+
+To publish the current preview files to the production hostname:
+
+```bash
+zynohosting promote example.com --dry-run
+zynohosting promote example.com
+zynohosting promote example.com --yes --json
+```
+
+Promotion displays both URLs and asks for confirmation unless `--yes` or `--dry-run` is supplied.
+`--json` requires either of those options. `--timeout <seconds>` defaults to `900` for copying and
+waiting for serving reconciliation. The command reports success only when reconciliation succeeds;
+a failed or pending operation reports its ID. Inspect pending operations before submitting another
+promotion.
+
+Promotion copies the preview content that exists at apply time. A dry run or MCP plan does not
+freeze preview files. The manager checks that production still matches the deployment observed
+when planning; if it changed, create a fresh plan. Subsequent preview edits cannot change the copied
+production content. The manager retains previous content but has no new rollback/history API.
+
+Both slots use the same site identity, storage quota, PHP settings, sessions, and database. This
+feature isolates deployed files and does not copy application data. Symlinks and special files
+cannot be promoted. Copies count toward the site's storage quota.
+
+The CLI uses the manager's existing access-session protocol with `target: "preview"`, then
+`POST /v1/sites/{siteRef}/promote` with `expectedProductionDeploymentId` for promotion. It polls
+the returned `/reconciliations/{operationId}` operation. Individual-file and download commands
+continue to target production.
 
 ## How planning works
 
@@ -79,6 +123,7 @@ Always inspect the dry-run plan before using `--allow-empty`.
 | ---------------------------- | --------------------------------------------------------------------- |
 | `-y`, `--yes`                | Apply without prompting after displaying the plan.                    |
 | `--dry-run`                  | Display the exact plan without applying it.                           |
+| `--preview`                  | Synchronize the separate preview slot instead of production.          |
 | `--json`                     | Emit newline-delimited JSON events.                                   |
 | `--allow-empty`              | Permit an empty local sync scope to delete remote deployable content. |
 | `--ignore <pattern>`         | Add a gitignore-style exclusion; repeatable.                          |
@@ -105,4 +150,5 @@ Deploy JSON is an event stream rather than one final document. See [JSON and err
 
 ## Permission
 
-Planning and applying require `hosting.deploy`.
+Production deployments, preview deployments, and promotion require `hosting.deploy`. Promotion
+planning also reads site metadata with `hosting.sitesRead`. No additional login permission is needed.

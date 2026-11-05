@@ -145,7 +145,7 @@ Remote access remains independently constrained by tenant permissions and the sh
 
 Full deployments and downloads use separate planning and apply tools:
 
-1. the agent calls `plan_deploy` or `plan_download`;
+1. the agent calls `plan_deploy`, `plan_download`, or `plan_promote`;
 2. the MCP process stores the authorized plan in memory;
 3. the agent presents the plan for review;
 4. the agent calls the matching apply tool with the returned `planId`.
@@ -184,6 +184,8 @@ The server exposes eighteen tools:
 - `delete_file`
 - `plan_deploy`
 - `apply_deploy`
+- `plan_promote`
+- `apply_promote`
 - `plan_download`
 - `apply_download`
 

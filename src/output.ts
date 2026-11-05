@@ -2,7 +2,7 @@ import { createInterface } from 'node:readline/promises';
 
 import { DisplayOperation } from './deploy/coalesce.js';
 import { CliError } from './errors.js';
-import { ApplyResult, DeploymentOperation } from './protocol.js';
+import { ApplyResult, DeploymentOperation, DeploymentTarget } from './protocol.js';
 
 export class Output {
     constructor(
@@ -16,6 +16,8 @@ export class Output {
     }
 
     showPlan(input: {
+        target?: DeploymentTarget;
+        url?: string;
         fqdn: string;
         source: string;
         ignores: string[];
@@ -26,6 +28,8 @@ export class Output {
         const counts = countOperations(input.operations);
         if (this.json) {
             this.event('plan', {
+                target: input.target ?? 'production',
+                ...(input.url ? { url: input.url } : {}),
                 fqdn: input.fqdn,
                 source: input.source,
                 ignores: input.ignores,
@@ -37,7 +41,9 @@ export class Output {
             return;
         }
 
-        process.stdout.write(`\nDeploy ${input.fqdn} from ${input.source}\n\n`);
+        process.stdout.write(`\nDeploy ${input.fqdn} (${input.target ?? 'production'}) from ${input.source}\n`);
+        if (input.url) process.stdout.write(`URL: ${input.url}\n`);
+        process.stdout.write('\n');
         process.stdout.write(`Ignore sources: ${input.ignores.join(', ')}\n\n`);
         if (!input.displayOperations.length) {
             process.stdout.write('No changes.\n');
@@ -65,15 +71,16 @@ export class Output {
         }
     }
 
-    applied(result: ApplyResult): void {
+    applied(result: ApplyResult, target: DeploymentTarget = 'production', url?: string): void {
         if (this.json) {
-            this.event('result', result);
+            this.event('result', { ...result, target, ...(url ? { url } : {}) });
             return;
         }
         process.stdout.write(
-            `\nDeployed successfully: ${result.created} created, ${result.replaced} replaced, ${result.deleted} deleted ` +
+            `\nDeployed ${target} successfully: ${result.created} created, ${result.replaced} replaced, ${result.deleted} deleted ` +
                 `(${formatBytes(result.uploadedBytes)} uploaded in ${formatDuration(result.durationMs)}).\n`
         );
+        if (url) process.stdout.write(`URL: ${url}\n`);
     }
 
     dryRun(): void {
