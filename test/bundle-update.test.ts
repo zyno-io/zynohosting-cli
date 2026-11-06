@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { generateKeyPairSync, sign as signPayload } from 'node:crypto';
-import { chmod, mkdir, mkdtemp, readdir, readFile, truncate, writeFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { access, chmod, mkdir, mkdtemp, readdir, readFile, truncate, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -432,7 +433,7 @@ test('reports a download failure without throwing', async () => {
     assert.deepEqual(await listStagedRuntimes(staging), []);
 });
 
-test('survives an unwritable staging directory', async () => {
+test('survives an unwritable staging directory', async t => {
     const { staging } = await workspace();
     await mkdir(staging, { recursive: true });
     await chmod(staging, 0o500);
@@ -441,6 +442,13 @@ test('survives an unwritable staging directory', async () => {
     const descriptor = descriptorFor('0.6.0', payload, signature);
 
     try {
+        // Root and some filesystems bypass directory permission bits. Preserve this case for
+        // environments that enforce them; the blocked-path case below covers privileged CI too.
+        const writable = await access(staging, constants.W_OK).then(() => true, () => false);
+        if (writable) {
+            t.skip('this process can write through read-only directory permissions');
+            return;
+        }
         const outcome = await stageUpdate({
             descriptor,
             currentVersion: '0.4.5',
@@ -453,6 +461,25 @@ test('survives an unwritable staging directory', async () => {
     } finally {
         await chmod(staging, 0o700);
     }
+});
+
+test('survives a blocked staging directory even with elevated privileges', async () => {
+    const { staging } = await workspace();
+    await mkdir(staging, { recursive: true });
+    await writeFile(join(staging, 'versions'), 'blocks directory creation');
+    const payload = Buffer.from('export const marker = "0.6.0";');
+    const signature = sign(signedStatement('0.6.0', payload));
+    const descriptor = descriptorFor('0.6.0', payload, signature);
+    const outcome = await stageUpdate({
+        descriptor,
+        currentVersion: '0.4.5',
+        stagingDirectory: staging,
+        publicKeyPems: trusted,
+        packageName: 'p',
+        fetchImpl: fetchServing({ [descriptor.payloadUrl]: payload, [descriptor.signatureUrl]: signature })
+    });
+    assert.equal(outcome.status, 'failed');
+    assert.deepEqual(await listStagedRuntimes(staging), []);
 });
 
 test('staging the same version twice is a no-op', async () => {
