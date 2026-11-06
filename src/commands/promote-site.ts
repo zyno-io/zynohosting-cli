@@ -4,7 +4,7 @@ import { ManagerClient } from '../api/manager-client.js';
 import { ConfigOverrides, ResolvedConfig, resolveConfig } from '../config.js';
 import { CliError } from '../errors.js';
 import { Output } from '../output.js';
-import { AutomationSite, PromotionAccepted } from '../protocol.js';
+import { AutomationSite, PromotionAccepted, PREVIEW_RESOURCE_NOTICE } from '../protocol.js';
 import { normalizeSiteRef } from './deploy-site.js';
 
 export interface PromoteSiteOptions extends ConfigOverrides {
@@ -67,13 +67,15 @@ export function promotionSummary(plan: PreparedPromotion) {
         productionUrl: plan.productionUrl,
         previewUrl: plan.previewUrl,
         expectedProductionDeploymentId: plan.expectedProductionDeploymentId,
-        previewContent: 'Current preview content is copied when this plan is applied; planning does not freeze it.'
+        resourceNotice: PREVIEW_RESOURCE_NOTICE,
+        previewContent:
+            'At apply time, preview is renamed into production and replaced with an empty preview directory. Old production is archived, then purged by a background job.'
     };
 }
 
 export function applyPreparedPromotion(plan: PreparedPromotion, progress: (message: string) => void = () => {}): Promise<PromotionResult> {
     // Concurrent apply calls share one submission. Retain the accepted operation after timeout so
-    // a subsequent apply resumes polling instead of copying/publishing another deployment.
+    // a subsequent apply resumes polling instead of rotating the directories again.
     plan.inFlight ??= applyPromotion(plan, progress).finally(() => {
         delete plan.inFlight;
     });
@@ -83,7 +85,7 @@ export function applyPreparedPromotion(plan: PreparedPromotion, progress: (messa
 async function applyPromotion(plan: PreparedPromotion, progress: (message: string) => void): Promise<PromotionResult> {
     if (!plan.accepted) {
         if (Date.parse(plan.expiresAt) <= Date.now()) throw new CliError('Promotion plan expired; create a new plan', 6, 'plan_expired');
-        progress('Copying preview and queuing production reconciliation…');
+        progress('Queuing preview promotion and production reconciliation…');
         plan.accepted = await plan.manager.promoteSite(plan.site.id, plan.expectedProductionDeploymentId);
         plan.expiresAt = new Date(Date.now() + 60 * 60_000).toISOString();
     }
@@ -130,7 +132,7 @@ export async function promoteSite(siteRef: string, options: PromoteSiteOptions):
     if (options.json) process.stdout.write(`${JSON.stringify({ type: 'promotion_plan', ...summary })}\n`);
     else {
         process.stdout.write(`\nPromote ${plan.previewUrl} to ${plan.productionUrl}\n`);
-        process.stdout.write(`${summary.previewContent}\n`);
+        process.stdout.write(`${summary.previewContent}\n${summary.resourceNotice}\n`);
     }
     if (options.dryRun) {
         output.dryRun();

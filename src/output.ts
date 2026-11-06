@@ -2,7 +2,7 @@ import { createInterface } from 'node:readline/promises';
 
 import { DisplayOperation } from './deploy/coalesce.js';
 import { CliError } from './errors.js';
-import { ApplyResult, DeploymentOperation, DeploymentTarget } from './protocol.js';
+import { ApplyResult, DeploymentOperation, DeploymentTarget, PREVIEW_RESOURCE_NOTICE } from './protocol.js';
 
 export class Output {
     constructor(
@@ -29,6 +29,7 @@ export class Output {
         if (this.json) {
             this.event('plan', {
                 target: input.target ?? 'production',
+                ...(input.target === 'preview' ? { resourceNotice: PREVIEW_RESOURCE_NOTICE } : {}),
                 ...(input.url ? { url: input.url } : {}),
                 fqdn: input.fqdn,
                 source: input.source,
@@ -43,6 +44,7 @@ export class Output {
 
         process.stdout.write(`\nDeploy ${input.fqdn} (${input.target ?? 'production'}) from ${input.source}\n`);
         if (input.url) process.stdout.write(`URL: ${input.url}\n`);
+        if (input.target === 'preview') process.stdout.write(`${PREVIEW_RESOURCE_NOTICE}\n`);
         process.stdout.write('\n');
         process.stdout.write(`Ignore sources: ${input.ignores.join(', ')}\n\n`);
         if (!input.displayOperations.length) {
@@ -73,7 +75,12 @@ export class Output {
 
     applied(result: ApplyResult, target: DeploymentTarget = 'production', url?: string): void {
         if (this.json) {
-            this.event('result', { ...result, target, ...(url ? { url } : {}) });
+            this.event('result', {
+                ...result,
+                target,
+                ...(target === 'preview' ? { resourceNotice: PREVIEW_RESOURCE_NOTICE } : {}),
+                ...(url ? { url } : {})
+            });
             return;
         }
         process.stdout.write(

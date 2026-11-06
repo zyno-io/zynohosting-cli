@@ -29,10 +29,14 @@ export async function previewManager(t: { after(fn: () => unknown): void }) {
             production: {
                 deploymentId: state.productionId,
                 url: 'https://example.com',
-                directory: state.productionId ? `/deployments/${state.productionId}` : '/public_html'
+                directory: '/public_html'
             },
-            preview: { url: 'https://example-com.aspen.zynohosting.net', directory: '/preview_html' },
-            previousProductionDeploymentId: null
+            preview: {
+                url: 'https://example-com-preview.aspen.zynohosting.net',
+                directory: '/preview_html',
+                sharesDatabase: true,
+                sharesStorageQuota: true
+            }
         }
     });
     const operation = (status = 'queued') => ({
@@ -79,6 +83,7 @@ export async function previewManager(t: { after(fn: () => unknown): void }) {
                 state.promotions++;
                 state.productionId = releaseId;
                 state.productionContent = state.previewContent;
+                state.previewContent = '';
                 json({ result: site(), operation: operation() });
                 return;
             }

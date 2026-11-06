@@ -144,10 +144,10 @@ zynohosting promote example.com --yes
 the stable wildcard URL shown in the plan and site details. `--dry-run` only displays a plan for
 the chosen slot. Preview uploads never promote automatically.
 
-`promote` copies current preview files to a separate production deployment and waits for the
-manager's serving reconciliation. Later preview edits leave the promoted files unchanged. It
-retains the previous production content through the manager's existing storage model. PHP settings
-and databases remain shared; promotion does not copy databases. Both operations use the existing
+`promote` renames production to an archive and preview into production, then creates an empty
+preview directory. It waits for serving reconciliation, and a background job purges the archive.
+Preview has no separate database and uses the main site’s database. It shares the main site’s
+storage quota. Database changes from preview can affect the live site. Both operations use the existing
 `hosting.deploy` permission, alongside `hosting.sitesRead` for site inspection. See
 [preview and promotion details](docs/cli/deploy.md#preview-sites-and-promotion).
 

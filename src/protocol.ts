@@ -28,10 +28,11 @@ export const FALLBACK_MANDATORY_IGNORES = [
 
 export type HashAlgorithm = 'xxh3-128' | 'sha256';
 export type DeploymentTarget = 'production' | 'preview';
+export const PREVIEW_RESOURCE_NOTICE =
+    'Preview has no separate database and uses the main site’s database. It shares the main site’s storage quota. Database changes from preview can affect the live site.';
 export interface SiteDeployments {
     production: { deploymentId: string | null; url: string | null; directory: string };
-    preview: { url: string | null; directory: string };
-    previousProductionDeploymentId: string | null;
+    preview: { url: string | null; directory: string; sharesDatabase: boolean; sharesStorageQuota: boolean };
 }
 
 export interface ReconciliationOperation {
@@ -256,9 +257,12 @@ function parseSiteDeployments(value: unknown): SiteDeployments {
             url: url(production.url, 'production.url'),
             directory: string(production.directory, 'production.directory')
         },
-        preview: { url: url(preview.url, 'preview.url'), directory: string(preview.directory, 'preview.directory') },
-        previousProductionDeploymentId:
-            object.previousProductionDeploymentId === null ? null : uuid(object.previousProductionDeploymentId, 'previousProductionDeploymentId')
+        preview: {
+            url: url(preview.url, 'preview.url'),
+            directory: string(preview.directory, 'preview.directory'),
+            sharesDatabase: boolean(preview.sharesDatabase, 'preview.sharesDatabase'),
+            sharesStorageQuota: boolean(preview.sharesStorageQuota, 'preview.sharesStorageQuota')
+        }
     };
 }
 

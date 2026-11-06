@@ -76,9 +76,11 @@ test('MCP plans/applies preview uploads and promotion through the manager contra
 
     const planned = await client.callTool({ name: 'plan_deploy', arguments: { site: 'example.com', local_root: source, target: 'preview' } });
     assert.equal(planned.isError, undefined);
-    const plan = planned.structuredContent as { planId: string; target: string; url: string };
+    const plan = planned.structuredContent as { planId: string; target: string; url: string; resourceNotice: string };
     assert.equal(plan.target, 'preview');
-    assert.equal(plan.url, 'https://example-com.aspen.zynohosting.net');
+    assert.match(plan.resourceNotice, /no separate database/);
+    assert.match(plan.resourceNotice, /storage quota/);
+    assert.equal(plan.url, 'https://example-com-preview.aspen.zynohosting.net');
     assert.equal(fixture.state.productionContent, 'live');
     assert.equal(fixture.state.previewContent, 'preview-v1');
     const applied = await client.callTool({ name: 'apply_deploy', arguments: { plan_id: plan.planId } });
@@ -98,6 +100,7 @@ test('MCP plans/applies preview uploads and promotion through the manager contra
     assert.equal((promoted.structuredContent as { status: string }).status, 'succeeded');
     assert.equal(fixture.state.productionContent, 'new-preview');
     assert.equal(fixture.state.polls, 1);
+    assert.equal(fixture.state.previewContent, '');
     const replay = await client.callTool({ name: 'apply_promote', arguments: { plan_id: promotion.planId } });
     assert.equal(replay.isError, true);
     assert.equal(fixture.state.promotions, 1);

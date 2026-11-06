@@ -11,7 +11,7 @@ test('promote dry run reads the manager contract without changing content', asyn
     assert.equal(fixture.state.productionContent, 'live');
 });
 
-test('promotion copies current preview at apply and waits for the exact reconciliation', async t => {
+test('promotion rotates current preview into production at apply and waits for the exact reconciliation', async t => {
     const fixture = await previewManager(t);
     const plan = await preparePromotion('example.com', { apiUrl: fixture.baseUrl, apiKey: 'secret' });
     fixture.state.previewContent = 'edited-after-plan';
@@ -23,6 +23,7 @@ test('promotion copies current preview at apply and waits for the exact reconcil
     assert.equal(fixture.state.promotions, 1);
     assert.equal(fixture.state.polls, 1);
     assert.equal(fixture.state.productionContent, 'edited-after-plan');
+    assert.equal(fixture.state.previewContent, '');
     assert.deepEqual(fixture.bodies, [{ expectedProductionDeploymentId: null }]);
     assert(fixture.requests.includes(`POST /v1/sites/${siteId}/promote`));
 });

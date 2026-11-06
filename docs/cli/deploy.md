@@ -37,8 +37,8 @@ zynohosting deploy example.com ./dist --preview --yes
 zynohosting sites get example.com
 ```
 
-The plan and result identify the target and its URL. Preview keeps the site's existing stable
-`<username>.<cluster>.<vanity>` URL, backed by wildcard DNS/TLS. Its files start empty when the
+The plan and result identify the target and its URL. Preview keeps the site's separate stable
+`<username>-preview.<cluster>.<vanity>` URL, backed by wildcard DNS/TLS. Its files start empty when the
 manager enables this feature. Uploading or editing them leaves production content unchanged.
 An older manager that does not explicitly grant the preview target is rejected before upload.
 
@@ -51,19 +51,19 @@ zynohosting promote example.com --yes --json
 ```
 
 Promotion displays both URLs and asks for confirmation unless `--yes` or `--dry-run` is supplied.
-`--json` requires either of those options. `--timeout <seconds>` defaults to `900` for copying and
+`--json` requires either of those options. `--timeout <seconds>` defaults to `900` for promotion and
 waiting for serving reconciliation. The command reports success only when reconciliation succeeds;
 a failed or pending operation reports its ID. Inspect pending operations before submitting another
 promotion.
 
-Promotion copies the preview content that exists at apply time. A dry run or MCP plan does not
+Promotion renames the preview directory that exists at apply time into production. A dry run or MCP plan does not
 freeze preview files. The manager checks that production still matches the deployment observed
-when planning; if it changed, create a fresh plan. Subsequent preview edits cannot change the copied
-production content. The manager retains previous content but has no new rollback/history API.
+when planning; if it changed, create a fresh plan. A new empty preview directory is created after promotion. Old production is archived and
+purged by a background job. There is no deployment-history or rollback API.
 
-Both slots use the same site identity, storage quota, PHP settings, sessions, and database. This
-feature isolates deployed files and does not copy application data. Symlinks and special files
-cannot be promoted. Copies count toward the site's storage quota.
+Preview has no separate database and uses the main site’s database. It shares the main site’s
+storage quota, PHP settings, sessions, and identity. Database changes from preview can affect the
+live site. Archived production files count toward that same quota until the cleanup job purges them.
 
 The CLI uses the manager's existing access-session protocol with `target: "preview"`, then
 `POST /v1/sites/{siteRef}/promote` with `expectedProductionDeploymentId` for promotion. It polls

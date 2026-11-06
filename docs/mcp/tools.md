@@ -419,8 +419,8 @@ The plan must come from `plan_deploy` in the same MCP process and must still be 
 Reads the explicitly chosen site's current production deployment and both URLs, then stores a
 plan for up to 15 minutes in this MCP process. It does not change either slot. The result includes
 `planId`, `siteId`, `productionUrl`, `previewUrl`, `expectedProductionDeploymentId`, and expiry.
-Present both URLs before applying. Preview content is copied at apply time; planning does not
-freeze the preview files. Permission: `hosting.sitesRead`.
+Present both URLs and the shared-resource notice before applying. The preview directory becomes
+production at apply time; planning does not freeze preview files. Permission: `hosting.sitesRead`.
 
 ### `apply_promote`
 
@@ -428,15 +428,15 @@ freeze the preview files. Permission: `hosting.sitesRead`.
 { "plan_id": "c1224591-e7c0-4c44-b1ee-b8afc5676542" }
 ```
 
-Copies current preview to a separate production deployment through the manager's promote API,
-then waits for serving reconciliation before reporting success. The manager rejects production
+Renames production to archive and preview into production through the manager's promote API,
+creates an empty preview directory, and waits for serving reconciliation. A background job purges the archive. The manager rejects production
 changes since planning. Later preview edits leave the promoted files unchanged. A failed
 reconciliation is reported as a tool error; an accepted operation can be polled again by retrying
 the same plan for up to an hour. Successful apply consumes the plan. Unknown, expired, consumed,
 or other-process plan IDs are rejected. Permission: `hosting.deploy`.
 
-Promotion shares the site's PHP settings and database; it does not copy application data. The
-manager retains previous files without adding a new history/rollback API. See
+Preview has no separate database and uses the main site’s database. It shares the main site’s
+storage quota. Database changes from preview can affect the live site. There is no history/rollback API. See
 [the CLI feature details](../cli/deploy#preview-sites-and-promotion).
 
 ## Complete downloads

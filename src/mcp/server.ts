@@ -15,6 +15,7 @@ import { applyPreparedPromotion, preparePromotion, PreparedPromotion, promotionS
 import { ConfigOverrides, ResolvedConfig, resolveConfig } from '../config.js';
 import { CliError, errorMessage, HttpError } from '../errors.js';
 import { DELEGABLE_PERMISSION_KEYS, permissionCapabilityLines } from '../permissions.js';
+import { PREVIEW_RESOURCE_NOTICE } from '../protocol.js';
 import { registerFormsMcp } from './forms.js';
 import { AllowedLocalRoots } from './local-paths.js';
 import { UpdatePolicy } from './update-check.js';
@@ -31,7 +32,7 @@ const MAX_PENDING_PLANS = 16;
 // Policy that applies once this server is connected belongs here or in a tool description, not in
 // documentation the agent fetches before installing. The riskiest tools echo one line of it.
 const SERVER_INSTRUCTIONS = [
-    'Never infer a deployment domain from a repository, site content, organization name, or a similar available site. Before any site mutation, use an explicitly stated project domain or ask the user which domain they intend. Verify that domain with list_sites or get_site. If it is unavailable in the current login context, do not substitute another site; explain that access is unavailable and offer the login tool so the user can switch context. Use plan_deploy and present its operations and target before apply_deploy. Production is the default; target preview updates only preview. Use plan_promote and present both URLs before apply_promote; promotion copies the current preview at apply time.',
+    'Never infer a deployment domain from a repository, site content, organization name, or a similar available site. Before any site mutation, use an explicitly stated project domain or ask the user which domain they intend. Verify that domain with list_sites or get_site. If it is unavailable in the current login context, do not substitute another site; explain that access is unavailable and offer the login tool so the user can switch context. Use plan_deploy and present its operations and target before apply_deploy. Production is the default; target preview updates only preview. Use plan_promote and present both URLs before apply_promote; promotion renames the current preview into production and resets preview to empty. Preview has no separate database and shares the main site’s database and storage quota.',
     'When connecting a page to a form, read the existing page first and preserve its markup, layout, and styling rather than replacing it with a generic form. Allow that page’s exact origin, and follow the response contract and the jsonScript or capScript returned with the form. Read an existing form with describe_form before update_form and edit it in place rather than creating a second form. If ZynoForms cannot represent a field, validation rule, choice, or bot protection exactly, explain the limitation and ask the user how to proceed instead of dropping it.'
 ].join(' ');
 
@@ -298,6 +299,7 @@ export async function createHostingMcpServer(options: McpServerOptions): Promise
                 planId: plan.finalPlan.planId,
                 site: plan.fqdn,
                 target: plan.target,
+                ...(plan.target === 'preview' ? { resourceNotice: PREVIEW_RESOURCE_NOTICE } : {}),
                 ...(plan.session.url ? { url: plan.session.url } : {}),
                 source: plan.source,
                 expiresAt: earliest(plan.finalPlan.expiresAt, plan.session.expiresAt),
@@ -322,7 +324,12 @@ export async function createHostingMcpServer(options: McpServerOptions): Promise
             if (!plan) throw new CliError('Deployment plan is unknown or expired; create a new plan', 6, 'plan_expired');
             const applied = await applyPreparedDeployment(plan);
             deployments.delete(plan_id);
-            return result({ ...applied, target: plan.target, ...(plan.session.url ? { url: plan.session.url } : {}) });
+            return result({
+                ...applied,
+                target: plan.target,
+                ...(plan.target === 'preview' ? { resourceNotice: PREVIEW_RESOURCE_NOTICE } : {}),
+                ...(plan.session.url ? { url: plan.session.url } : {})
+            });
         }
     );
 
@@ -331,7 +338,7 @@ export async function createHostingMcpServer(options: McpServerOptions): Promise
         {
             title: 'Plan preview promotion to production',
             description:
-                'Inspect the explicitly chosen site and store a promotion plan with its preview/production URLs and current production deployment. No content changes. Preview content is copied at apply time, so this plan does not freeze preview files. Requires hosting.sitesRead; applying also requires hosting.deploy.',
+                'Inspect the explicitly chosen site and store a promotion plan with its preview/production URLs and current production deployment. No content changes. At apply time preview is renamed into production, old production is archived for background deletion, and preview is reset to empty. Preview has no separate database and shares the main site’s database and storage quota. Requires hosting.sitesRead; applying also requires hosting.deploy.',
             inputSchema: { site: z.string().min(1) },
             annotations: { readOnlyHint: true, openWorldHint: false }
         },
@@ -350,7 +357,7 @@ export async function createHostingMcpServer(options: McpServerOptions): Promise
         {
             title: 'Promote preview to production',
             description:
-                'Apply a plan_promote plan from this process. Copies current preview, guards against changes to the planned production deployment, and waits for serving reconciliation. A retry after acceptance resumes the same reconciliation. Requires hosting.deploy.',
+                'Apply a plan_promote plan from this process. Renames current preview into production and resets preview to empty, guards against changes to the planned production deployment, and waits for serving reconciliation. A retry after acceptance resumes the same reconciliation. Requires hosting.deploy.',
             inputSchema: { plan_id: z.string().min(1) },
             annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false }
         },
@@ -388,6 +395,7 @@ export async function createHostingMcpServer(options: McpServerOptions): Promise
                 planId: plan.planId,
                 site,
                 target: plan.target,
+                ...(plan.target === 'preview' ? { resourceNotice: PREVIEW_RESOURCE_NOTICE } : {}),
                 scope: plan.scope,
                 expiresAt: plan.expiresAt
             });
