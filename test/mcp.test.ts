@@ -186,6 +186,7 @@ test('serves site metadata and downloads files only inside allowed roots', async
         assert.deepEqual(tools.tools.map(tool => tool.name).sort(), [
             'apply_deploy',
             'apply_download',
+            'apply_promote',
             'create_basic_form',
             'delete_file',
             'describe_form',
@@ -198,6 +199,7 @@ test('serves site metadata and downloads files only inside allowed roots', async
             'login',
             'plan_deploy',
             'plan_download',
+            'plan_promote',
             'put_file',
             'update_form',
             'update_form_bot_protection',

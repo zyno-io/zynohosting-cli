@@ -93,8 +93,10 @@ const tools = [
     { name: 'get_file', description: 'Download one remote file' },
     { name: 'put_file', description: 'Upload one local file' },
     { name: 'delete_file', description: 'Delete one remote file' },
-    { name: 'plan_deploy', description: 'Plan a full deployment for review' },
+    { name: 'plan_deploy', description: 'Plan a production or preview deployment for review' },
     { name: 'apply_deploy', description: 'Apply a reviewed deployment plan' },
+    { name: 'plan_promote', description: 'Plan preview promotion to production for review' },
+    { name: 'apply_promote', description: 'Apply a reviewed preview promotion plan' },
     { name: 'plan_download', description: 'Plan a full download for review' },
     { name: 'apply_download', description: 'Apply a reviewed download plan' }
 ];

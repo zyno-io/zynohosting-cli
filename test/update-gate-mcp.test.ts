@@ -42,7 +42,7 @@ test('every tool refuses to run when an update is required', async () => {
 
     try {
         const { tools } = await client.listTools();
-        assert.equal(tools.length, 18, 'expected the full tool surface to be registered');
+        assert.equal(tools.length, 20, 'expected the full tool surface to be registered');
 
         // Tools registered in forms.ts are gated by the same wrapper, so check one
         // of those alongside hosting tools and the unauthenticated login. Arguments
@@ -53,6 +53,8 @@ test('every tool refuses to run when an update is required', async () => {
             ['list_sites', {}],
             ['list_forms', {}],
             ['plan_deploy', { site: 'example.com', local_root: '/tmp/does-not-need-to-exist' }],
+            ['plan_promote', { site: 'example.com' }],
+            ['apply_promote', { plan_id: 'not-a-plan' }],
             ['delete_file', { site: 'example.com', remote_path: 'index.html' }]
         ];
 

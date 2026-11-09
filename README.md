@@ -4,7 +4,8 @@
 
 - list sites authorized for the current tenant credential;
 - inspect, download, upload, and delete individual files;
-- preview and apply complete manifest-driven deployments;
+- plan and apply complete deployments to production or an isolated preview slot;
+- promote current preview content to production;
 - download a complete deployable snapshot or, with the extra permission, all user content;
 - discover, create, inspect, edit, embed, and configure published ZynoForms;
 - expose the same operations to agents through a local stdio MCP server.
@@ -129,6 +130,29 @@ The mandatory deployment scope excludes platform-managed configuration, uploads,
 
 An empty local deployment requires `--allow-empty` before it may delete the remote deployable scope.
 
+## Preview and promote
+
+```bash
+zynohosting deploy example.com ./dist --preview --dry-run
+zynohosting deploy example.com ./dist --preview --yes
+zynohosting sites get example.com
+zynohosting promote example.com --dry-run
+zynohosting promote example.com --yes
+```
+
+`deploy` still targets production by default. `--preview` writes only the preview slot, served at
+the URL shown in the plan and site details. Preview uploads never promote automatically.
+
+`promote` renames production to an archive and preview into production, then creates an empty
+preview. It waits for serving reconciliation; a background job purges the archive. Nothing is
+copied. Promotion is blocked if production has `wp-config.php` and preview does not; `--force`
+explicitly bypasses only that check, and `--yes` only skips the confirmation prompt.
+
+Preview has no separate database and uses the main site’s database. It shares the main site’s
+storage quota. Database changes from preview can affect the live site. Both operations use the
+existing `hosting.deploy` permission, alongside `hosting.sitesRead` for site inspection. See
+[preview and promotion details](docs/cli/deploy.md#preview-sites-and-promotion).
+
 ## Complete download
 
 The default snapshot mirrors the deployable scope:
@@ -209,6 +233,8 @@ The MCP tools are:
 - `delete_file`
 - `plan_deploy`
 - `apply_deploy`
+- `plan_promote`
+- `apply_promote`
 - `plan_download`
 - `apply_download`
 
@@ -226,7 +252,7 @@ The tenant credential is limited by explicit Hosting and Forms permissions:
 | `hosting.filesRead`         | List files and download individual files                  |
 | `hosting.filesWrite`        | Create and replace individual files                       |
 | `hosting.filesDelete`       | Delete individual files                                   |
-| `hosting.deploy`            | Plan and apply full deployments                           |
+| `hosting.deploy`            | Deploy production/preview content and promote preview     |
 | `hosting.download`          | Download the deployable snapshot                          |
 | `hosting.downloadSensitive` | Include protected and user-generated content              |
 | `hosting.analyticsRead`     | Read hosting analytics                                    |

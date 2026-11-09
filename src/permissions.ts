@@ -22,7 +22,7 @@ export const PERMISSION_CAPABILITIES: Record<DelegablePermissionKey, string> = {
     'hosting.filesRead': 'list files and read individual files',
     'hosting.filesWrite': 'create and replace individual files',
     'hosting.filesDelete': 'delete individual files',
-    'hosting.deploy': 'plan and apply full deployments',
+    'hosting.deploy': 'plan and apply production or preview deployments, and promote preview to production',
     'hosting.download': 'download the deployable snapshot',
     'hosting.downloadSensitive': 'include protected and user-generated content in a download',
     'hosting.analyticsRead': 'read hosting analytics',

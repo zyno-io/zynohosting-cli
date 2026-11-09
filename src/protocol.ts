@@ -27,6 +27,25 @@ export const FALLBACK_MANDATORY_IGNORES = [
 ] as const;
 
 export type HashAlgorithm = 'xxh3-128' | 'sha256';
+export type DeploymentTarget = 'production' | 'preview';
+export const PREVIEW_RESOURCE_NOTICE =
+    'Preview has no separate database and uses the main site’s database. It shares the main site’s storage quota. Database changes from preview can affect the live site.';
+export interface SiteDeployments {
+    production: { deploymentId: string | null; url: string | null; directory: string };
+    preview: { url: string | null; directory: string; sharesDatabase: boolean; sharesStorageQuota: boolean };
+}
+
+export interface ReconciliationOperation {
+    id: string;
+    status: 'queued' | 'applying' | 'retrying' | 'succeeded' | 'failed';
+    statusUrl: string;
+    lastError: string | null;
+}
+
+export interface PromotionAccepted {
+    result: AutomationSite;
+    operation: ReconciliationOperation;
+}
 export type OperationKind = 'create' | 'replace' | 'delete';
 export type AgentAccessScope =
     | 'deploy:inventory'
@@ -45,6 +64,8 @@ export interface DeploymentSession {
     baseUrl: string;
     accessToken: string;
     expiresAt: string;
+    target?: DeploymentTarget;
+    url?: string;
 }
 
 export interface AutomationSite {
@@ -52,6 +73,7 @@ export interface AutomationSite {
     fqdn: string;
     status: string;
     phpVersion: string | null;
+    deployments?: SiteDeployments;
     hostnames?: Array<{ name: string; type: string }>;
 }
 
@@ -65,6 +87,7 @@ export interface AccessSession {
     scopes: AgentAccessScope[];
     accessToken: string;
     expiresAt: string;
+    target?: DeploymentTarget;
 }
 
 export type ManagedFileEntryType = 'file' | 'directory' | 'symlink' | 'other';
@@ -183,7 +206,8 @@ export function parseAccessSession(value: unknown): AccessSession {
         },
         scopes: array(object.scopes, 'scopes').map((scope, index) => accessScope(scope, `scopes[${index}]`)),
         accessToken: string(object.accessToken, 'accessToken'),
-        expiresAt: isoDate(object.expiresAt, 'expiresAt')
+        expiresAt: isoDate(object.expiresAt, 'expiresAt'),
+        ...(object.target === undefined ? {} : { target: deploymentTarget(object.target) })
     };
     if (result.protocolVersion !== PROTOCOL_VERSION) {
         throw new CliError(`Manager selected unsupported deployment protocol ${result.protocolVersion}`, 5, 'unsupported_protocol');
@@ -212,8 +236,51 @@ export function parseAutomationSite(value: unknown): AutomationSite {
         fqdn: string(object.fqdn ?? object.primaryHostname, 'site.fqdn'),
         status: string(object.status, 'site.status'),
         phpVersion: object.phpVersion === null ? null : string(object.phpVersion, 'site.phpVersion'),
-        ...(hostnames === undefined ? {} : { hostnames })
+        ...(hostnames === undefined ? {} : { hostnames }),
+        ...(object.deployments === undefined ? {} : { deployments: parseSiteDeployments(object.deployments) })
     };
+}
+
+function deploymentTarget(value: unknown): DeploymentTarget {
+    if (value !== 'production' && value !== 'preview') throw new CliError('Invalid deployment target', 5, 'invalid_manager_response');
+    return value;
+}
+
+function parseSiteDeployments(value: unknown): SiteDeployments {
+    const object = record(value, 'deployments');
+    const production = record(object.production, 'deployments.production');
+    const preview = record(object.preview, 'deployments.preview');
+    const url = (value: unknown, field: string) => (value === null ? null : safeEndpoint(value, field));
+    return {
+        production: {
+            deploymentId: production.deploymentId === null ? null : uuid(production.deploymentId, 'production.deploymentId'),
+            url: url(production.url, 'production.url'),
+            directory: string(production.directory, 'production.directory')
+        },
+        preview: {
+            url: url(preview.url, 'preview.url'),
+            directory: string(preview.directory, 'preview.directory'),
+            sharesDatabase: boolean(preview.sharesDatabase, 'preview.sharesDatabase'),
+            sharesStorageQuota: boolean(preview.sharesStorageQuota, 'preview.sharesStorageQuota')
+        }
+    };
+}
+
+export function parseReconciliation(value: unknown): ReconciliationOperation {
+    const object = record(value, 'reconciliation');
+    const status = object.status;
+    if (status !== 'queued' && status !== 'applying' && status !== 'retrying' && status !== 'succeeded' && status !== 'failed') {
+        throw new CliError('Invalid reconciliation status', 5, 'invalid_manager_response');
+    }
+    const id = uuid(object.id, 'operation.id');
+    const statusUrl = string(object.statusUrl, 'operation.statusUrl');
+    if (statusUrl !== `/reconciliations/${id}`) throw new CliError('Invalid reconciliation status URL', 5, 'invalid_manager_response');
+    return { id, status, statusUrl, lastError: object.lastError === null ? null : string(object.lastError, 'operation.lastError') };
+}
+
+export function parsePromotionAccepted(value: unknown): PromotionAccepted {
+    const object = record(value, 'promotion');
+    return { result: parseAutomationSite(object.result), operation: parseReconciliation(object.operation) };
 }
 
 export function parseFileList(value: unknown): FileListResponse {

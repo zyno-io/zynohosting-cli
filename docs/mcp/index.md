@@ -143,9 +143,9 @@ Remote access remains independently constrained by tenant permissions and the sh
 
 ## Plan and apply lifecycle
 
-Full deployments and downloads use separate planning and apply tools:
+Full deployments, downloads, and preview promotions use separate planning and apply tools:
 
-1. the agent calls `plan_deploy` or `plan_download`;
+1. the agent calls `plan_deploy`, `plan_download`, or `plan_promote`;
 2. the MCP process stores the authorized plan in memory;
 3. the agent presents the plan for review;
 4. the agent calls the matching apply tool with the returned `planId`.
@@ -153,7 +153,7 @@ Full deployments and downloads use separate planning and apply tools:
 Plans:
 
 - contain no exposed bearer token in the tool result;
-- expire with their short-lived access session;
+- expire with their short-lived access session (promotion plans after 15 minutes);
 - are removed after a successful apply;
 - do not survive an MCP server restart;
 - are limited to 16 pending plans per server process.
@@ -166,7 +166,7 @@ After the user names a domain, the agent verifies it with `list_sites` or `get_s
 
 ## Available tools
 
-The server exposes eighteen tools:
+The server exposes twenty tools:
 
 - `login`
 - `list_sites`
@@ -184,6 +184,8 @@ The server exposes eighteen tools:
 - `delete_file`
 - `plan_deploy`
 - `apply_deploy`
+- `plan_promote`
+- `apply_promote`
 - `plan_download`
 - `apply_download`
 

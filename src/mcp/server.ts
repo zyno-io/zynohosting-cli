@@ -11,9 +11,11 @@ import { applyPreparedDeployment, prepareDeployment, PreparedDeployment } from '
 import { applyDownload, prepareDownload, PreparedDownload } from '../commands/download-site.js';
 import { createFileClient, purgeSiteCacheAfterMutation, writeResponseAtomically } from '../commands/files.js';
 import { login, LoginDependencies } from '../commands/login.js';
+import { applyPreparedPromotion, preparePromotion, PreparedPromotion, promotionSummary } from '../commands/promote-site.js';
 import { ConfigOverrides, ResolvedConfig, resolveConfig } from '../config.js';
 import { CliError, errorMessage, HttpError } from '../errors.js';
 import { DELEGABLE_PERMISSION_KEYS, permissionCapabilityLines } from '../permissions.js';
+import { PREVIEW_RESOURCE_NOTICE } from '../protocol.js';
 import { registerFormsMcp } from './forms.js';
 import { AllowedLocalRoots } from './local-paths.js';
 import { UpdatePolicy } from './update-check.js';
@@ -30,13 +32,14 @@ const MAX_PENDING_PLANS = 16;
 // Policy that applies once this server is connected belongs here or in a tool description, not in
 // documentation the agent fetches before installing. The riskiest tools echo one line of it.
 const SERVER_INSTRUCTIONS = [
-    'Never infer a deployment domain from a repository, site content, organization name, or a similar available site. Before any site mutation, use an explicitly stated project domain or ask the user which domain they intend. Verify that domain with list_sites or get_site. If it is unavailable in the current login context, do not substitute another site; explain that access is unavailable and offer the login tool so the user can switch context. Use plan_deploy and present its operations before apply_deploy.',
+    'Never infer a deployment domain from a repository, site content, organization name, or a similar available site. Before any site mutation, use an explicitly stated project domain or ask the user which domain they intend. Verify that domain with list_sites or get_site. If it is unavailable in the current login context, do not substitute another site; explain that access is unavailable and offer the login tool so the user can switch context. Use plan_deploy and present its operations and target before apply_deploy. Production is the default; target preview updates only preview. Use plan_promote and present both URLs before apply_promote; promotion renames the current preview into production and resets preview to empty. Preview has no separate database and shares the main site’s database and storage quota. Only set force to true when the user explicitly requests bypassing the wp-config.php guard; never retry a blocked promotion with force automatically.',
     'When connecting a page to a form, read the existing page first and preserve its markup, layout, and styling rather than replacing it with a generic form. Allow that page’s exact origin, and follow the response contract and the jsonScript or capScript returned with the form. Read an existing form with describe_form before update_form and edit it in place rather than creating a second form. If ZynoForms cannot represent a field, validation rule, choice, or bot protection exactly, explain the limitation and ask the user how to proceed instead of dropping it.'
 ].join(' ');
 
 export async function createHostingMcpServer(options: McpServerOptions): Promise<McpServer> {
     const deployments = new Map<string, PreparedDeployment>();
     const downloads = new Map<string, PreparedDownload>();
+    const promotions = new Map<string, PreparedPromotion>();
     const server = new McpServer(
         { name: 'io.github.zyno-io/zynohosting', version: options.version },
         { capabilities: { logging: {} }, instructions: SERVER_INSTRUCTIONS }
@@ -54,6 +57,7 @@ export async function createHostingMcpServer(options: McpServerOptions): Promise
         () => {
             deployments.clear();
             downloads.clear();
+            promotions.clear();
         }
     );
     server.server.onclose = () => authentication.close();
@@ -258,19 +262,20 @@ export async function createHostingMcpServer(options: McpServerOptions): Promise
         {
             title: 'Plan a full site deployment',
             description:
-                'Build and store an exact deployment plan for the domain the user explicitly chose. Never guess a site from the project or select a similar authorized domain. This does not change the hosted site.',
+                'Build and store an exact deployment plan for the domain the user explicitly chose. target defaults to production; choose preview to update only its isolated preview deployment. Never guess a site from the project or select a similar authorized domain. This does not change hosted content.',
             inputSchema: {
                 site: z.string().min(1),
                 local_root: z.string().min(1).describe('Absolute local directory; inside an MCP root when roots are configured'),
+                target: z.enum(['production', 'preview']).default('production'),
                 ignore: z.array(z.string()).default([]),
                 ignore_file: z.string().optional(),
                 allow_empty: z.boolean().default(false)
             },
             annotations: { readOnlyHint: true, openWorldHint: false }
         },
-        async ({ site, local_root, ignore, ignore_file, allow_empty }) => {
-            purgeExpired(deployments, downloads);
-            requirePlanCapacity(deployments, downloads);
+        async ({ site, local_root, target, ignore, ignore_file, allow_empty }) => {
+            purgeExpired(deployments, downloads, promotions);
+            requirePlanCapacity(deployments, downloads, promotions);
             const source = await options.roots.existing(local_root);
             const info = await lstat(source);
             if (!info.isDirectory() || info.isSymbolicLink()) throw new CliError('Deployment source is not a regular directory', 2, 'invalid_source');
@@ -281,6 +286,7 @@ export async function createHostingMcpServer(options: McpServerOptions): Promise
                 {
                     ...options,
                     yes: true,
+                    preview: target === 'preview',
                     allowEmpty: allow_empty,
                     ...(ignore.length ? { ignore } : {}),
                     ...(ignore_file ? { ignoreFile: await options.roots.existing(ignore_file) } : {})
@@ -292,6 +298,9 @@ export async function createHostingMcpServer(options: McpServerOptions): Promise
             return result({
                 planId: plan.finalPlan.planId,
                 site: plan.fqdn,
+                target: plan.target,
+                ...(plan.target === 'preview' ? { resourceNotice: PREVIEW_RESOURCE_NOTICE } : {}),
+                ...(plan.session.url ? { url: plan.session.url } : {}),
                 source: plan.source,
                 expiresAt: earliest(plan.finalPlan.expiresAt, plan.session.expiresAt),
                 operations: plan.finalPlan.operations,
@@ -310,12 +319,58 @@ export async function createHostingMcpServer(options: McpServerOptions): Promise
             annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false }
         },
         async ({ plan_id }) => {
-            purgeExpired(deployments, downloads);
+            purgeExpired(deployments, downloads, promotions);
             const plan = deployments.get(plan_id);
             if (!plan) throw new CliError('Deployment plan is unknown or expired; create a new plan', 6, 'plan_expired');
             const applied = await applyPreparedDeployment(plan);
             deployments.delete(plan_id);
-            return result(applied);
+            return result({
+                ...applied,
+                target: plan.target,
+                ...(plan.target === 'preview' ? { resourceNotice: PREVIEW_RESOURCE_NOTICE } : {}),
+                ...(plan.session.url ? { url: plan.session.url } : {})
+            });
+        }
+    );
+
+    server.registerTool(
+        'plan_promote',
+        {
+            title: 'Plan preview promotion to production',
+            description:
+                'Inspect the explicitly chosen site and store a promotion plan with its preview/production URLs and current production deployment. No content changes. At apply time preview is renamed into production, old production is archived for background deletion, and preview is reset to empty. Preview has no separate database and shares the main site’s database and storage quota. Promotion is blocked if production has wp-config.php and preview does not; force must be explicitly selected when planning to bypass this check. Requires hosting.sitesRead; applying also requires hosting.deploy.',
+            inputSchema: {
+                site: z.string().min(1),
+                force: z.boolean().default(false).describe('Explicitly bypass the missing preview wp-config.php promotion guard')
+            },
+            annotations: { readOnlyHint: true, openWorldHint: false }
+        },
+        async ({ site, force }) => {
+            purgeExpired(deployments, downloads, promotions);
+            requirePlanCapacity(deployments, downloads, promotions);
+            const { config } = await authentication.clients();
+            const plan = await preparePromotion(site, { ...options, force }, config);
+            promotions.set(plan.planId, plan);
+            return result(promotionSummary(plan));
+        }
+    );
+
+    server.registerTool(
+        'apply_promote',
+        {
+            title: 'Promote preview to production',
+            description:
+                'Apply a plan_promote plan from this process. Renames current preview into production and resets preview to empty, guards against changes to the planned production deployment, and waits for serving reconciliation. A retry after acceptance resumes the same reconciliation. Requires hosting.deploy.',
+            inputSchema: { plan_id: z.string().min(1) },
+            annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false }
+        },
+        async ({ plan_id }) => {
+            purgeExpired(deployments, downloads, promotions);
+            const plan = promotions.get(plan_id);
+            if (!plan) throw new CliError('Promotion plan is unknown or expired; create a new plan', 6, 'plan_expired');
+            const promoted = await applyPreparedPromotion(plan);
+            promotions.delete(plan_id);
+            return result(promoted);
         }
     );
 
@@ -333,8 +388,8 @@ export async function createHostingMcpServer(options: McpServerOptions): Promise
             annotations: { readOnlyHint: true, openWorldHint: false }
         },
         async ({ site, local_root, include_sensitive }) => {
-            purgeExpired(deployments, downloads);
-            requirePlanCapacity(deployments, downloads);
+            purgeExpired(deployments, downloads, promotions);
+            requirePlanCapacity(deployments, downloads, promotions);
             const target = await options.roots.destination(local_root);
             const { config } = await authentication.clients();
             const plan = await prepareDownload(site, target, { ...options, sensitive: include_sensitive, yes: true }, config);
@@ -343,6 +398,7 @@ export async function createHostingMcpServer(options: McpServerOptions): Promise
                 planId: plan.planId,
                 site,
                 target: plan.target,
+                ...(plan.target === 'preview' ? { resourceNotice: PREVIEW_RESOURCE_NOTICE } : {}),
                 scope: plan.scope,
                 expiresAt: plan.expiresAt
             });
@@ -358,7 +414,7 @@ export async function createHostingMcpServer(options: McpServerOptions): Promise
             annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }
         },
         async ({ plan_id }) => {
-            purgeExpired(deployments, downloads);
+            purgeExpired(deployments, downloads, promotions);
             const plan = downloads.get(plan_id);
             if (!plan) throw new CliError('Download plan is unknown or expired; create a new plan', 6, 'plan_expired');
             const downloaded = await applyDownload(plan);
@@ -640,7 +696,11 @@ function result(value: unknown) {
     };
 }
 
-function purgeExpired(deployments: Map<string, PreparedDeployment>, downloads: Map<string, PreparedDownload>): void {
+function purgeExpired(
+    deployments: Map<string, PreparedDeployment>,
+    downloads: Map<string, PreparedDownload>,
+    promotions: Map<string, PreparedPromotion>
+): void {
     const now = Date.now();
     for (const [id, plan] of deployments) {
         if (Date.parse(plan.finalPlan.expiresAt) <= now || Date.parse(plan.session.expiresAt) <= now) deployments.delete(id);
@@ -648,10 +708,17 @@ function purgeExpired(deployments: Map<string, PreparedDeployment>, downloads: M
     for (const [id, plan] of downloads) {
         if (Date.parse(plan.expiresAt) <= now) downloads.delete(id);
     }
+    for (const [id, plan] of promotions) {
+        if (!plan.inFlight && Date.parse(plan.expiresAt) <= now) promotions.delete(id);
+    }
 }
 
-function requirePlanCapacity(deployments: Map<string, PreparedDeployment>, downloads: Map<string, PreparedDownload>): void {
-    if (deployments.size + downloads.size >= MAX_PENDING_PLANS) {
+function requirePlanCapacity(
+    deployments: Map<string, PreparedDeployment>,
+    downloads: Map<string, PreparedDownload>,
+    promotions: Map<string, PreparedPromotion>
+): void {
+    if (deployments.size + downloads.size + promotions.size >= MAX_PENDING_PLANS) {
         throw new CliError(`The MCP server already has ${MAX_PENDING_PLANS} pending plans; apply them or wait for expiry`, 6, 'plan_limit');
     }
 }

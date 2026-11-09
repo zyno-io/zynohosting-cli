@@ -33,3 +33,14 @@ test('advertises project-local MCP installation', () => {
     assert.match(install.helpInformation(), /--project <path>/);
     assert.match(install.helpInformation(), /--agent <agent>/);
 });
+
+test('advertises preview uploads and explicit promotion with planning options', () => {
+    const program = createProgram();
+    const deploy = program.commands.find(command => command.name() === 'deploy');
+    assert(deploy);
+    assert.match(deploy.helpInformation(), /--preview/);
+    const promote = program.commands.find(command => command.name() === 'promote');
+    assert(promote);
+    assert.match(promote.helpInformation(), /--dry-run/);
+    assert.match(promote.helpInformation(), /--yes/);
+});

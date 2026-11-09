@@ -9,6 +9,7 @@ import { downloadSite, DownloadSiteOptions } from './commands/download-site.js';
 import { deleteFile, getFile, listFiles, putFile } from './commands/files.js';
 import { login, LoginOptions } from './commands/login.js';
 import { logout, LogoutOptions } from './commands/logout.js';
+import { promoteSite, PromoteSiteOptions } from './commands/promote-site.js';
 import { getSite, listSites } from './commands/sites.js';
 import { installHostingMcp, McpInstallAgent } from './mcp/install.js';
 import { startHostingMcp } from './mcp/start.js';
@@ -197,12 +198,13 @@ export function createProgram(): Command {
     program
         .command('deploy')
         .alias('deploy-site')
-        .description('preview and synchronize a local directory to a hosted site')
+        .description('plan and synchronize a local directory to production or preview')
         .argument('<site>', 'site ID or hostname')
         .argument('[directory]', 'local directory', '.')
         .addOption(environmentOption())
         .option('-y, --yes', 'apply without prompting after displaying the plan')
         .option('--dry-run', 'display the exact plan without applying it')
+        .option('--preview', 'deploy to the isolated preview slot')
         .option('--json', 'emit newline-delimited JSON output')
         .option('--allow-empty', 'allow an empty local sync scope to delete remote content')
         .option('--ignore <pattern>', 'add a gitignore-style exclusion', collect, [])
@@ -215,6 +217,20 @@ export function createProgram(): Command {
                 ...commandContext(program, commandOptions),
                 timeoutSeconds: commandOptions.timeout
             });
+        });
+
+    program
+        .command('promote')
+        .description('publish the current preview deployment to production')
+        .argument('<site>', 'site ID or hostname')
+        .option('--force', 'allow promotion when production has wp-config.php and preview does not')
+        .addOption(environmentOption())
+        .option('-y, --yes', 'promote without prompting after displaying the plan')
+        .option('--dry-run', 'show the promotion target without changing production')
+        .option('--json', 'emit newline-delimited JSON output')
+        .addOption(new Option('--timeout <seconds>', 'promotion and reconciliation timeout').argParser(positiveInteger).default(900))
+        .action(async (siteRef: string, commandOptions: PromoteSiteOptions & { timeout: number }) => {
+            await promoteSite(siteRef, { ...commandContext(program, commandOptions), ...commandOptions, timeoutSeconds: commandOptions.timeout });
         });
 
     program
