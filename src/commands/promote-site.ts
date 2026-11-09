@@ -8,6 +8,7 @@ import { AutomationSite, PromotionAccepted, PREVIEW_RESOURCE_NOTICE } from '../p
 import { normalizeSiteRef } from './deploy-site.js';
 
 export interface PromoteSiteOptions extends ConfigOverrides {
+    force?: boolean;
     yes?: boolean;
     dryRun?: boolean;
     json?: boolean;
@@ -24,6 +25,7 @@ export interface PromotionResult {
 }
 
 export interface PreparedPromotion {
+    force: boolean;
     planId: string;
     expiresAt: string;
     site: AutomationSite;
@@ -47,6 +49,7 @@ export async function preparePromotion(siteRef: string, options: PromoteSiteOpti
     }
     if (site.status !== 'active') throw new CliError('Only an active site can be promoted', 2, 'site_inactive');
     return {
+        force: options.force === true,
         planId: randomUUID(),
         expiresAt: new Date(Date.now() + 15 * 60_000).toISOString(),
         site,
@@ -67,6 +70,10 @@ export function promotionSummary(plan: PreparedPromotion) {
         productionUrl: plan.productionUrl,
         previewUrl: plan.previewUrl,
         expectedProductionDeploymentId: plan.expectedProductionDeploymentId,
+        force: plan.force,
+        ...(plan.force
+            ? { forceWarning: 'Forced promotion can remove WordPress configuration from production. This bypasses the missing wp-config.php guard.' }
+            : {}),
         resourceNotice: PREVIEW_RESOURCE_NOTICE,
         previewContent:
             'At apply time, preview is renamed into production and replaced with an empty preview directory. Old production is archived, then purged by a background job.'
@@ -86,7 +93,7 @@ async function applyPromotion(plan: PreparedPromotion, progress: (message: strin
     if (!plan.accepted) {
         if (Date.parse(plan.expiresAt) <= Date.now()) throw new CliError('Promotion plan expired; create a new plan', 6, 'plan_expired');
         progress('Queuing preview promotion and production reconciliation…');
-        plan.accepted = await plan.manager.promoteSite(plan.site.id, plan.expectedProductionDeploymentId);
+        plan.accepted = await plan.manager.promoteSite(plan.site.id, plan.expectedProductionDeploymentId, plan.force);
         plan.expiresAt = new Date(Date.now() + 60 * 60_000).toISOString();
     }
     const accepted = plan.accepted;
@@ -133,6 +140,7 @@ export async function promoteSite(siteRef: string, options: PromoteSiteOptions):
     else {
         process.stdout.write(`\nPromote ${plan.previewUrl} to ${plan.productionUrl}\n`);
         process.stdout.write(`${summary.previewContent}\n${summary.resourceNotice}\n`);
+        if (summary.forceWarning) process.stdout.write(`WARNING: ${summary.forceWarning}\n`);
     }
     if (options.dryRun) {
         output.dryRun();

@@ -483,3 +483,8 @@ Treat these tools as follows:
 | Plan only       | `plan_deploy`, `plan_download`, `plan_promote`                                                                   | Inspect the returned target, scope, and URLs before apply. |
 
 The MCP server enforces technical boundaries, but the calling agent or user remains responsible for choosing the intended site and reviewing destructive operations. Never infer a deployment domain. If an explicitly named domain is unavailable, do not substitute another site; offer `login` so the user can switch contexts.
+
+`plan_promote` accepts `force` (default `false`). Select `force: true` only when deliberately
+promoting a preview missing `wp-config.php` over production that has it. The plan displays the
+override and a warning; `apply_promote` uses the choice saved in that plan. The override bypasses
+only the missing-configuration guard. The manager rechecks files immediately before rotation.

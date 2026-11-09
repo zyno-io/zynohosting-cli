@@ -56,6 +56,20 @@ waiting for serving reconciliation. The command reports success only when reconc
 a failed or pending operation reports its ID. Inspect pending operations before submitting another
 promotion.
 
+Promotion is blocked when production has `wp-config.php` and preview does not. The manager
+checks before queuing and again on the node immediately before rotation. To deliberately replace
+WordPress production with that preview, pass `--force`:
+
+```sh
+zynohosting promote example.com --force
+# Noninteractive: add --yes (and optionally --json).
+```
+
+`--force` bypasses only this missing-configuration check and is displayed in the plan with a warning.
+`--yes` alone does not force promotion. Files and uploaded media are not copied or preserved by the
+override; production still moves to an archive that is later purged. Ensure preview contains the
+files you intend to publish.
+
 Promotion renames the preview directory that exists at apply time into production. A dry run or MCP plan does not
 freeze preview files. The manager checks that production still matches the deployment observed
 when planning; if it changed, create a fresh plan. A new empty preview directory is created after promotion. Old production is archived and

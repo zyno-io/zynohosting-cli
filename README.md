@@ -144,6 +144,10 @@ zynohosting promote example.com --yes
 the stable wildcard URL shown in the plan and site details. `--dry-run` only displays a plan for
 the chosen slot. Preview uploads never promote automatically.
 
+Promotion is blocked if production has `wp-config.php` and preview does not. Use
+`zynohosting promote example.com --force` to explicitly bypass that check. `--yes` only skips
+the confirmation prompt; it does not bypass the guard.
+
 `promote` renames production to an archive and preview into production, then creates an empty
 preview directory. It waits for serving reconciliation, and a background job purges the archive.
 Preview has no separate database and uses the main site’s database. It shares the main site’s

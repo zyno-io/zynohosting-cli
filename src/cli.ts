@@ -223,11 +223,12 @@ export function createProgram(): Command {
         .command('promote')
         .description('publish the current preview deployment to production')
         .argument('<site>', 'site ID or hostname')
+        .option('--force', 'allow promotion when production has wp-config.php and preview does not')
         .addOption(environmentOption())
         .option('-y, --yes', 'promote without prompting after displaying the plan')
         .option('--dry-run', 'show the promotion target without changing production')
         .option('--json', 'emit newline-delimited JSON output')
-        .addOption(new Option('--timeout <seconds>', 'copy and reconciliation timeout').argParser(positiveInteger).default(900))
+        .addOption(new Option('--timeout <seconds>', 'promotion and reconciliation timeout').argParser(positiveInteger).default(900))
         .action(async (siteRef: string, commandOptions: PromoteSiteOptions & { timeout: number }) => {
             await promoteSite(siteRef, { ...commandContext(program, commandOptions), ...commandOptions, timeoutSeconds: commandOptions.timeout });
         });

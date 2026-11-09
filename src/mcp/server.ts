@@ -32,7 +32,7 @@ const MAX_PENDING_PLANS = 16;
 // Policy that applies once this server is connected belongs here or in a tool description, not in
 // documentation the agent fetches before installing. The riskiest tools echo one line of it.
 const SERVER_INSTRUCTIONS = [
-    'Never infer a deployment domain from a repository, site content, organization name, or a similar available site. Before any site mutation, use an explicitly stated project domain or ask the user which domain they intend. Verify that domain with list_sites or get_site. If it is unavailable in the current login context, do not substitute another site; explain that access is unavailable and offer the login tool so the user can switch context. Use plan_deploy and present its operations and target before apply_deploy. Production is the default; target preview updates only preview. Use plan_promote and present both URLs before apply_promote; promotion renames the current preview into production and resets preview to empty. Preview has no separate database and shares the main site’s database and storage quota.',
+    'Never infer a deployment domain from a repository, site content, organization name, or a similar available site. Before any site mutation, use an explicitly stated project domain or ask the user which domain they intend. Verify that domain with list_sites or get_site. If it is unavailable in the current login context, do not substitute another site; explain that access is unavailable and offer the login tool so the user can switch context. Use plan_deploy and present its operations and target before apply_deploy. Production is the default; target preview updates only preview. Use plan_promote and present both URLs before apply_promote; promotion renames the current preview into production and resets preview to empty. Preview has no separate database and shares the main site’s database and storage quota. Only set force to true when the user explicitly requests bypassing the wp-config.php guard; never retry a blocked promotion with force automatically.',
     'When connecting a page to a form, read the existing page first and preserve its markup, layout, and styling rather than replacing it with a generic form. Allow that page’s exact origin, and follow the response contract and the jsonScript or capScript returned with the form. Read an existing form with describe_form before update_form and edit it in place rather than creating a second form. If ZynoForms cannot represent a field, validation rule, choice, or bot protection exactly, explain the limitation and ask the user how to proceed instead of dropping it.'
 ].join(' ');
 
@@ -338,15 +338,18 @@ export async function createHostingMcpServer(options: McpServerOptions): Promise
         {
             title: 'Plan preview promotion to production',
             description:
-                'Inspect the explicitly chosen site and store a promotion plan with its preview/production URLs and current production deployment. No content changes. At apply time preview is renamed into production, old production is archived for background deletion, and preview is reset to empty. Preview has no separate database and shares the main site’s database and storage quota. Requires hosting.sitesRead; applying also requires hosting.deploy.',
-            inputSchema: { site: z.string().min(1) },
+                'Inspect the explicitly chosen site and store a promotion plan with its preview/production URLs and current production deployment. No content changes. At apply time preview is renamed into production, old production is archived for background deletion, and preview is reset to empty. Preview has no separate database and shares the main site’s database and storage quota. Promotion is blocked if production has wp-config.php and preview does not; force must be explicitly selected when planning to bypass this check. Requires hosting.sitesRead; applying also requires hosting.deploy.',
+            inputSchema: {
+                site: z.string().min(1),
+                force: z.boolean().default(false).describe('Explicitly bypass the missing preview wp-config.php promotion guard')
+            },
             annotations: { readOnlyHint: true, openWorldHint: false }
         },
-        async ({ site }) => {
+        async ({ site, force }) => {
             purgeExpired(deployments, downloads, promotions);
             requirePlanCapacity(deployments, downloads, promotions);
             const { config } = await authentication.clients();
-            const plan = await preparePromotion(site, options, config);
+            const plan = await preparePromotion(site, { ...options, force }, config);
             promotions.set(plan.planId, plan);
             return result(promotionSummary(plan));
         }

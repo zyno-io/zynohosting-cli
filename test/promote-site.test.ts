@@ -1,8 +1,40 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
+import { createProgram } from '../src/cli.js';
 import { applyPreparedPromotion, preparePromotion, promoteSite } from '../src/commands/promote-site.js';
 import { operationId, previewManager, releaseId, siteId } from './fixtures/preview-manager.js';
+
+for (const force of [false, true]) {
+    test(`CLI ${force ? 'explicit force bypasses' : 'ordinary promotion obeys'} the missing WordPress config guard`, async t => {
+        const fixture = await previewManager(t);
+        fixture.state.productionHasWpConfig = true;
+        const run = () =>
+            createProgram().parseAsync([
+                'node',
+                'zynohosting',
+                '--api-url',
+                fixture.baseUrl,
+                '--api-key',
+                'secret',
+                'promote',
+                'example.com',
+                '--yes',
+                '--json',
+                ...(force ? ['--force'] : [])
+            ]);
+        if (force) {
+            await run();
+            assert.equal(fixture.state.promotions, 1);
+            assert.equal(fixture.state.productionContent, 'preview-v1');
+        } else {
+            await assert.rejects(run(), /production contains wp-config.php but preview does not/);
+            assert.equal(fixture.state.promotions, 0);
+            assert.equal(fixture.state.productionContent, 'live');
+        }
+        assert.deepEqual(fixture.bodies, [{ expectedProductionDeploymentId: null, ...(force ? { force: true } : {}) }]);
+    });
+}
 
 test('promote dry run reads the manager contract without changing content', async t => {
     const fixture = await previewManager(t);

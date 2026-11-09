@@ -14,6 +14,8 @@ export async function previewManager(t: { after(fn: () => unknown): void }) {
         promotions: 0,
         polls: 0,
         failReconciliation: false,
+        productionHasWpConfig: false,
+        previewHasWpConfig: false,
         omitTarget: false,
         grantedTarget: undefined as 'production' | 'preview' | undefined
     };
@@ -73,11 +75,16 @@ export async function previewManager(t: { after(fn: () => unknown): void }) {
                 return;
             }
             if (request.url === `/v1/sites/${siteId}/promote`) {
-                const body = JSON.parse(bytes.toString()) as { expectedProductionDeploymentId: string | null };
+                const body = JSON.parse(bytes.toString()) as { expectedProductionDeploymentId: string | null; force?: boolean };
                 bodies.push(body);
                 if (body.expectedProductionDeploymentId !== state.productionId) {
                     response.statusCode = 409;
                     json({ message: 'production changed since promotion was planned' });
+                    return;
+                }
+                if (state.productionHasWpConfig && !state.previewHasWpConfig && body.force !== true) {
+                    response.statusCode = 409;
+                    json({ message: 'production contains wp-config.php but preview does not; add it to preview or explicitly force promotion' });
                     return;
                 }
                 state.promotions++;

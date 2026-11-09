@@ -90,13 +90,13 @@ export class ManagerClient {
         };
     }
 
-    async promoteSite(siteId: string, expectedProductionDeploymentId: string | null): Promise<PromotionAccepted> {
+    async promoteSite(siteId: string, expectedProductionDeploymentId: string | null, force = false): Promise<PromotionAccepted> {
         const accepted = parsePromotionAccepted(
             await requestJson(`${this.apiUrl}/v1/sites/${encodeURIComponent(siteId)}/promote`, {
                 method: 'POST',
                 timeoutMs: this.timeoutMs,
                 headers: { ...(await authorizationHeaders(this.credential)), 'Content-Type': 'application/json', Accept: 'application/json' },
-                body: JSON.stringify({ expectedProductionDeploymentId })
+                body: JSON.stringify({ expectedProductionDeploymentId, ...(force ? { force: true } : {}) })
             })
         );
         if (accepted.result.id !== siteId) throw new CliError('Manager returned a promotion for another site', 5, 'invalid_manager_response');
