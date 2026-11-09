@@ -140,19 +140,17 @@ zynohosting promote example.com --dry-run
 zynohosting promote example.com --yes
 ```
 
-`deploy` keeps its existing production meaning. `--preview` writes only the preview slot, served at
-the stable wildcard URL shown in the plan and site details. `--dry-run` only displays a plan for
-the chosen slot. Preview uploads never promote automatically.
-
-Promotion is blocked if production has `wp-config.php` and preview does not. Use
-`zynohosting promote example.com --force` to explicitly bypass that check. `--yes` only skips
-the confirmation prompt; it does not bypass the guard.
+`deploy` still targets production by default. `--preview` writes only the preview slot, served at
+the URL shown in the plan and site details. Preview uploads never promote automatically.
 
 `promote` renames production to an archive and preview into production, then creates an empty
-preview directory. It waits for serving reconciliation, and a background job purges the archive.
+preview. It waits for serving reconciliation; a background job purges the archive. Nothing is
+copied. Promotion is blocked if production has `wp-config.php` and preview does not; `--force`
+explicitly bypasses only that check, and `--yes` only skips the confirmation prompt.
+
 Preview has no separate database and uses the main site’s database. It shares the main site’s
-storage quota. Database changes from preview can affect the live site. Both operations use the existing
-`hosting.deploy` permission, alongside `hosting.sitesRead` for site inspection. See
+storage quota. Database changes from preview can affect the live site. Both operations use the
+existing `hosting.deploy` permission, alongside `hosting.sitesRead` for site inspection. See
 [preview and promotion details](docs/cli/deploy.md#preview-sites-and-promotion).
 
 ## Complete download

@@ -413,14 +413,25 @@ The plan must come from `plan_deploy` in the same MCP process and must still be 
 ### `plan_promote`
 
 ```json
-{ "site": "example.com" }
+{ "site": "example.com", "force": false }
 ```
+
+| Argument | Required | Default | Meaning                                                                   |
+| -------- | -------- | ------- | ------------------------------------------------------------------------- |
+| `site`   | yes      | —       | Site UUID or hostname.                                                    |
+| `force`  | no       | `false` | Bypass only the missing-preview-`wp-config.php` guard. Saved in the plan. |
 
 Reads the explicitly chosen site's current production deployment and both URLs, then stores a
 plan for up to 15 minutes in this MCP process. It does not change either slot. The result includes
-`planId`, `siteId`, `productionUrl`, `previewUrl`, `expectedProductionDeploymentId`, and expiry.
-Present both URLs and the shared-resource notice before applying. The preview directory becomes
-production at apply time; planning does not freeze preview files. Permission: `hosting.sitesRead`.
+`planId`, `siteId`, `productionUrl`, `previewUrl`, `expectedProductionDeploymentId`, `force`
+(plus `forceWarning` when true), the shared-resource notice, and expiry. Present both URLs and the
+notice before applying. Planning does not freeze preview: whatever is in preview at apply time
+becomes production. Permission: `hosting.sitesRead`.
+
+Promotion is blocked when production has `wp-config.php` and preview does not. Set
+`force: true` only when the user explicitly asks to override that guard; never retry with
+`force` on your own after a rejection. `apply_promote` has no `force` argument and uses the choice
+saved in the plan. The manager and node still recheck the files immediately before rotation.
 
 ### `apply_promote`
 
@@ -428,15 +439,17 @@ production at apply time; planning does not freeze preview files. Permission: `h
 { "plan_id": "c1224591-e7c0-4c44-b1ee-b8afc5676542" }
 ```
 
-Renames production to archive and preview into production through the manager's promote API,
-creates an empty preview directory, and waits for serving reconciliation. A background job purges the archive. The manager rejects production
-changes since planning. Later preview edits leave the promoted files unchanged. A failed
-reconciliation is reported as a tool error; an accepted operation can be polled again by retrying
-the same plan for up to an hour. Successful apply consumes the plan. Unknown, expired, consumed,
-or other-process plan IDs are rejected. Permission: `hosting.deploy`.
+Renames production to an archive and preview into production through the manager's promote API,
+creates an empty preview, and waits for serving reconciliation. A background job purges the
+archive. Nothing is copied, and there is no history or rollback API. The manager rejects a plan if another promotion changed the production generation; ordinary file
+edits do not advance that generation. Later preview edits leave the promoted files
+unchanged. A failed reconciliation is reported as a tool error; after the manager accepts the
+promotion, retrying the same plan resumes polling for up to an hour instead of promoting again.
+Successful apply consumes the plan. Unknown, expired, consumed, or other-process plan IDs are
+rejected. Permission: `hosting.deploy`.
 
 Preview has no separate database and uses the main site’s database. It shares the main site’s
-storage quota. Database changes from preview can affect the live site. There is no history/rollback API. See
+storage quota. Database changes from preview can affect the live site. See
 [the CLI feature details](../cli/deploy#preview-sites-and-promotion).
 
 ## Complete downloads
@@ -482,9 +495,4 @@ Treat these tools as follows:
 | Remote mutation | `create_basic_form`, `update_form`, `update_form_bot_protection`, `update_form_origins`, file/deploy apply tools | Review form/site, fields, origins, paths, and plans.       |
 | Plan only       | `plan_deploy`, `plan_download`, `plan_promote`                                                                   | Inspect the returned target, scope, and URLs before apply. |
 
-The MCP server enforces technical boundaries, but the calling agent or user remains responsible for choosing the intended site and reviewing destructive operations. Never infer a deployment domain. If an explicitly named domain is unavailable, do not substitute another site; offer `login` so the user can switch contexts.
-
-`plan_promote` accepts `force` (default `false`). Select `force: true` only when deliberately
-promoting a preview missing `wp-config.php` over production that has it. The plan displays the
-override and a warning; `apply_promote` uses the choice saved in that plan. The override bypasses
-only the missing-configuration guard. The manager rechecks files immediately before rotation.
+The MCP server enforces technical boundaries, but the calling agent or user remains responsible for choosing the intended site and reviewing destructive operations. Never infer a deployment domain. If an explicitly named domain is unavailable, do not substitute another site; offer `login` so the user can switch contexts. Likewise, never select `plan_promote` `force: true` unless the user explicitly requests that override.

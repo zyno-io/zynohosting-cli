@@ -37,10 +37,11 @@ zynohosting deploy example.com ./dist --preview --yes
 zynohosting sites get example.com
 ```
 
-The plan and result identify the target and its URL. Preview keeps the site's separate stable
-`<username>-preview.<cluster>.<vanity>` URL, backed by wildcard DNS/TLS. Its files start empty when the
-manager enables this feature. Uploading or editing them leaves production content unchanged.
-An older manager that does not explicitly grant the preview target is rejected before upload.
+The plan and result identify the target and its URL. Preview is served at the site's separate
+`<username>-preview.<cluster>.<vanity>` hostname (backed by wildcard DNS/TLS); use the URL shown in
+the plan or `sites get`, because some older sites use a different suffix. Preview starts empty, and
+uploading or editing it leaves production unchanged. If the manager does not confirm the preview
+target, the CLI stops before uploading.
 
 To publish the current preview files to the production hostname:
 
@@ -51,38 +52,44 @@ zynohosting promote example.com --yes --json
 ```
 
 Promotion displays both URLs and asks for confirmation unless `--yes` or `--dry-run` is supplied.
-`--json` requires either of those options. `--timeout <seconds>` defaults to `900` for promotion and
-waiting for serving reconciliation. The command reports success only when reconciliation succeeds;
-a failed or pending operation reports its ID. Inspect pending operations before submitting another
-promotion.
+`--json` requires either of those options. `--timeout <seconds>` (default `900`) covers the
+request and waiting for serving reconciliation. The command reports success only when
+reconciliation succeeds; a failed or pending operation reports its ID. Inspect a pending operation
+before submitting another promotion.
 
-Promotion is blocked when production has `wp-config.php` and preview does not. The manager
-checks before queuing and again on the node immediately before rotation. To deliberately replace
-WordPress production with that preview, pass `--force`:
+Promotion renames production to an archive, renames preview into production, and creates a new
+empty preview. Nothing is copied, including configuration and uploaded media. A background job
+purges the archive after reconciliation; until then it counts toward the site's quota. There is no
+deployment-history or rollback API.
+
+A dry run does not freeze preview: whatever is in preview when the node applies the promotion
+becomes production. The manager rejects the promotion if another promotion changed the production generation since
+planning; create a fresh plan in that case. Ordinary file edits do not advance that generation.
+
+### WordPress configuration guard
+
+Promotion is blocked when production has `wp-config.php` and preview does not. The manager checks
+before queuing and the node checks again immediately before rotating directories. To deliberately
+replace WordPress production with that preview, pass `--force`:
 
 ```sh
 zynohosting promote example.com --force
 # Noninteractive: add --yes (and optionally --json).
 ```
 
-`--force` bypasses only this missing-configuration check and is displayed in the plan with a warning.
-`--yes` alone does not force promotion. Files and uploaded media are not copied or preserved by the
-override; production still moves to an archive that is later purged. Ensure preview contains the
-files you intend to publish.
+`--force` bypasses only this check; the plan shows it with a warning. `--yes` only skips the
+confirmation prompt and never forces promotion.
 
-Promotion renames the preview directory that exists at apply time into production. A dry run or MCP plan does not
-freeze preview files. The manager checks that production still matches the deployment observed
-when planning; if it changed, create a fresh plan. A new empty preview directory is created after promotion. Old production is archived and
-purged by a background job. There is no deployment-history or rollback API.
+### Shared resources
 
-Preview has no separate database and uses the main site’s database. It shares the main site’s
-storage quota, PHP settings, sessions, and identity. Database changes from preview can affect the
-live site. Archived production files count toward that same quota until the cleanup job purges them.
+Preview has no separate database and uses the main site’s database. It also shares the main
+site’s storage quota, PHP settings, sessions, and Unix identity. Database changes from preview can
+affect the live site.
 
 The CLI uses the manager's existing access-session protocol with `target: "preview"`, then
-`POST /v1/sites/{siteRef}/promote` with `expectedProductionDeploymentId` for promotion. It polls
-the returned `/reconciliations/{operationId}` operation. Individual-file and download commands
-continue to target production.
+`POST /v1/sites/{siteRef}/promote` with `expectedProductionDeploymentId` (and `force` when
+selected). It polls the returned `/reconciliations/{operationId}` operation. Individual-file and
+download commands continue to target production.
 
 ## How planning works
 
