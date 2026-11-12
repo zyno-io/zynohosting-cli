@@ -4,6 +4,14 @@ Copy a request, change the parts in `[brackets]`, and paste it into your agent. 
 
 In the Claude desktop app's Chat tab, add **"The site is in [folder path]"** to the start of each request, because a chat has no project open.
 
+## Build a new site
+
+```text:no-line-numbers
+Build a website for [what the site is for] that I can host on ZynoHosting at [your-domain.com]. ZynoHosting serves static files and PHP only, so use Astro with static output unless there's a reason not to. Ask me about the pages and content first, then show me the site before publishing anything.
+```
+
+**What happens.** Your agent asks what you want, builds the site on your computer, and shows it to you. Publishing is a separate step: ask with the next request when you're happy. Your domain needs a ZynoHosting site first; if you don't have one, ask ZynoHosting support. See [Building a site](../guide/building-a-site) for what can be hosted.
+
 ## Publish your site
 
 ```text:no-line-numbers

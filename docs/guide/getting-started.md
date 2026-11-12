@@ -120,6 +120,7 @@ Run `zynohosting <command> --help` to see command-specific options for the insta
 
 ## Next steps
 
+- Starting from scratch? See [Building a site](./building-a-site) for what ZynoHosting can run and why Astro is the recommended starting point.
 - Learn how [credentials and environments](./authentication) are resolved.
 - Review the [safety model](../reference/safety) before granting an agent write access.
 - Check [permissions](../reference/permissions) when an operation is forbidden.

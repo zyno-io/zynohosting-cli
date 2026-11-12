@@ -1,6 +1,6 @@
 ---
 name: zynohosting
-description: Publish, update, inspect, back up, and preview websites hosted on ZynoHosting, and create, edit, and embed ZynoForms, using the `zynohosting` CLI. Use when the user wants to deploy or publish a site to ZynoHosting, deploy to a preview site, promote preview to production (go live), check which sites they can access, edit, upload, or delete individual hosted files, download a hosted site, sign in to ZynoHosting, or add, change, or connect a ZynoForms form.
+description: Publish, update, inspect, back up, and preview websites hosted on ZynoHosting, and create, edit, and embed ZynoForms, using the `zynohosting` CLI. Use when the user wants to build a new website to host on ZynoHosting, deploy or publish a site to ZynoHosting, deploy to a preview site, promote preview to production (go live), check which sites they can access, edit, upload, or delete individual hosted files, download a hosted site, sign in to ZynoHosting, or add, change, or connect a ZynoForms form.
 ---
 
 # ZynoHosting CLI
@@ -62,6 +62,18 @@ zynohosting sites list
 zynohosting sites get example.com            # Production URL, Preview URL, hostnames
 zynohosting sites get example.com --json     # deployments.production.url, deployments.preview.url
 ```
+
+## Build a new site
+
+ZynoHosting serves static files, plus PHP 7.4–8.5 on sites that have PHP turned on. It runs no Node.js, Python, Ruby, or other server process. Server-side rendering, API routes, server functions, and background workers are unavailable. Deploy finished files only.
+
+- **Recommend Astro** for a new site unless the user wants something else. Keep its default static output and add no server adapter (`@astrojs/node`, Vercel, Netlify, and so on). Run `npm run build` and deploy `dist/`, never the project root. Other static builds follow the same rule: deploy only the build output (Vite `dist/`, Eleventy `_site/`, Hugo `public/`, Next.js with `output: 'export'` gives `out/`).
+- **Without a build tool,** write plain HTML, CSS, and JavaScript files and deploy that folder.
+- **Use PHP only for real server-side code.** Contact and signup forms don't need it; use [ZynoForms](#zynoforms).
+- **Check the site type.** `sites get <domain>` shows `PHP: static` (JSON `phpVersion: null`) when PHP is off. Such a site answers 404 for every `.php` file. The user can turn PHP on in the ZynoHosting portal under the site's **Settings → Runtime**.
+- **Routing.** A static site serves `/path`, then `/path/index.html`, then `/404.html`. There is no single-page-app fallback, so a client-side router's deep links 404 on reload. Pre-render every route, as Astro does. A PHP site sends unknown paths to `/index.php`, so a front controller works. nginx serves the site, so `.htaccess` files are ignored.
+- **Everything deployed is public.** The deployed folder is the web root, and anything in it that isn't PHP can be downloaded. Never deploy `.env` files, credentials, or private source.
+- **The CLI cannot create sites.** Build and check the site locally first (`npm run preview` for Astro). Deploy only to an existing site the user names. If they don't have one yet, tell them to ask ZynoHosting support to set up a site for their domain.
 
 ## Deploy to production
 

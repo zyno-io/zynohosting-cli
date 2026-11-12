@@ -38,7 +38,8 @@ export default defineConfig({
                     items: [
                         { text: 'Getting started', link: '/guide/getting-started' },
                         { text: 'Authentication', link: '/guide/authentication' },
-                        { text: 'Preview and production', link: '/guide/preview' }
+                        { text: 'Preview and production', link: '/guide/preview' },
+                        { text: 'Building a site', link: '/guide/building-a-site' }
                     ]
                 }
             ],
