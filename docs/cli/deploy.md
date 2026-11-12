@@ -28,6 +28,10 @@ zynohosting deploy example.com ./dist --yes
 
 ## Preview sites and promotion
 
+::: tip
+Read [Preview and production](../guide/preview) for the hostname model and when not to promote. In short: preview shares the live database, promotion replaces production wholesale, and WordPress sites should deploy straight to production.
+:::
+
 The default target is production, preserving existing scripts. Add `--preview` to synchronize
 the separate preview slot instead:
 
@@ -40,7 +44,7 @@ zynohosting sites get example.com
 The plan and result identify the target and its URL. Preview is served at the site's separate
 `<username>-preview.<cluster>.<vanity>` hostname (backed by wildcard DNS/TLS); use the URL shown in
 the plan or `sites get`, because some older sites use a different suffix. Preview starts empty, and
-uploading or editing it leaves production unchanged. If the manager does not confirm the preview
+deploying to it leaves production unchanged. File commands cannot reach preview. If the manager does not confirm the preview
 target, the CLI stops before uploading.
 
 To publish the current preview files to the production hostname:

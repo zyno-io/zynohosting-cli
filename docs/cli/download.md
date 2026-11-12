@@ -1,6 +1,6 @@
 # Complete downloads
 
-Complete downloads stream a gzip-compressed site archive directly from the hosting node and safely extract it into a new or empty local directory without staging a second archive on either side.
+Complete downloads stream a gzip-compressed site archive directly from the hosting node and safely extract it into a new or empty local directory without staging a second archive on either side. Downloads always come from production, never from the [preview slot](../guide/preview).
 
 ## Download the deployable scope
 

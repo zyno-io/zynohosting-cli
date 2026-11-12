@@ -7,8 +7,9 @@
 - plan and apply complete deployments to production or an isolated preview slot;
 - promote current preview content to production;
 - download a complete deployable snapshot or, with the extra permission, all user content;
-- discover, create, inspect, edit, embed, and configure published ZynoForms;
-- expose the same operations to agents through a local stdio MCP server.
+- discover, create, inspect, edit, embed, and configure published ZynoForms (MCP only);
+- teach coding agents to drive the CLI through one [skill file](./skills/zynohosting/SKILL.md);
+- expose the same operations through a local stdio MCP server, packaged as a Claude desktop extension.
 
 The package requires Node.js 24.
 
@@ -23,8 +24,8 @@ zynohosting --help
 
 It installs two executables:
 
-- `zynohosting` — the human and CI command-line interface;
-- `zynohosting-mcp` — the local stdio MCP server.
+- `zynohosting` — the command-line interface for people, coding agents, and CI;
+- `zynohosting-mcp` — the local stdio MCP server, mainly for the Claude desktop app and ZynoForms.
 
 You can also run commands without a global install:
 
@@ -148,6 +149,13 @@ preview. It waits for serving reconciliation; a background job purges the archiv
 copied. Promotion is blocked if production has `wp-config.php` and preview does not; `--force`
 explicitly bypasses only that check, and `--yes` only skips the confirmation prompt.
 
+Preview is served only at the site's `preview` hostname; the vanity hostname serves production.
+Only `deploy --preview` writes to preview; `files` and `download` always act on production.
+After a promotion preview is empty, so promoting again would publish an empty site. Because
+`wp-config.php` and `wp-content/uploads/` are never deployed, WordPress sites should deploy
+straight to production rather than promote. See
+[Preview and production](https://zyno-io.github.io/zynohosting-cli/guide/preview).
+
 Preview has no separate database and uses the main site’s database. It shares the main site’s
 storage quota. Database changes from preview can affect the live site. Both operations use the
 existing `hosting.deploy` permission, alongside `hosting.sitesRead` for site inspection. See
@@ -169,19 +177,24 @@ zynohosting download example.com ./complete-copy --sensitive
 
 The destination must be new or empty. Archive bytes are extracted as the hosting node generates them; the CLI validates the transport completion, gzip stream, and tar entries before atomically installing the staged tree. Absolute paths, traversal, links, devices, and other unsupported entries are rejected.
 
+## AI agents
+
+Agents with a shell (Claude Code, Codex) use the CLI, guided by the [ZynoHosting skill](./skills/zynohosting/SKILL.md). For a non-technical user, paste this into the agent:
+
+> Set up ZynoHosting for this project. Follow https://raw.githubusercontent.com/zyno-io/zynohosting-cli/main/docs/agents/install.md
+
+The agent writes the skill to `.claude/skills/zynohosting/SKILL.md` or `.agents/skills/zynohosting/SKILL.md` and carries on in the same session: no MCP server, no restart, and nothing in the agent's context until a hosting task comes up. The skill covers sign-in, the domain policy, plan-then-apply, preview and promotion, files, and downloads.
+
+The local MCP server remains for clients without a shell and for ZynoForms:
+
+- **Claude desktop app, Chat and Cowork tabs.** These cannot run a CLI or install anything from a conversation. The user opens the signed desktop extension, [`zynohosting.mcpb`](https://github.com/zyno-io/zynohosting-cli/releases/latest/download/zynohosting.mcpb). It carries the server as a single bundled file, runs on the Node runtime inside Claude Desktop so nothing else has to be installed, and stages newer signed releases so installs do not go stale.
+- **ZynoForms in any agent.** The CLI has no forms commands. Codex and Claude Code add the MCP server with [these agent instructions](./docs/mcp/agent.md), then restart.
+
+See [CLI, skill, or MCP](https://zyno-io.github.io/zynohosting-cli/agents/interfaces) for the reasoning, and [Set up and use ZynoHosting in your agent](https://zyno-io.github.io/zynohosting-cli/agents/) for copy-and-paste prompts.
+
 ## Local MCP server
 
-The MCP server is local stdio only. It does not open a port or provide a hosted/cloud MCP endpoint.
-
-For a non-technical user, paste this into Codex or Claude Code:
-
-> Set up ZynoHosting MCP for this project if it's not already configured. See https://raw.githubusercontent.com/zyno-io/zynohosting-cli/main/docs/mcp/agent.md for details.
-
-The agent configures only its own project file—`.mcp.json` for Claude Code or `.codex/config.toml` for Codex—without storing credentials. Restart the agent after it completes; MCP tools are not added to an already-running session. That prompt points at [install instructions written for the agent](./docs/mcp/agent.md); the matching [prompts for the user](https://zyno-io.github.io/zynohosting-cli/mcp/setup) cover signing in, publishing, and forms.
-
-Claude Code means the terminal CLI, the IDE extensions, and the Code tab of the Claude desktop app; one project file serves all three, and all three need Node.js 24 installed.
-
-The desktop app's Chat and Cowork tabs are a separate client that cannot install anything from a conversation. They use the signed desktop extension instead, which the user installs by opening [`zynohosting.mcpb`](https://github.com/zyno-io/zynohosting-cli/releases/latest/download/zynohosting.mcpb). It carries the server as a single bundled file, runs on the Node runtime inside Claude Desktop so nothing else has to be installed, and stages newer signed releases so installs do not go stale. See [Configure the local MCP server](https://zyno-io.github.io/zynohosting-cli/mcp/#set-up-the-claude-desktop-app).
+The MCP server is local stdio only. It does not open a port or provide a hosted/cloud MCP endpoint. See [Configure the local MCP server](https://zyno-io.github.io/zynohosting-cli/mcp/).
 
 `ZYNOHOSTING_MCP_ROOTS` is an optional local-computer allowlist for the MCP process. When it is unset, local-file tools can use any absolute path the MCP process user can access. When roots are configured, local file reads, writes, deploy sources, ignore files, and download destinations are constrained to them after canonical path resolution.
 

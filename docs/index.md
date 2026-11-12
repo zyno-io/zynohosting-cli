@@ -6,14 +6,14 @@ titleTemplate: false
 hero:
     name: ZynoHosting
     text: Ship sites from a terminal or an agent
-    tagline: Ship hosted sites and let agents create, discover, embed, and connect published ZynoForms through one guarded local MCP server.
+    tagline: Deploy, preview, and promote hosted sites from the CLI, teach coding agents to do the same with one skill file, and connect ZynoForms through the local MCP server.
     actions:
         - theme: brand
           text: Get started
           link: /guide/getting-started
         - theme: alt
           text: Set up an agent
-          link: /mcp/setup
+          link: /agents/
         - theme: alt
           text: View on GitHub
           link: https://github.com/zyno-io/zynohosting-cli
@@ -21,19 +21,24 @@ hero:
 features:
     - icon: 🚀
       title: Exact deployments
-      details: Preview creates, replacements, and deletions before uploading only the content that changed.
+      details: Plan creates, replacements, and deletions before uploading only the content that changed.
       link: /cli/deploy
       linkText: Deployment guide
+    - icon: 👀
+      title: Preview, then promote
+      details: Deploy to a separate preview hostname, check it, and swap it into production in one step.
+      link: /guide/preview
+      linkText: Preview and production
     - icon: 📁
       title: Safe file operations
       details: List, read, create, replace, and delete regular files with optional ETag preconditions.
       link: /cli/files
       linkText: File commands
     - icon: 🤖
-      title: Local MCP
-      details: Give agents guarded hosting operations plus form creation, discovery, embedding guidance, and CORS management through stdio.
-      link: /mcp/
-      linkText: MCP setup
+      title: Agent-ready
+      details: Coding agents drive the CLI through one skill file. The Claude desktop app and ZynoForms use the local MCP server.
+      link: /agents/interfaces
+      linkText: CLI, skill, or MCP
     - icon: 🔐
       title: Scoped authorization
       details: Tenant permissions become short-lived, site-bound capabilities with only the requested operations.

@@ -115,7 +115,7 @@ const manifest = {
     author: { name: 'Zyno Consulting', url: 'https://zyno.io' },
     repository: { type: 'git', url: 'https://github.com/zyno-io/zynohosting-cli.git' },
     homepage: 'https://zyno-io.github.io/zynohosting-cli/',
-    documentation: 'https://zyno-io.github.io/zynohosting-cli/mcp/setup',
+    documentation: 'https://zyno-io.github.io/zynohosting-cli/agents/',
     support: 'https://github.com/zyno-io/zynohosting-cli/issues',
     license: pkg.license,
     keywords: ['hosting', 'deployment', 'forms', 'static-site'],

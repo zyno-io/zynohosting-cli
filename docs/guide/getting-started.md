@@ -2,8 +2,8 @@
 
 `@zyno-io/zynohosting` provides two executables:
 
-- `zynohosting` for people and CI jobs;
-- `zynohosting-mcp` for local stdio MCP clients.
+- `zynohosting` for people, coding agents, and CI jobs;
+- `zynohosting-mcp` for local stdio MCP clients, mainly the Claude desktop app.
 
 Both clients use the same Hosting Manager API, permission model, and short-lived site capabilities.
 
@@ -71,7 +71,7 @@ Continue with [Individual files](../cli/files).
 
 ### Deploy a directory
 
-Always preview the exact synchronization plan first:
+Always inspect the exact synchronization plan first:
 
 ```bash
 zynohosting deploy example.com ./dist --dry-run
@@ -80,23 +80,25 @@ zynohosting deploy example.com ./dist
 
 Continue with [Full deployments](../cli/deploy).
 
-### Connect an agent
+### Try a change on preview, then promote it
 
-The easiest setup for Codex or Claude Code is to paste this into the agent:
-
-> Set up ZynoHosting MCP for this project if it's not already configured. See https://raw.githubusercontent.com/zyno-io/zynohosting-cli/main/docs/mcp/agent.md for details.
-
-The agent performs the installation and then asks the user to restart it. This covers Claude Code wherever it runs, including the Code tab of the Claude desktop app. The desktop app's Chat and Cowork tabs cannot install anything from a conversation; they install the signed desktop extension instead, described in [Set up the Claude desktop app](../mcp/#set-up-the-claude-desktop-app).
-
-See [Set up and use ZynoHosting in your agent](../mcp/setup) for the copy-and-paste prompts that cover signing in, publishing, and forms.
-
-Restrict local-file access to a project root when the agent should not use the MCP process user's entire accessible filesystem:
+Every site has a separate preview slot at its own hostname:
 
 ```bash
-npx -y @zyno-io/zynohosting mcp --root /absolute/path/to/project
+zynohosting deploy example.com ./dist --preview --dry-run
+zynohosting deploy example.com ./dist --preview
+zynohosting promote example.com
 ```
 
-Continue with [Configure MCP](../mcp/).
+Preview shares the live site's database, and promotion replaces production wholesale. Read [Preview and production](./preview) before you use it, especially for WordPress.
+
+### Connect an agent
+
+For Codex or Claude Code, paste this into the agent:
+
+> Set up ZynoHosting for this project. Follow https://raw.githubusercontent.com/zyno-io/zynohosting-cli/main/docs/agents/install.md
+
+The agent installs a skill file that teaches it this CLI, then carries on in the same session. The desktop app's Chat and Cowork tabs cannot run a CLI; they install the signed desktop extension instead. ZynoForms work needs the MCP server in any agent. See [CLI, skill, or MCP](../agents/interfaces) for the reasoning and [Set up and use ZynoHosting in your agent](../agents/) for copy-and-paste prompts.
 
 ## Global options
 

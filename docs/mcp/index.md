@@ -2,13 +2,19 @@
 
 The package includes a local stdio MCP server that exposes authorized ZynoHosting operations to agents. It does not open a network port and there is no hosted/cloud MCP endpoint.
 
+::: tip Most coding agents don't need this
+Codex and Claude Code should use the [CLI with the ZynoHosting skill](../agents/interfaces) for hosting work. It costs nothing until a task needs it and requires no restart. The MCP server is for the [Claude desktop app's Chat and Cowork tabs](#set-up-the-claude-desktop-app), which cannot run a CLI, and for ZynoForms, which the CLI does not cover.
+:::
+
 ## Set up Codex or Claude Code
+
+Do this only when the agent needs the ZynoForms tools, or the team prefers MCP tools to shell commands. Otherwise [install the skill](../agents/install).
 
 Claude Code here means every surface of that client—the terminal CLI, the IDE extensions, and the Code tab of the Claude desktop app. All three read the same project `.mcp.json`, so the instruction below is the whole setup for any of them. The desktop app's Chat and Cowork tabs are a separate client with separate configuration; see [Set up the Claude desktop app](#set-up-the-claude-desktop-app).
 
 For an end user, the easiest option is to paste this instruction into the agent:
 
-> Set up ZynoHosting MCP for this project if it's not already configured. See https://raw.githubusercontent.com/zyno-io/zynohosting-cli/main/docs/mcp/agent.md for details.
+> Set up the ZynoHosting MCP server for this project so you can work with ZynoForms. See https://raw.githubusercontent.com/zyno-io/zynohosting-cli/main/docs/mcp/agent.md for details.
 
 The agent runs the installer for itself; the user does not need to use a terminal:
 
@@ -24,7 +30,7 @@ The installer merges a `zynohosting` server entry into only the selected agent�
 Restart Codex or Claude Code after the installer completes. The current agent session cannot discover MCP tools that were configured after it started.
 :::
 
-Copy-and-paste prompts for the whole workflow—setup, browser login, publishing, and forms—are on [Set up and use ZynoHosting in your agent](./setup), written for a non-technical user. What the agent itself does during installation is on [Install instructions for agents](./agent).
+Copy-and-paste prompts for the whole workflow—setup, browser login, publishing, preview, and forms—are on [Set up and use ZynoHosting in your agent](../agents/), written for a non-technical user. What the agent itself does during installation is on [MCP install instructions for agents](./agent).
 
 Deployment-domain policy and form-editing policy are not documented for agents here: the server supplies them as MCP instructions and tool descriptions on every connection, so they reach every session rather than only the one that fetched a page.
 
