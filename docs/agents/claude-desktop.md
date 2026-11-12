@@ -40,11 +40,12 @@ In Chat, always tell Claude **which folder** your site is in, because a chat has
 
 ## If something goes wrong
 
-| What you see                                   | What to do                                                                                                                         |
-| ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| Claude says it has no ZynoHosting tools        | Quit Claude completely and reopen it. Still missing? Download and install again.                                                   |
-| Claude offers to set ZynoHosting up itself     | It can't from a chat. Use the download above.                                                                                      |
-| ZynoHosting says the extension must be updated | Download and install again, then restart Claude. It normally updates itself, so something blocked the update.                      |
-| It says a folder is not allowed                | You limited it to folders during install. Open Settings → Extensions → ZynoHosting, add the folder or clear the list, and restart. |
-| The sign-in page never opened                  | Ask: _Give me the ZynoHosting sign-in link._ Links expire after five minutes.                                                      |
-| An error you don't understand                  | Paste it back and ask: _Explain this in plain language and tell me what to do next._                                               |
+| What you see                                   | What to do                                                                                                                                  |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| Claude says it has no ZynoHosting tools        | Quit Claude completely and reopen it. Still missing? Download and install again.                                                            |
+| Claude offers to set ZynoHosting up itself     | It can't from a chat. Use the download above.                                                                                               |
+| ZynoHosting says the extension must be updated | Download and install again, then restart Claude. It normally updates itself, so something blocked the update.                               |
+| It says a folder is not allowed                | You limited it to folders during install. Open Settings → Extensions → ZynoHosting, add the folder or clear the list, and restart.          |
+| The sign-in page never opened                  | Ask: _Give me the ZynoHosting sign-in link._ Links expire after five minutes.                                                               |
+| Zyno staff testing alpha or dev                | Set Environment in Settings → Extensions → ZynoHosting to `alpha` or `dev`, restart, and sign in again. Leave it as `production` otherwise. |
+| An error you don't understand                  | Paste it back and ask: _Explain this in plain language and tell me what to do next._                                                        |

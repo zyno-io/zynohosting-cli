@@ -131,7 +131,7 @@ const manifest = {
             // The process cannot otherwise tell it was installed as a desktop
             // extension. It reports this in its User-Agent so the API can
             // distinguish a frozen bundle from an npx run that self-updates.
-            env: { ZYNOHOSTING_DISTRIBUTION: 'mcpb' }
+            env: { ZYNOHOSTING_DISTRIBUTION: 'mcpb', ZYNOHOSTING_ENVIRONMENT: '${user_config.environment}' }
         }
     },
     user_config: {
@@ -150,6 +150,16 @@ const manifest = {
             required: false,
             multiple: true,
             default: []
+        },
+        // Saved logins are per environment and nothing is sticky, so this is the only way
+        // the desktop extension can target another one. `default` is load-bearing here too:
+        // without it the host leaves the literal ${user_config...} in the environment.
+        environment: {
+            type: 'string',
+            title: 'Environment (Zyno staff only)',
+            description: 'Leave as production unless you are testing against another Zyno environment: production, alpha, or dev.',
+            required: false,
+            default: 'production'
         }
     },
     tools,

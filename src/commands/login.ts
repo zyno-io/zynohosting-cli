@@ -3,14 +3,16 @@ import { hostname } from 'node:os';
 
 import { createSystemRenewalTokenStore, type RenewalTokenStore } from '../auth/renewal-token-store.js';
 import {
-    configPath,
+    configLocation,
     type HostingEnvironment,
     loadStoredConfig,
     normalizeApiUrl,
-    resolveApiUrl,
+    hostingUrlChosenByFlag,
+    removeLegacyConfigIfMatching,
     resolveAuthApiUrl,
     resolveSuiteApiUrl,
-    saveConfig
+    selectProfile,
+    updateProfile
 } from '../config.js';
 import { CliError } from '../errors.js';
 import { openUrl } from '../login/browser.js';
@@ -55,16 +57,19 @@ export interface LoginDependencies {
 
 export async function login(options: LoginOptions, dependencies: LoginDependencies = {}): Promise<void> {
     const env = dependencies.env ?? process.env;
-    const file = dependencies.configFile ?? configPath(env);
-    const stored = await loadStoredConfig(file);
-    const apiUrl = resolveApiUrl(options.apiUrl, stored, env, options.environment);
-    const suiteApiUrl = resolveSuiteApiUrl(options.suiteApiUrl, stored, apiUrl, env, options.environment);
-    const authApiUrl = resolveAuthApiUrl(options.authApiUrl, stored, apiUrl, env, options.environment);
+    const file = dependencies.configFile ?? configLocation(env);
+    const selection = selectProfile(options, env);
+    const profileKey = selection.key;
+    const apiUrl = selection.apiUrl;
+    const stored = await loadStoredConfig(file, profileKey, { lenientLegacy: true });
+    const suiteApiUrl = resolveSuiteApiUrl(options.suiteApiUrl, stored, apiUrl, env, options.environment, hostingUrlChosenByFlag(options));
+    const authApiUrl = resolveAuthApiUrl(options.authApiUrl, stored, apiUrl, env, options.environment, hostingUrlChosenByFlag(options));
     const apiKey = options.apiKey ?? env.ZYNOHOSTING_API_KEY;
     const write = dependencies.write ?? (message => process.stdout.write(message));
 
     if (apiKey) {
-        await saveConfig({ apiUrl, ...(suiteApiUrl ? { suiteApiUrl } : {}), ...(authApiUrl ? { authApiUrl } : {}), apiKey }, file);
+        await updateProfile(profileKey, { apiUrl, ...(suiteApiUrl ? { suiteApiUrl } : {}), ...(authApiUrl ? { authApiUrl } : {}), apiKey }, file);
+        await removeLegacyConfigIfMatching(file, stored);
         await removePreviousRenewalCredential(stored.renewalKey, dependencies.renewalTokenStore, write);
         write('ZynoHosting API-key credentials saved.\n');
         return;
@@ -101,15 +106,17 @@ export async function login(options: LoginOptions, dependencies: LoginDependenci
                 const renewalKey = randomUUID();
                 await store.set(renewalKey, credential.renewalToken);
                 try {
-                    await saveConfig({ ...baseConfig, renewalKey }, file);
+                    await updateProfile(profileKey, { ...baseConfig, renewalKey }, file);
                 } catch (error) {
                     await store.delete(renewalKey).catch(() => {});
                     throw error;
                 }
+                await removeLegacyConfigIfMatching(file, stored);
                 await removePreviousRenewalCredential(stored.renewalKey, store, write, renewalKey);
                 savedRenewableCredential = true;
             } else {
-                await saveConfig(baseConfig, file);
+                await updateProfile(profileKey, baseConfig, file);
+                await removeLegacyConfigIfMatching(file, stored);
                 await removePreviousRenewalCredential(stored.renewalKey, dependencies.renewalTokenStore, write);
             }
         }

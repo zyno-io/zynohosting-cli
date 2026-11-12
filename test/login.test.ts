@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import type { RenewalTokenStore } from '../src/auth/renewal-token-store.js';
 
 import { login, resolveLoginPageUrl } from '../src/commands/login.js';
-import { loadStoredConfig, resolveApiUrl, resolveAuthApiUrl, resolveConfig, resolveSuiteApiUrl, saveConfig } from '../src/config.js';
+import { loadStoredConfig, resolveApiUrl, resolveAuthApiUrl, resolveConfig, resolveSuiteApiUrl, updateProfile } from '../src/config.js';
 import { CliError } from '../src/errors.js';
 import { startLoopbackLogin } from '../src/login/loopback.js';
 
@@ -68,7 +68,7 @@ test('browser login accepts a one-shot SPA form POST and saves Bearer credential
 
     if (callbackFailure) throw callbackFailure;
     assert(openedUrl);
-    const stored = await loadStoredConfig(file);
+    const stored = await loadStoredConfig(file, 'alpha');
     assert.equal(stored.apiUrl, API_URL);
     assert.equal(stored.suiteApiUrl, SUITE_API_URL);
     assert.equal(stored.authApiUrl, AUTH_API_URL);
@@ -187,7 +187,7 @@ test('renewable browser login requests exact scopes and stores only a credential
         }
     );
 
-    const stored = await loadStoredConfig(file);
+    const stored = await loadStoredConfig(file, 'alpha');
     assert.equal(stored.scopedToken, true);
     assert.match(stored.renewalKey ?? '', /^[0-9a-f-]{36}$/);
     assert.equal(store.values.get(stored.renewalKey!), renewalToken);
@@ -197,7 +197,7 @@ test('renewable browser login requests exact scopes and stores only a credential
 test('browser reports failure and preserves config when a renewal credential cannot be stored', async () => {
     const root = await mkdtemp(join(tmpdir(), 'hosting-cli-renewable-failure-'));
     const file = join(root, 'config.json');
-    await saveConfig({ apiUrl: API_URL, apiKey: 'existing-key' }, file);
+    await updateProfile('alpha', { apiUrl: API_URL, apiKey: 'existing-key' }, file);
     let callbackStatus = 0;
 
     await assert.rejects(
@@ -240,7 +240,7 @@ test('browser reports failure and preserves config when a renewal credential can
     );
 
     assert.equal(callbackStatus, 500);
-    assert.deepEqual(await loadStoredConfig(file), { apiUrl: API_URL, apiKey: 'existing-key' });
+    assert.deepEqual(await loadStoredConfig(file, 'alpha'), { apiUrl: API_URL, apiKey: 'existing-key' });
 });
 
 test('login rejects malformed and non-delegable permission requests before opening a browser', async () => {
@@ -389,7 +389,7 @@ test('API-key login remains available for CI credentials', async () => {
     const root = await mkdtemp(join(tmpdir(), 'hosting-cli-login-key-'));
     const file = join(root, 'config.json');
     await login({ apiUrl: API_URL, apiKey: 'ci-key' }, { configFile: file, write: () => {} });
-    assert.deepEqual(await loadStoredConfig(file), {
+    assert.deepEqual(await loadStoredConfig(file, 'alpha'), {
         apiUrl: API_URL,
         suiteApiUrl: SUITE_API_URL,
         authApiUrl: AUTH_API_URL,
@@ -401,16 +401,19 @@ test('saved browser credentials resolve for deployments and expire locally', asy
     const root = await mkdtemp(join(tmpdir(), 'hosting-cli-config-'));
     const file = join(root, 'config.json');
     const env = { ZYNOHOSTING_CONFIG: file };
-    await saveConfig({ apiUrl: API_URL, accessToken: JWT, tenantId: TENANT_ID, expiresAt: EXPIRATION }, file);
-    assert.deepEqual(await resolveConfig({}, env), {
+    await updateProfile('alpha', { apiUrl: API_URL, accessToken: JWT, tenantId: TENANT_ID, expiresAt: EXPIRATION }, file);
+    assert.deepEqual(await resolveConfig({ environment: 'alpha' }, env), {
         apiUrl: API_URL,
         suiteApiUrl: SUITE_API_URL,
         authApiUrl: AUTH_API_URL,
         credential: { type: 'bearer', accessToken: JWT, tenantId: TENANT_ID, expiresAt: EXPIRATION }
     });
 
-    await saveConfig({ apiUrl: API_URL, accessToken: JWT, tenantId: TENANT_ID, expiresAt: Date.now() - 1 }, file);
-    await assert.rejects(resolveConfig({}, env), (error: unknown) => error instanceof Error && error.message.includes('expired'));
+    await updateProfile('alpha', { apiUrl: API_URL, accessToken: JWT, tenantId: TENANT_ID, expiresAt: Date.now() - 1 }, file);
+    await assert.rejects(
+        resolveConfig({ environment: 'alpha' }, env),
+        (error: unknown) => error instanceof Error && error.message.includes('expired')
+    );
 });
 
 test('an injected scoped Bearer token does not require tenant metadata', async () => {
@@ -429,7 +432,8 @@ test('an expiring renewable login rotates once across concurrent config resoluti
     const env = { ZYNOHOSTING_CONFIG: file };
     const newExpiration = Date.now() + 60 * 60 * 1000;
     let renewals = 0;
-    await saveConfig(
+    await updateProfile(
+        'alpha',
         {
             apiUrl: API_URL,
             authApiUrl: AUTH_API_URL,
@@ -456,13 +460,16 @@ test('an expiring renewable login rotates once across concurrent config resoluti
         }
     };
 
-    const [first, second] = await Promise.all([resolveConfig({}, env, dependencies), resolveConfig({}, env, dependencies)]);
+    const [first, second] = await Promise.all([
+        resolveConfig({ environment: 'alpha' }, env, dependencies),
+        resolveConfig({ environment: 'alpha' }, env, dependencies)
+    ]);
     assert.equal(first.credential.type === 'bearer' && first.credential.accessToken, 'new.header.signature');
     assert.equal(second.credential.type === 'bearer' && second.credential.accessToken, 'new.header.signature');
     assert.equal(renewals, 1);
     assert.equal(store.values.get(renewalKey), 'zrt_new');
-    assert.equal((await loadStoredConfig(file)).accessToken, 'new.header.signature');
-    assert.equal((await loadStoredConfig(file)).expiresAt, newExpiration);
+    assert.equal((await loadStoredConfig(file, 'alpha')).accessToken, 'new.header.signature');
+    assert.equal((await loadStoredConfig(file, 'alpha')).expiresAt, newExpiration);
 });
 
 test('an explicit SPA login URL works with a custom Hosting API hostname', () => {
@@ -470,13 +477,13 @@ test('an explicit SPA login URL works with a custom Hosting API hostname', () =>
 });
 
 test('resolves environment API defaults while preserving explicit and saved URLs', () => {
-    assert.equal(resolveApiUrl(undefined, {}, {}), 'https://hosting.api.zyno.app');
-    assert.equal(resolveApiUrl(undefined, {}, { ZYNOHOSTING_ENVIRONMENT: 'alpha' }), API_URL);
-    assert.equal(resolveApiUrl(undefined, {}, { ZYNOHOSTING_ENVIRONMENT: 'dev' }), 'http://localhost:39840');
-    assert.equal(resolveApiUrl(undefined, { apiUrl: 'https://hosting.example.com' }, {}), 'https://hosting.example.com');
-    assert.equal(resolveApiUrl(undefined, { apiUrl: 'https://hosting.example.com' }, { ZYNOHOSTING_ENVIRONMENT: 'alpha' }), API_URL);
-    assert.equal(resolveApiUrl('https://override.example.com', {}, { ZYNOHOSTING_ENVIRONMENT: 'alpha' }), 'https://override.example.com');
-    assert.throws(() => resolveApiUrl(undefined, {}, { ZYNOHOSTING_ENVIRONMENT: 'staging' }), /Expected production, alpha, or dev/);
+    assert.equal(resolveApiUrl(undefined, {}), 'https://hosting.api.zyno.app');
+    assert.equal(resolveApiUrl(undefined, { ZYNOHOSTING_ENVIRONMENT: 'alpha' }), API_URL);
+    assert.equal(resolveApiUrl(undefined, { ZYNOHOSTING_ENVIRONMENT: 'dev' }), 'http://localhost:39840');
+    assert.equal(resolveApiUrl('https://hosting.example.com', {}), 'https://hosting.example.com');
+    assert.equal(resolveApiUrl('https://hosting.example.com', { ZYNOHOSTING_ENVIRONMENT: 'alpha' }), 'https://hosting.example.com');
+    assert.equal(resolveApiUrl('https://override.example.com', {}), 'https://override.example.com');
+    assert.throws(() => resolveApiUrl(undefined, { ZYNOHOSTING_ENVIRONMENT: 'staging' }), /Expected production, alpha, or dev/);
 });
 
 test('resolves matching Suite API defaults and honors explicit, environment, and saved overrides', () => {

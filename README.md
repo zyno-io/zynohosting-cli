@@ -50,7 +50,7 @@ zynohosting login \
 
 Browser login creates a tenant-bound scoped CLI token. `hosting.sitesRead` is requested when no `--permission` is supplied; repeat the option to request the narrowest complete set for your workflow. Access tokens always expire after 60 minutes. `--renewable` stores the rotating renewal credential in the operating system credential store and lets long-running CLI/MCP processes refresh automatically. While MCP remains alive, it renews in the background even when no tools are being called; each request also checks freshness as a backstop. The renewal secret is never written to the JSON config file.
 
-Revoke the saved scoped grant and remove its local credentials with `zynohosting logout`.
+Logins are saved per environment, so signing in to alpha never replaces the production login. Production is the default; pass `--environment alpha` (or set `ZYNOHOSTING_ENVIRONMENT`) to use another saved login. Revoke the selected environment's scoped grant and remove its local credentials with `zynohosting logout`, or every saved login with `zynohosting logout --all`.
 
 For CI or another non-interactive environment, inject a tenant API key:
 
@@ -58,7 +58,7 @@ For CI or another non-interactive environment, inject a tenant API key:
 export ZYNOHOSTING_API_KEY='...'
 ```
 
-The CLI also accepts `--environment production|alpha|dev` and `--api-url`. Credentials are resolved in this order:
+The CLI also accepts `--environment production|alpha|dev` and `--api-url`. The Hosting API URL comes from `--api-url`, `--environment`, `ZYNOHOSTING_API_URL`, `ZYNOHOSTING_ENVIRONMENT`, then `production`, and the saved login is the one for that URL. Credentials are resolved in this order:
 
 1. command options;
 2. environment variables;

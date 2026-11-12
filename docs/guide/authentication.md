@@ -64,7 +64,10 @@ Never copy a renewal token into a dotfile, MCP config, log, shell history, or cr
 
 ```bash
 zynohosting logout
+zynohosting logout --all
 ```
+
+`logout` affects only the selected environment's saved login, chosen the same way as for any command (see [Saved configuration](#saved-configuration)). `--all` logs out of every saved login, revoking each in turn using that login's own stored URLs. If the selected environment has no login but others do, plain `logout` fails and lists them rather than reporting success. Other logins are never touched otherwise.
 
 For a saved scoped token, logout calls `POST /identity/scoped-tokens/revoke` with the scoped access token. That revokes only its own grant and clears the server-side renewal token. Local config and credential-store entries are removed only after revocation succeeds or the access/renewal credential is already unusable. Tenant API keys are only removed locally.
 
@@ -99,12 +102,14 @@ Supplying both an API key and a user access token at the same precedence level i
 
 The default path is:
 
-| Platform        | Path                                                                           |
-| --------------- | ------------------------------------------------------------------------------ |
-| macOS and Linux | `$XDG_CONFIG_HOME/zyno/hosting-cli.json`, or `~/.config/zyno/hosting-cli.json` |
-| Windows         | `%APPDATA%\Zyno\hosting-cli.json`                                              |
+| Platform        | Path                                                                                             |
+| --------------- | ------------------------------------------------------------------------------------------------ |
+| macOS and Linux | `$XDG_CONFIG_HOME/zyno/hosting-cli-profiles.json`, or `~/.config/zyno/hosting-cli-profiles.json` |
+| Windows         | `%APPDATA%\Zyno\hosting-cli-profiles.json`                                                       |
 
 Set `ZYNOHOSTING_CONFIG` to use a different file. On POSIX systems, the CLI creates the directory with mode `0700` and the file with mode `0600`.
+
+The file holds one login per environment, keyed `production`, `alpha`, or `dev`, or `url:<Hosting API URL>` for a custom API URL. Logging in to alpha leaves the production login alone, and there is no "current" environment: a command with no environment or URL selected always uses `production`. The Hosting API URL comes from `--api-url`, then `--environment`, then `ZYNOHOSTING_API_URL`, then `ZYNOHOSTING_ENVIRONMENT`, and the saved login is the one for that URL (an `--api-url` equal to alpha's URL uses the `alpha` login). If the selected environment has no login but others do, the command fails with `missing_config` and names them, for example `Not signed in to production. Saved logins: alpha. Pass --environment alpha, or run `zynohosting login`.` Files saved by earlier versions are read as one login and converted the next time they are saved; see the [configuration reference](../reference/configuration#saved-configuration-schema).
 
 ## Environments
 
@@ -127,7 +132,7 @@ export ZYNOHOSTING_ENVIRONMENT=alpha
 | `alpha`      | `https://hosting.api-alpha.zyno.dev` | `https://suite.api-alpha.zyno.dev` | `https://auth.api-alpha.zyno.dev` |
 | `dev`        | `http://localhost:39840`             | `http://localhost:39874`           | `http://localhost:39827`          |
 
-An explicit `--api-url` or `ZYNOHOSTING_API_URL` overrides the Hosting API. Form tools also accept `--suite-api-url` or `ZYNO_SUITE_API_URL`; renewal accepts `--auth-api-url` or `ZYNO_AUTH_API_URL`. Standard environments and recognized standard Hosting API URLs select matching companion endpoints automatically. Custom remote URLs must use HTTPS; HTTP is accepted only for localhost.
+An explicit `--api-url` or `ZYNOHOSTING_API_URL` overrides the Hosting API, and a flag beats an environment variable: `--api-url`, `--environment`, `ZYNOHOSTING_API_URL`, `ZYNOHOSTING_ENVIRONMENT`. Form tools also accept `--suite-api-url` or `ZYNO_SUITE_API_URL`; renewal accepts `--auth-api-url` or `ZYNO_AUTH_API_URL`. When `--api-url` or `--environment` chose the Hosting URL, those variables are ignored (a flag-chosen login is never redirected); see the [configuration reference](../reference/configuration#resolution-order). Standard environments and recognized standard Hosting API URLs select matching companion endpoints automatically. Custom remote URLs must use HTTPS; HTTP is accepted only for localhost.
 
 ## Environment-based user tokens
 

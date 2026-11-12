@@ -32,6 +32,8 @@ There is no TTY in an agent shell, so the CLI never prompts you. `deploy` and `p
 
 Login opens the user's browser and waits up to 300 seconds for them to finish. Run it as a background or long-running command, with a timeout above 300 seconds. In a remote, containerized, sandboxed, or display-less shell, add `--no-open` and give the user the URL it prints. Without `--no-open`, the URL is printed only if launching the browser fails outright. If the user says nothing opened and no URL appeared, stop the command and rerun it with `--no-open`.
 
+Logins are saved per environment; production is the default. For alpha or dev, pass `--environment alpha` on `login` and on every later command. `logout` affects only the selected environment (`--all` for every one).
+
 Request the narrowest complete permission set for the task. `hosting.sitesRead` is always needed. Add `--renewable` so the 60-minute token renews itself.
 
 | Task                                         | Add these permissions                                                   |

@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import type { RenewalTokenStore } from '../src/auth/renewal-token-store.js';
 
 import { logout } from '../src/commands/logout.js';
-import { loadStoredConfig, saveConfig } from '../src/config.js';
+import { loadStoredConfig, updateProfile } from '../src/config.js';
 import { HttpError } from '../src/errors.js';
 
 const API_URL = 'https://hosting.api-alpha.zyno.dev';
@@ -15,12 +15,13 @@ const SUITE_API_URL = 'https://suite.api-alpha.zyno.dev';
 const AUTH_API_URL = 'https://auth.api-alpha.zyno.dev';
 const RENEWAL_KEY = '11111111-1111-4111-8111-111111111111';
 
-test('logout self-revokes a scoped grant, removes its renewal credential, and retains endpoint preferences', async () => {
+test('logout self-revokes a scoped grant, removes its renewal credential, and removes only its profile', async () => {
     const root = await mkdtemp(join(tmpdir(), 'hosting-cli-logout-'));
     const file = join(root, 'config.json');
     const store = new MemoryStore([[RENEWAL_KEY, 'zrt_secret']]);
     let revoked = '';
-    await saveConfig(
+    await updateProfile(
+        'alpha',
         {
             apiUrl: API_URL,
             suiteApiUrl: SUITE_API_URL,
@@ -35,7 +36,7 @@ test('logout self-revokes a scoped grant, removes its renewal credential, and re
     );
 
     await logout(
-        {},
+        { environment: 'alpha' },
         {
             configFile: file,
             renewalTokenStore: store,
@@ -56,7 +57,7 @@ test('logout self-revokes a scoped grant, removes its renewal credential, and re
 
     assert.equal(revoked, 'old.jwt.signature');
     assert.equal(store.values.has(RENEWAL_KEY), false);
-    assert.deepEqual(await loadStoredConfig(file), { apiUrl: API_URL, suiteApiUrl: SUITE_API_URL, authApiUrl: AUTH_API_URL });
+    assert.deepEqual(await loadStoredConfig(file, 'alpha'), {});
 });
 
 test('logout preserves credentials when self-revocation cannot reach ZynoAuth', async () => {
@@ -71,11 +72,11 @@ test('logout preserves credentials when self-revocation cannot reach ZynoAuth', 
         renewalKey: RENEWAL_KEY,
         scopedToken: true as const
     };
-    await saveConfig(saved, file);
+    await updateProfile('alpha', saved, file);
 
     await assert.rejects(
         logout(
-            {},
+            { environment: 'alpha' },
             {
                 configFile: file,
                 renewalTokenStore: store,
@@ -92,7 +93,7 @@ test('logout preserves credentials when self-revocation cannot reach ZynoAuth', 
         ),
         /network unavailable/
     );
-    assert.deepEqual(await loadStoredConfig(file), saved);
+    assert.deepEqual(await loadStoredConfig(file, 'alpha'), saved);
     assert.equal(store.values.get(RENEWAL_KEY), 'zrt_secret');
 });
 
@@ -101,7 +102,8 @@ test('logout renews an expired scoped token before revoking its grant', async ()
     const file = join(root, 'config.json');
     const store = new MemoryStore([[RENEWAL_KEY, 'zrt_old']]);
     let revoked = '';
-    await saveConfig(
+    await updateProfile(
+        'alpha',
         {
             apiUrl: API_URL,
             authApiUrl: AUTH_API_URL,
@@ -114,7 +116,7 @@ test('logout renews an expired scoped token before revoking its grant', async ()
     );
 
     await logout(
-        {},
+        { environment: 'alpha' },
         {
             configFile: file,
             renewalTokenStore: store,
@@ -137,7 +139,7 @@ test('logout renews an expired scoped token before revoking its grant', async ()
 
     assert.equal(revoked, 'new.jwt.signature');
     assert.equal(store.values.has(RENEWAL_KEY), false);
-    assert.deepEqual(await loadStoredConfig(file), { apiUrl: API_URL, authApiUrl: AUTH_API_URL });
+    assert.deepEqual(await loadStoredConfig(file, 'alpha'), {});
 });
 
 class MemoryStore implements RenewalTokenStore {

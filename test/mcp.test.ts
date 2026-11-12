@@ -171,10 +171,12 @@ test('serves site metadata and downloads files only inside allowed roots', async
         return value;
     };
     const configFile = join(root, 'hosting-config.json');
-    await writeFile(configFile, JSON.stringify({ apiUrl: `http://127.0.0.1:${address().port}`, apiKey: 'secret' }));
+    const baseUrl = `http://127.0.0.1:${address().port}`;
+    await writeFile(configFile, JSON.stringify({ version: 2, profiles: { [`url:${baseUrl}`]: { apiUrl: baseUrl, apiKey: 'secret' } } }));
     const hosting = await createHostingMcpServer({
         roots: await AllowedLocalRoots.create([root]),
         version: '0.2.0',
+        apiUrl: baseUrl,
         env: { ZYNOHOSTING_CONFIG: configFile }
     });
     const client = new Client({ name: 'test-client', version: '1.0.0' });
@@ -494,10 +496,15 @@ test('reports a failed browser context switch instead of the prior login', async
     await new Promise<void>(resolve => httpServer.listen(0, '127.0.0.1', resolve));
     const address = httpServer.address();
     assert(address && typeof address === 'object');
-    await writeFile(configFile, JSON.stringify({ apiUrl: `http://127.0.0.1:${address.port}`, accessToken: 'prior-login-token', scopedToken: true }));
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+    await writeFile(
+        configFile,
+        JSON.stringify({ version: 2, profiles: { [`url:${baseUrl}`]: { apiUrl: baseUrl, accessToken: 'prior-login-token', scopedToken: true } } })
+    );
     const hosting = await createHostingMcpServer({
         roots: await AllowedLocalRoots.create([root]),
         version: '1.0.0',
+        apiUrl: baseUrl,
         env: { ZYNOHOSTING_CONFIG: configFile, ZYNOHOSTING_LOGIN_URL: 'https://login.example.test/cli/login' },
         loginDependencies: {
             onBrowserUrl: async () => {

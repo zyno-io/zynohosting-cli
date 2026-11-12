@@ -88,7 +88,8 @@ export function createProgram(): Command {
 
     program
         .command('logout')
-        .description('revoke the saved scoped token and remove local credentials')
+        .description('revoke the saved scoped token and remove local credentials for the selected environment')
+        .option('--all', 'log out of every saved environment')
         .option('--api-url <url>', 'Hosting Manager API URL')
         .option('--suite-api-url <url>', 'ZynoSuite API URL')
         .option('--auth-api-url <url>', 'ZynoAuth API URL')
@@ -96,6 +97,7 @@ export function createProgram(): Command {
         .action(async (commandOptions: LogoutOptions) => {
             const context = commandContext(program, commandOptions);
             await logout({
+                ...(commandOptions.all ? { all: true } : {}),
                 ...(context.apiUrl ? { apiUrl: context.apiUrl } : {}),
                 ...(context.suiteApiUrl ? { suiteApiUrl: context.suiteApiUrl } : {}),
                 ...(context.authApiUrl ? { authApiUrl: context.authApiUrl } : {}),
