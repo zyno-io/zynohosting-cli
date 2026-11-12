@@ -55,13 +55,13 @@ With the fallback on, a path that matches no file serves `/index.html` with stat
 
 `7z avif bak bmp css csv env eot gif gz ico ini jpg jpeg js json log map mjs mp3 mp4 ogg old orig otf pdf png rar save sql svg swp tar tgz ttf txt wasm webm webmanifest webp woff woff2 xml yaml yml zip`
 
-Any other extension, such as `.html` or `.v2`, falls back to `/index.html`. `.php`-like paths and `.ht*`, `.git`, `.svn`, `.user.ini`, and `.private` paths are always blocked, but other dotfiles such as `.env` are served if deployed: never deploy `.env` files or secrets. If the site has no `index.html`, unknown paths return 404. Unknown paths become soft 404s (status 200), which can affect search indexing, so keep real pages pre-rendered where you can.
+Any other extension, such as `.html` or `.v2`, falls back to `/index.html`. `.php`-like paths and dotfile paths are always blocked, as on every site. If the site has no `index.html`, unknown paths return 404. Unknown paths become soft 404s (status 200), which can affect search indexing, so keep real pages pre-rendered where you can.
 
 Without the setting, a workaround is to copy `index.html` to `404.html`. Deep links then render the app, but the HTTP status is still 404.
 
 ## Keep secrets out
 
-The deployed folder is the web root. Anything in it that isn't PHP can be downloaded by anyone, including `.env`, `composer.json`, and configuration files. Deploy a build output or a folder made for publishing, never a project root with credentials in it. Add exclusions with `.zynohostingignore`; see [Safety model](../reference/safety#mandatory-deployment-exclusions).
+The deployed folder is the web root. Anything in it that isn't PHP can be downloaded by anyone, including `composer.json`, backups, and configuration files. Every site refuses paths with a segment that starts with a dot (`/.env`, `/.git/config`, `/config/.npmrc`) with status 403, except `/.well-known/`. Don't rely on that: keep secrets out of the folder entirely. Deploy a build output or a folder made for publishing, never a project root with credentials in it. Add exclusions with `.zynohostingignore`; see [Safety model](../reference/safety#mandatory-deployment-exclusions).
 
 ## Getting a site
 
