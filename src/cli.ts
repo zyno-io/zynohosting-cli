@@ -1,4 +1,4 @@
-import { Command, Option } from 'commander';
+import { Command, CommanderError, Option } from 'commander';
 import { readFileSync } from 'node:fs';
 
 import type { HostingEnvironment } from './config.js';
@@ -7,12 +7,16 @@ import { configureUserAgent } from './api/user-agent.js';
 import { deploySite, DeploySiteOptions } from './commands/deploy-site.js';
 import { downloadSite, DownloadSiteOptions } from './commands/download-site.js';
 import { deleteFile, getFile, listFiles, putFile } from './commands/files.js';
+import { runFormCommand, runFormsGuide } from './commands/forms.js';
 import { login, LoginOptions } from './commands/login.js';
 import { logout, LogoutOptions } from './commands/logout.js';
 import { promoteSite, PromoteSiteOptions } from './commands/promote-site.js';
 import { getSite, listSites } from './commands/sites.js';
+import { CliError } from './errors.js';
+import { FORM_OPERATIONS } from './mcp/forms.js';
 import { installHostingMcp, McpInstallAgent } from './mcp/install.js';
 import { startHostingMcp } from './mcp/start.js';
+import { forceJsonErrors } from './output.js';
 import { permissionCapabilityLines } from './permissions.js';
 
 const PACKAGE_VERSION = readPackageVersion();
@@ -288,11 +292,52 @@ export function createProgram(): Command {
             process.stdout.write(`Restart ${installAgentName(installed.agent)} before using the ZynoHosting MCP tools.\n`);
         });
 
+    const forms = jsonParseErrors(
+        program
+            .command('forms')
+            .description('discover, create, inspect, edit, and connect ZynoForms (JSON in, JSON out)')
+            .hook('preAction', () => forceJsonErrors())
+    );
+    const formsDocs = 'https://zyno-io.github.io/zynohosting-cli/cli/forms';
+    for (const operation of FORM_OPERATIONS) {
+        const command = jsonParseErrors(forms.command(operation.command).description(operation.title));
+        // `list` takes no arguments but still accepts `--input '{}'`, as its MCP tool accepts an empty object.
+        command.option('--input <json|@file|->', 'JSON object of arguments, @file to read a file, or - for stdin');
+        command
+            .addOption(environmentOption())
+            .addHelpText('after', `\n${operation.description}\n\nMirrors the MCP tool ${operation.tool}. Output is always JSON.\nSee ${formsDocs}\n`)
+            .action(async (commandOptions: { input?: string; environment?: HostingEnvironment }) => {
+                const { json: _json, ...context } = commandContext(program, commandOptions);
+                await runFormCommand(operation.command, {
+                    ...context,
+                    ...(commandOptions.input === undefined ? {} : { input: commandOptions.input })
+                });
+            });
+    }
+    forms
+        .command('guide')
+        .description('print the ZynoForms embedding guide (no authentication needed)')
+        .addHelpText('after', `\nMirrors the MCP resource zynoforms://guides/embedding. Output is always JSON.\nSee ${formsDocs}\n`)
+        .action(() => runFormsGuide());
+
     return program;
 }
 
 function installAgentName(agent: McpInstallAgent): string {
     return agent === 'claude' ? 'Claude Code' : 'Codex';
+}
+
+/**
+ * Forms commands promise JSON errors, but commander rejects bad options before any action hook runs and
+ * prints plain text. Route those parse errors through the JSON error path as invalid input instead.
+ */
+function jsonParseErrors(command: Command): Command {
+    return command.configureOutput({ outputError: () => {} }).exitOverride((error: CommanderError) => {
+        // Help and version output exit normally; let commander finish them.
+        if (error.code === 'commander.helpDisplayed' || error.code === 'commander.help' || error.code === 'commander.version') return;
+        forceJsonErrors();
+        throw new CliError(error.message.replace(/^error: /, ''), 2, 'invalid_input');
+    });
 }
 
 function commandContext(

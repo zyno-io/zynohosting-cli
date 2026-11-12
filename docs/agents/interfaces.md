@@ -1,12 +1,11 @@
 # CLI, skill, or MCP
 
-Agents reach ZynoHosting through one of two interfaces. Use the CLI with the ZynoHosting skill wherever the agent has a shell. Use the MCP server only where it doesn't, and for ZynoForms.
+Agents reach ZynoHosting through one of two interfaces. Use the CLI with the ZynoHosting skill wherever the agent has a shell. Use the MCP server only where it doesn't: the Claude desktop app.
 
 | Client                                               | Use                                             | Why                                                       |
 | ---------------------------------------------------- | ----------------------------------------------- | --------------------------------------------------------- |
 | Claude Code (terminal, IDE, desktop Code tab), Codex | **CLI + skill**                                 | Has a shell. Nothing runs or loads until a task needs it. |
 | Claude desktop app, Chat and Cowork tabs             | **Desktop extension** (`.mcpb`, the MCP server) | No shell, so a CLI is unusable there.                     |
-| Any agent doing ZynoForms work                       | **MCP server**, alongside the skill             | The CLI has no forms commands yet.                        |
 | CI and scripts                                       | **CLI** with `ZYNOHOSTING_API_KEY`              | No agent involved.                                        |
 
 ## Why the CLI is the default for coding agents
@@ -17,7 +16,7 @@ A skill costs a one-line description until the agent decides it is relevant, the
 
 The CLI already has what an agent needs:
 
-- the same operations as the MCP hosting tools (sites, files, deploy, preview, promote, download);
+- the same operations as the MCP tools: sites, files, deploy, preview, promote, download, and ZynoForms (`zynohosting forms …`, JSON in and out, with the same inputs and results as the MCP form tools);
 - `--json` with stable error codes and exit codes;
 - `--dry-run` for `deploy` and `promote`;
 - a non-interactive guard: `deploy`, `promote`, `download`, and `files rm` exit with `confirmation_required` instead of prompting when `--yes` (or `--dry-run`) is missing. `files put` applies immediately, so the skill tells agents to get approval first.
@@ -26,12 +25,9 @@ The policy the MCP server delivers as server instructions, such as never guessin
 
 ## Why the MCP server stays
 
-Removing the MCP server entirely would cut off two groups:
+The Claude desktop app's **Chat and Cowork** tabs cannot run a CLI. They are the main non-technical audience, and the signed desktop extension is their only way in. It needs no Node.js install and updates itself.
 
-- **Claude desktop Chat and Cowork users.** They are the main non-technical audience, and their client cannot run a CLI. The signed desktop extension is the only way in, and it needs no Node.js install.
-- **ZynoForms.** The form tools (`describe_form`, `update_form`, and the rest) have no CLI equivalent. Coding agents that edit forms still need the MCP server, configured with [`mcp install`](../mcp/agent).
-
-For Codex and Claude Code, the project-level MCP setup is now optional. Use it for forms, or when a team prefers tools over shell commands.
+For Codex and Claude Code, the project-level MCP setup ([`mcp install`](../mcp/agent)) is now optional. Use it only when a team prefers MCP tools to shell commands.
 
 ## What the CLI does not do that the MCP server does
 
@@ -40,15 +36,13 @@ For Codex and Claude Code, the project-level MCP setup is now optional. Use it f
 | `plan_deploy` returns a `planId`; `apply_deploy` applies exactly that plan. | `deploy --dry-run` shows a plan; `deploy --yes` plans again and applies at once. The agent re-runs the dry run if anything changed. |
 | `login` returns the one-time URL as a tool result.                          | `login` opens the browser and blocks for up to 300 seconds. The agent runs it as a long-running command.                            |
 | Local roots (`--root`, `ZYNOHOSTING_MCP_ROOTS`) confine local paths.        | None. The agent's own permission system governs the shell.                                                                          |
-| Form tools and the `zynoforms://guides/embedding` resource.                 | None yet.                                                                                                                           |
 
 ## Possible follow-ups
 
-These would let the MCP server shrink to the desktop extension alone:
+These would close the remaining gaps between the CLI and the MCP server:
 
-1. `zynohosting forms …` commands at parity with the MCP form tools.
-2. A plan file for `deploy` and `promote` (for example `--plan-out`/`--plan-in`), so an approved dry run is exactly what gets applied.
-3. A `zynohosting skill install --agent claude|codex` command, so the skill ships in the npm package and stays version-matched to the CLI.
+1. A plan file for `deploy` and `promote` (for example `--plan-out`/`--plan-in`), so an approved dry run is exactly what gets applied.
+2. A `zynohosting skill install --agent claude|codex` command, so the skill ships in the npm package and stays version-matched to the CLI.
 
 ## Where the guidance lives
 

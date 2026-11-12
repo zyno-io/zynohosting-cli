@@ -6,7 +6,7 @@ titleTemplate: false
 hero:
     name: ZynoHosting
     text: Ship sites from a terminal or an agent
-    tagline: Deploy, preview, and promote hosted sites from the CLI, teach coding agents to do the same with one skill file, and connect ZynoForms through the local MCP server.
+    tagline: Deploy, preview, and promote hosted sites from the CLI, create and connect ZynoForms, and teach any agent to do the same.
     actions:
         - theme: brand
           text: Get started
@@ -36,7 +36,7 @@ features:
       linkText: File commands
     - icon: 🤖
       title: Agent-ready
-      details: Coding agents drive the CLI through one skill file. The Claude desktop app and ZynoForms use the local MCP server.
+      details: Coding agents drive the CLI through one skill file. The Claude desktop app installs a one-click extension.
       link: /agents/interfaces
       linkText: CLI, skill, or MCP
     - icon: 🔐

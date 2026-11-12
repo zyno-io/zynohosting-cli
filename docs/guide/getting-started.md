@@ -98,7 +98,7 @@ For Codex or Claude Code, paste this into the agent:
 
 > Set up ZynoHosting for this project. Follow https://raw.githubusercontent.com/zyno-io/zynohosting-cli/main/docs/agents/install.md
 
-The agent installs a skill file that teaches it this CLI, then carries on in the same session. The desktop app's Chat and Cowork tabs cannot run a CLI; they install the signed desktop extension instead. ZynoForms work needs the MCP server in any agent. See [CLI, skill, or MCP](../agents/interfaces) for the reasoning and [Set up and use ZynoHosting in your agent](../agents/) for copy-and-paste prompts.
+The agent installs a skill file that teaches it this CLI, then carries on in the same session. The desktop app's Chat and Cowork tabs cannot run a CLI; they install the signed desktop extension instead. See [CLI, skill, or MCP](../agents/interfaces) for the reasoning and [Set up an agent](../agents/) for per-agent steps and copy-and-paste prompts.
 
 ## Global options
 

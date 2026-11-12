@@ -1,6 +1,6 @@
 ---
 name: zynohosting
-description: Publish, update, inspect, back up, and preview websites hosted on ZynoHosting using the `zynohosting` CLI. Use when the user wants to deploy or publish a site to ZynoHosting, deploy to a preview site, promote preview to production (go live), check which sites they can access, edit, upload, or delete individual hosted files, download a hosted site, or sign in to ZynoHosting.
+description: Publish, update, inspect, back up, and preview websites hosted on ZynoHosting, and create, edit, and embed ZynoForms, using the `zynohosting` CLI. Use when the user wants to deploy or publish a site to ZynoHosting, deploy to a preview site, promote preview to production (go live), check which sites they can access, edit, upload, or delete individual hosted files, download a hosted site, sign in to ZynoHosting, or add, change, or connect a ZynoForms form.
 ---
 
 # ZynoHosting CLI
@@ -34,14 +34,16 @@ Login opens the user's browser and waits up to 300 seconds for them to finish. R
 
 Request the narrowest complete permission set for the task. `hosting.sitesRead` is always needed. Add `--renewable` so the 60-minute token renews itself.
 
-| Task                                  | Add these permissions                                                   |
-| ------------------------------------- | ----------------------------------------------------------------------- |
-| Look at sites only                    | none                                                                    |
-| Deploy, deploy to preview, or promote | `hosting.deploy`                                                        |
-| Read individual files                 | `hosting.filesRead`                                                     |
-| Upload or replace individual files    | `hosting.filesRead`, `hosting.filesWrite`                               |
-| Delete individual files               | `hosting.filesDelete` as well                                           |
-| Back up the site                      | `hosting.download` (`hosting.downloadSensitive` for uploads and config) |
+| Task                                         | Add these permissions                                                   |
+| -------------------------------------------- | ----------------------------------------------------------------------- |
+| Look at sites only                           | none                                                                    |
+| Deploy, deploy to preview, or promote        | `hosting.deploy`                                                        |
+| Read individual files                        | `hosting.filesRead`                                                     |
+| Upload or replace individual files           | `hosting.filesRead`, `hosting.filesWrite`                               |
+| Delete individual files                      | `hosting.filesDelete` as well                                           |
+| Create forms                                 | `forms.create`                                                          |
+| Edit forms, their origins, or bot protection | `forms.edit`                                                            |
+| Back up the site                             | `hosting.download` (`hosting.downloadSensitive` for uploads and config) |
 
 ```bash
 zynohosting login --name "Claude Code — <project>" --renewable \
@@ -133,7 +135,39 @@ Add `--json` to any command. `deploy` and `promote` emit one JSON event per line
 
 ## ZynoForms
 
-The CLI has no forms commands. Use the ZynoHosting MCP tools for forms (`list_forms`, `describe_form`, `create_basic_form`, `update_form`, and others) if they are available in this session. If they are not, tell the user that form work needs the MCP server and point them to https://zyno-io.github.io/zynohosting-cli/agents/.
+`zynohosting forms <command>` reads one JSON object from `--input` and prints one JSON document. Errors go to stderr as JSON. Pass input inline (`--input '{"form":"contact-us"}'`), from a file (`--input @edit.json`), or on stdin (`--input -`). Prefer a file for anything longer than a line.
+
+| Command          | Does                                                                 | Permission                                                |
+| ---------------- | -------------------------------------------------------------------- | --------------------------------------------------------- |
+| `list`           | List the tenant's forms with links and iframe snippets (no input)    | sign-in only                                              |
+| `describe`       | Fields, keys, types, what is editable, and any blocking draft        | sign-in only                                              |
+| `integration`    | Live field aliases, endpoints, iframe, and JSON/HTML/script examples | sign-in only                                              |
+| `create`         | Create **and publish** a one-page form                               | `forms.create` (+ `hosting.sitesRead` for `origin_sites`) |
+| `update`         | Edit name, wording, emails, and add/update/move/remove fields        | `forms.edit`                                              |
+| `bot-protection` | Set Cap protection: `interactive`, `invisible`, or `disabled`        | `forms.edit`                                              |
+| `origins`        | Add or remove allowed browser origins, or a site's hostnames         | `forms.edit` (+ `hosting.sitesRead` for sites)            |
+| `guide`          | The embedding guide as Markdown in JSON (no input, no sign-in)       | none                                                      |
+
+```bash
+zynohosting forms list
+zynohosting forms describe --input '{"form":"contact-us"}'
+zynohosting forms create --input @form.json
+#   {"name":"Contact","origin_sites":["example.com"],
+#    "fields":[{"type":"text","key":"name","label":"Name"},{"type":"email","key":"email","label":"Email"}]}
+zynohosting forms update --input @edit.json
+#   {"form":"contact-us","expected_definition_id":"<live.definitionId from describe>",
+#    "operations":[{"op":"add_field","field":{"type":"phone","key":"phone","label":"Phone","required":false}}]}
+```
+
+Input fields and results are identical to the MCP tools of the same purpose (`list_forms`, `describe_form`, `get_form_integration`, `create_basic_form`, `update_form`, `update_form_bot_protection`, `update_form_origins`). The full argument reference, including every field type and operation, is at https://zyno-io.github.io/zynohosting-cli/mcp/tools. Unknown keys are rejected.
+
+Rules for forms:
+
+- **Ask before `create`, `update`, `bot-protection`, or `origins`.** They change live forms at once, and `create` publishes immediately. Show the user the planned fields or changes first.
+- **Connecting a page:** read the existing page first and keep its markup, layout, and styling. Don't replace it with a generic form. Allow that page's exact origin, and follow the response contract and the `jsonScript` or `capScript` the command returns.
+- **Editing:** run `describe` first, edit the existing form in place, and never create a second one. Pass `expected_definition_id` from `describe`. If the form has an unpublished draft, `update` refuses. Tell the user rather than reaching for `"on_existing_draft":"extend"`, unless they ask to build on the draft.
+- **When something can't be represented** (a field type, validation rule, choice, or bot protection), explain the limit and ask how to proceed. Never drop it silently.
+- Removing or renaming a field key breaks integrations that post that key. Say so before doing it.
 
 ## Working with non-technical users
 

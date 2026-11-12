@@ -7,7 +7,7 @@
 - plan and apply complete deployments to production or an isolated preview slot;
 - promote current preview content to production;
 - download a complete deployable snapshot or, with the extra permission, all user content;
-- discover, create, inspect, edit, embed, and configure published ZynoForms (MCP only);
+- discover, create, inspect, edit, embed, and configure published ZynoForms (JSON in, JSON out);
 - teach coding agents to drive the CLI through one [skill file](./skills/zynohosting/SKILL.md);
 - expose the same operations through a local stdio MCP server, packaged as a Claude desktop extension.
 
@@ -25,7 +25,7 @@ zynohosting --help
 It installs two executables:
 
 - `zynohosting` — the command-line interface for people, coding agents, and CI;
-- `zynohosting-mcp` — the local stdio MCP server, mainly for the Claude desktop app and ZynoForms.
+- `zynohosting-mcp` — the local stdio MCP server, mainly for the Claude desktop app.
 
 You can also run commands without a global install:
 
@@ -161,6 +161,21 @@ storage quota. Database changes from preview can affect the live site. Both oper
 existing `hosting.deploy` permission, alongside `hosting.sitesRead` for site inspection. See
 [preview and promotion details](docs/cli/deploy.md#preview-sites-and-promotion).
 
+## ZynoForms
+
+Form commands take one JSON object and print one JSON document. Inputs and results match the MCP form tools.
+
+```bash
+zynohosting forms list
+zynohosting forms describe --input '{"form":"contact-us"}'
+zynohosting forms create --input @form.json
+zynohosting forms update --input -  < edit.json
+zynohosting forms origins --input '{"form":"contact-us","add_sites":["example.com"]}'
+zynohosting forms guide
+```
+
+Errors go to stderr as JSON. See [ZynoForms commands](https://zyno-io.github.io/zynohosting-cli/cli/forms).
+
 ## Complete download
 
 The default snapshot mirrors the deployable scope:
@@ -183,14 +198,11 @@ Agents with a shell (Claude Code, Codex) use the CLI, guided by the [ZynoHosting
 
 > Set up ZynoHosting for this project. Follow https://raw.githubusercontent.com/zyno-io/zynohosting-cli/main/docs/agents/install.md
 
-The agent writes the skill to `.claude/skills/zynohosting/SKILL.md` or `.agents/skills/zynohosting/SKILL.md` and carries on in the same session: no MCP server, no restart, and nothing in the agent's context until a hosting task comes up. The skill covers sign-in, the domain policy, plan-then-apply, preview and promotion, files, and downloads.
+The agent writes the skill to `.claude/skills/zynohosting/SKILL.md` or `.agents/skills/zynohosting/SKILL.md` and carries on in the same session: no MCP server, no restart, and nothing in the agent's context until a hosting task comes up. The skill covers sign-in, the domain policy, plan-then-apply, preview and promotion, files, downloads, and ZynoForms.
 
-The local MCP server remains for clients without a shell and for ZynoForms:
+The local MCP server remains for the **Claude desktop app's Chat and Cowork tabs**, which cannot run a CLI or install anything from a conversation. The user opens the signed desktop extension, [`zynohosting.mcpb`](https://github.com/zyno-io/zynohosting-cli/releases/latest/download/zynohosting.mcpb). It carries the server as a single bundled file, runs on the Node runtime inside Claude Desktop so nothing else has to be installed, and stages newer signed releases so installs do not go stale.
 
-- **Claude desktop app, Chat and Cowork tabs.** These cannot run a CLI or install anything from a conversation. The user opens the signed desktop extension, [`zynohosting.mcpb`](https://github.com/zyno-io/zynohosting-cli/releases/latest/download/zynohosting.mcpb). It carries the server as a single bundled file, runs on the Node runtime inside Claude Desktop so nothing else has to be installed, and stages newer signed releases so installs do not go stale.
-- **ZynoForms in any agent.** The CLI has no forms commands. Codex and Claude Code add the MCP server with [these agent instructions](./docs/mcp/agent.md), then restart.
-
-See [CLI, skill, or MCP](https://zyno-io.github.io/zynohosting-cli/agents/interfaces) for the reasoning, and [Set up and use ZynoHosting in your agent](https://zyno-io.github.io/zynohosting-cli/agents/) for copy-and-paste prompts.
+See [CLI, skill, or MCP](https://zyno-io.github.io/zynohosting-cli/agents/interfaces) for the reasoning, and [Set up an agent](https://zyno-io.github.io/zynohosting-cli/agents/) for per-agent steps and copy-and-paste prompts.
 
 ## Local MCP server
 

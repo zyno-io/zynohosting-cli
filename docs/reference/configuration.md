@@ -21,7 +21,7 @@ The Hosting API URL is selected from an explicit option, environment variable, s
 | `ZYNOHOSTING_TENANT_ID`        | no        | Optional tenant metadata for an injected scoped token.                                                                     |
 | `ZYNOHOSTING_TOKEN_EXPIRES_AT` | no        | Optional bearer expiry as epoch milliseconds.                                                                              |
 | `ZYNOHOSTING_API_URL`          | no        | Override the Hosting Manager base URL.                                                                                     |
-| `ZYNO_SUITE_API_URL`           | no        | Override the ZynoSuite base URL used by MCP form tools.                                                                    |
+| `ZYNO_SUITE_API_URL`           | no        | Override the ZynoSuite base URL used by form commands and tools.                                                           |
 | `ZYNO_AUTH_API_URL`            | no        | Override the ZynoAuth base URL used for renew and revoke.                                                                  |
 | `ZYNOHOSTING_ENVIRONMENT`      | no        | Select `production`, `alpha`, or `dev`.                                                                                    |
 | `ZYNOHOSTING_CONFIG`           | no        | Override the saved configuration path.                                                                                     |

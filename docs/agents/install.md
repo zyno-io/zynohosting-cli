@@ -2,7 +2,7 @@
 
 This page is for the AI agent that fetched it. The person you are working for reads https://zyno-io.github.io/zynohosting-cli/agents/ instead.
 
-If you can run shell commands, you use ZynoHosting through its CLI and a skill file that teaches you the CLI. Setup takes one download, and you can carry on in this session right away. Do not install the MCP server as well unless the user needs ZynoForms (see below).
+If you can run shell commands, you use ZynoHosting through its CLI and a skill file that teaches you the CLI. Setup takes one download, and you can carry on in this session right away. Do not install the MCP server as well; the CLI covers hosting and ZynoForms.
 
 If you cannot run shell commands, skip to "Agents without a shell".
 
@@ -33,10 +33,6 @@ If you cannot run shell commands, skip to "Agents without a shell".
 
 6. Read the skill file you just wrote, and follow it for the rest of this session. You do not need a restart. New sessions load it automatically when ZynoHosting comes up.
 7. Tell the user it is set up. The skill file holds no credentials and is safe to commit. Sign-in happens later, in their browser, the first time a task needs it.
-
-## ZynoForms
-
-The CLI does not manage ZynoForms. If the user wants to create, edit, or embed forms, they need the MCP server too. Install it with https://raw.githubusercontent.com/zyno-io/zynohosting-cli/main/docs/mcp/agent.md. The skill and the MCP server work side by side.
 
 ## Agents without a shell
 

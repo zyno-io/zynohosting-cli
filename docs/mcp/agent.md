@@ -4,10 +4,10 @@ This page is addressed to the AI agent that fetched it. The person you are worki
 
 ## Check whether you need the MCP server
 
-Agents that can run shell commands now use ZynoHosting through its CLI and a skill file, not the MCP server. The CLI covers sites, files, deployments, preview, promotion, and downloads. Nothing loads into your sessions until a task needs it, and no restart is required.
+Agents that can run shell commands now use ZynoHosting through its CLI and a skill file, not the MCP server. The CLI covers sites, files, deployments, preview, promotion, downloads, and ZynoForms. Nothing loads into your sessions until a task needs it, and no restart is required.
 
-- If the user wants hosting work (publishing, preview, files, backups), follow https://raw.githubusercontent.com/zyno-io/zynohosting-cli/main/docs/agents/install.md instead of this page. Tell the user you set up the CLI skill rather than the MCP server, because it stays out of the way until needed.
-- Continue below only if the user needs ZynoForms (creating, editing, or embedding forms), which only the MCP server provides, or explicitly asks for the MCP server. The older setup prompt (“Set up ZynoHosting MCP for this project if it's not already configured”) predates the CLI skill and does not count as that request on its own. Installing the skill as well is fine.
+- Normally, follow https://raw.githubusercontent.com/zyno-io/zynohosting-cli/main/docs/agents/install.md instead of this page. Tell the user you set up the CLI skill rather than the MCP server, because it stays out of the way until needed.
+- Continue below only if the user explicitly asks for the MCP server rather than the CLI. The older setup prompt (“Set up ZynoHosting MCP for this project if it's not already configured”) predates the CLI skill and does not count as that request on its own. Installing the skill as well is fine.
 - If you cannot run shell commands, see “Agents without a shell” below.
 
 The rest of this page covers one thing: installing the local ZynoHosting MCP server. Everything that applies afterward—deployment-domain policy, sign-in, form editing—is delivered by the server itself as MCP instructions and tool descriptions once it is connected. Do not look for that guidance here.

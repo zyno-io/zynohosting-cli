@@ -4,8 +4,7 @@ export default defineConfig({
     lang: 'en-US',
     title: 'ZynoHosting CLI & MCP',
     titleTemplate: ':title · ZynoHosting',
-    description:
-        'Deploy, preview, and promote ZynoHosting sites from the command line or an agent, and connect ZynoForms through a local MCP server.',
+    description: 'Deploy, preview, and promote ZynoHosting sites from the command line or an agent, and create and connect ZynoForms.',
     base: '/zynohosting-cli/',
     lastUpdated: true,
     sitemap: {
@@ -50,15 +49,26 @@ export default defineConfig({
                         { text: 'Sites', link: '/cli/sites' },
                         { text: 'Individual files', link: '/cli/files' },
                         { text: 'Full deployments', link: '/cli/deploy' },
-                        { text: 'Complete downloads', link: '/cli/download' }
+                        { text: 'Complete downloads', link: '/cli/download' },
+                        { text: 'ZynoForms', link: '/cli/forms' }
                     ]
                 }
             ],
             '/agents/': [
                 {
-                    text: 'Agents',
+                    text: 'Set up an agent',
                     items: [
-                        { text: 'Set up and use it (start here)', link: '/agents/' },
+                        { text: 'Choose your agent', link: '/agents/' },
+                        { text: 'Claude desktop app', link: '/agents/claude-desktop' },
+                        { text: 'Claude Code', link: '/agents/claude-code' },
+                        { text: 'Codex', link: '/agents/codex' },
+                        { text: 'Another coding agent', link: '/agents/other' },
+                        { text: 'What to ask your agent', link: '/agents/prompts' }
+                    ]
+                },
+                {
+                    text: 'For developers',
+                    items: [
                         { text: 'CLI, skill, or MCP', link: '/agents/interfaces' },
                         { text: 'Install instructions for agents', link: '/agents/install' }
                     ]
@@ -75,7 +85,7 @@ export default defineConfig({
                 },
                 {
                     text: 'Agents',
-                    items: [{ text: 'Set up and use it (start here)', link: '/agents/' }]
+                    items: [{ text: 'Set up an agent (start here)', link: '/agents/' }]
                 }
             ],
             '/reference/': [
