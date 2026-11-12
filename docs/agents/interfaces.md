@@ -18,8 +18,8 @@ The CLI already has what an agent needs:
 
 - the same operations as the MCP tools: sites, files, deploy, preview, promote, download, and ZynoForms (`zynohosting forms …`, JSON in and out, with the same inputs and results as the MCP form tools);
 - `--json` with stable error codes and exit codes;
-- `--dry-run` for `deploy` and `promote`;
-- a non-interactive guard: `deploy`, `promote`, `download`, and `files rm` exit with `confirmation_required` instead of prompting when `--yes` (or `--dry-run`) is missing. `files put` applies immediately, so the skill tells agents to get approval first.
+- `--dry-run` for `deploy`, `promote`, and `sites set`;
+- a non-interactive guard: `deploy`, `promote`, `sites set`, `download`, and `files rm` exit with `confirmation_required` instead of prompting when `--yes` (or `--dry-run`) is missing. `files put` applies immediately, so the skill tells agents to get approval first.
 
 The policy the MCP server delivers as server instructions, such as never guessing a domain or never forcing a promotion, lives in the skill instead.
 

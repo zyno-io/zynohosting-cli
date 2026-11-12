@@ -172,7 +172,7 @@ After the user names a domain, the agent verifies it with `list_sites` or `get_s
 
 ## Available tools
 
-The server exposes twenty tools:
+The server exposes twenty-one tools:
 
 - `login`
 - `list_sites`
@@ -192,6 +192,7 @@ The server exposes twenty tools:
 - `apply_deploy`
 - `plan_promote`
 - `apply_promote`
+- `set_not_found_handling`
 - `plan_download`
 - `apply_download`
 

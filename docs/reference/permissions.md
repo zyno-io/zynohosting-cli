@@ -4,19 +4,19 @@ ZynoHosting and ZynoForms automation use tenant permissions at their APIs. Hosti
 
 ## Tenant permissions
 
-| Permission                  | Capability                                                              |
-| --------------------------- | ----------------------------------------------------------------------- |
-| `hosting.sitesRead`         | List and inspect authorized sites.                                      |
-| `hosting.filesRead`         | List files and download individual files.                               |
-| `hosting.filesWrite`        | Create and replace individual files.                                    |
-| `hosting.filesDelete`       | Delete individual files.                                                |
-| `hosting.deploy`            | Deploy production/preview content and promote preview.                  |
-| `hosting.download`          | Download the deployable snapshot.                                       |
-| `hosting.downloadSensitive` | Include protected and user-generated content in a snapshot.             |
-| `hosting.analyticsRead`     | Read hosting analytics.                                                 |
-| `hosting.analyticsManage`   | Change analytics configuration.                                         |
-| `forms.create`              | Create and immediately publish a basic form.                            |
-| `forms.edit`                | Change a form’s name, fields, Cap protection, and allowed CORS origins. |
+| Permission                  | Capability                                                                            |
+| --------------------------- | ------------------------------------------------------------------------------------- |
+| `hosting.sitesRead`         | List and inspect authorized sites.                                                    |
+| `hosting.filesRead`         | List files and download individual files.                                             |
+| `hosting.filesWrite`        | Create and replace individual files.                                                  |
+| `hosting.filesDelete`       | Delete individual files.                                                              |
+| `hosting.deploy`            | Deploy production/preview content, promote preview, and change missing-page handling. |
+| `hosting.download`          | Download the deployable snapshot.                                                     |
+| `hosting.downloadSensitive` | Include protected and user-generated content in a snapshot.                           |
+| `hosting.analyticsRead`     | Read hosting analytics.                                                               |
+| `hosting.analyticsManage`   | Change analytics configuration.                                                       |
+| `forms.create`              | Create and immediately publish a basic form.                                          |
+| `forms.edit`                | Change a form’s name, fields, Cap protection, and allowed CORS origins.               |
 
 That table is the complete set of keys a CLI token can request. `zynohosting login --help` prints it and the MCP `login` tool enumerates it in its schema, so a plausible-looking invention such as `hosting.sitesWrite` fails locally—naming the closest real key—before any browser opens.
 
@@ -64,7 +64,7 @@ Grant:
 
 Add `hosting.filesRead` only if the same workflow must inspect or download individual files.
 
-This same permission set covers `deploy --preview`, `promote`, and their MCP plan/apply tools.
+This same permission set covers `deploy --preview`, `promote`, `sites set`, and their MCP tools.
 No new permission is introduced for preview or promotion.
 
 ### Backup automation

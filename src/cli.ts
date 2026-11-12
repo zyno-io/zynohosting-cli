@@ -11,6 +11,7 @@ import { runFormCommand, runFormsGuide } from './commands/forms.js';
 import { login, LoginOptions } from './commands/login.js';
 import { logout, LogoutOptions } from './commands/logout.js';
 import { promoteSite, PromoteSiteOptions } from './commands/promote-site.js';
+import { setSiteSettings, SetSiteSettingsOptions } from './commands/site-settings.js';
 import { getSite, listSites } from './commands/sites.js';
 import { CliError } from './errors.js';
 import { FORM_OPERATIONS } from './mcp/forms.js';
@@ -103,7 +104,7 @@ export function createProgram(): Command {
             });
         });
 
-    const sites = program.command('sites').description('list and inspect authorized sites');
+    const sites = program.command('sites').description('list, inspect, and configure authorized sites');
     sites
         .command('list')
         .description('list authorized hosting sites')
@@ -118,6 +119,20 @@ export function createProgram(): Command {
         .option('--json', 'emit JSON')
         .action(async (siteRef: string, commandOptions: { json?: boolean }) => {
             await getSite(siteRef, commandContext(program, commandOptions));
+        });
+
+    sites
+        .command('set')
+        .description('change a site setting (currently how missing pages are handled)')
+        .argument('<site>', 'site ID or hostname')
+        .option('--not-found <mode>', 'missing-page handling: 404-page or single-page-application (static sites only)')
+        .addOption(environmentOption())
+        .option('-y, --yes', 'apply without prompting after displaying the change')
+        .option('--dry-run', 'show the change without applying it')
+        .option('--json', 'emit newline-delimited JSON output')
+        .addOption(new Option('--timeout <seconds>', 'update and reconciliation timeout').argParser(positiveInteger).default(300))
+        .action(async (siteRef: string, commandOptions: SetSiteSettingsOptions & { timeout: number }) => {
+            await setSiteSettings(siteRef, { ...commandContext(program, commandOptions), ...commandOptions, timeoutSeconds: commandOptions.timeout });
         });
 
     const files = program.command('files').description('list, download, upload, and delete individual files');

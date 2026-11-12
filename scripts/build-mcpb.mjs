@@ -97,6 +97,7 @@ const tools = [
     { name: 'apply_deploy', description: 'Apply a reviewed deployment plan' },
     { name: 'plan_promote', description: 'Plan preview promotion to production for review' },
     { name: 'apply_promote', description: 'Apply a reviewed preview promotion plan' },
+    { name: 'set_not_found_handling', description: 'Set how a static site handles missing pages (404 or single-page app)' },
     { name: 'plan_download', description: 'Plan a full download for review' },
     { name: 'apply_download', description: 'Apply a reviewed download plan' }
 ];

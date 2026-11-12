@@ -1,6 +1,6 @@
 {
     "name": "@zyno-io/zynohosting",
-    "version": "0.5.0",
+    "version": "0.6.0",
     "description": "CLI and local MCP server for managing ZynoHosting sites and ZynoForms integrations",
     "license": "MIT",
     "mcpName": "io.github.zyno-io/zynohosting",

@@ -17,6 +17,10 @@ export async function previewManager(t: { after(fn: () => unknown): void }) {
         productionHasWpConfig: false,
         previewHasWpConfig: false,
         omitTarget: false,
+        notFoundHandling: '404-page' as string,
+        omitNotFoundHandling: false,
+        phpVersion: null as string | null,
+        settingsPatches: 0,
         grantedTarget: undefined as 'production' | 'preview' | undefined
     };
     const requests: string[] = [];
@@ -26,7 +30,8 @@ export async function previewManager(t: { after(fn: () => unknown): void }) {
         id: siteId,
         primaryHostname: 'example.com',
         status: 'active',
-        phpVersion: null,
+        phpVersion: state.phpVersion,
+        ...(state.omitNotFoundHandling ? {} : { notFoundHandling: state.notFoundHandling }),
         deployments: {
             production: {
                 deploymentId: state.productionId,
@@ -57,6 +62,24 @@ export async function previewManager(t: { after(fn: () => unknown): void }) {
         try {
             if (request.method === 'GET' && (request.url === '/v1/sites/example.com' || request.url === `/v1/sites/${siteId}`)) {
                 json(site());
+                return;
+            }
+            if (request.method === 'PATCH' && request.url === `/v1/sites/${siteId}`) {
+                const body = JSON.parse(bytes.toString()) as { notFoundHandling?: string };
+                bodies.push(body);
+                if (body.notFoundHandling !== '404-page' && body.notFoundHandling !== 'single-page-application') {
+                    response.statusCode = 400;
+                    json({ message: 'invalid notFoundHandling' });
+                    return;
+                }
+                if (body.notFoundHandling === 'single-page-application' && state.phpVersion) {
+                    response.statusCode = 400;
+                    json({ message: 'single-page-application requires a static site' });
+                    return;
+                }
+                state.settingsPatches++;
+                state.notFoundHandling = body.notFoundHandling;
+                json({ result: site(), operation: operation() });
                 return;
             }
             if (request.url?.endsWith('/access-sessions')) {

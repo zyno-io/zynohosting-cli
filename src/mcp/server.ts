@@ -7,15 +7,16 @@ import { FormsClient } from '../api/forms-client.js';
 import { ManagerClient } from '../api/manager-client.js';
 import { resolveDistribution } from '../api/user-agent.js';
 import { startCredentialRefreshLoop } from '../auth/credential-refresh.js';
-import { applyPreparedDeployment, prepareDeployment, PreparedDeployment } from '../commands/deploy-site.js';
+import { applyPreparedDeployment, normalizeSiteRef, prepareDeployment, PreparedDeployment } from '../commands/deploy-site.js';
 import { applyDownload, prepareDownload, PreparedDownload } from '../commands/download-site.js';
 import { createFileClient, purgeSiteCacheAfterMutation, writeResponseAtomically } from '../commands/files.js';
 import { login, LoginDependencies } from '../commands/login.js';
 import { applyPreparedPromotion, preparePromotion, PreparedPromotion, promotionSummary } from '../commands/promote-site.js';
+import { applyPreparedSiteSettings, prepareSiteSettings } from '../commands/site-settings.js';
 import { ConfigOverrides, ResolvedConfig, resolveConfig } from '../config.js';
 import { CliError, errorMessage, HttpError } from '../errors.js';
 import { DELEGABLE_PERMISSION_KEYS, permissionCapabilityLines } from '../permissions.js';
-import { PREVIEW_RESOURCE_NOTICE } from '../protocol.js';
+import { NOT_FOUND_HANDLING_MODES, PREVIEW_RESOURCE_NOTICE } from '../protocol.js';
 import { registerFormsMcp } from './forms.js';
 import { AllowedLocalRoots } from './local-paths.js';
 import { UpdatePolicy } from './update-check.js';
@@ -34,7 +35,7 @@ const MAX_PENDING_PLANS = 16;
 const SERVER_INSTRUCTIONS = [
     'Never infer a deployment domain from a repository, site content, organization name, or a similar available site. Before any site mutation, use an explicitly stated project domain or ask the user which domain they intend. Verify that domain with list_sites or get_site. If it is unavailable in the current login context, do not substitute another site; explain that access is unavailable and offer the login tool so the user can switch context. Use plan_deploy and present its operations and target before apply_deploy. Production is the default; target preview updates only preview. Use plan_promote and present both URLs before apply_promote; promotion renames the current preview into production and resets preview to empty. Preview has no separate database and shares the main site’s database and storage quota. Only set force to true when the user explicitly requests bypassing the wp-config.php guard; never retry a blocked promotion with force automatically. Read the preview address from get_site deployments.preview.url and never construct it; the vanity hostname serves production. File tools and downloads act only on production. Promotion replaces production with exactly what preview holds, and deployments never send wp-config.php, wp-content/uploads, or other excluded content to preview, so for WordPress or any site whose production holds content outside the build, recommend deploying to production instead of promoting. After a promotion preview is empty; do not promote again until preview has been redeployed.',
     'When connecting a page to a form, read the existing page first and preserve its markup, layout, and styling rather than replacing it with a generic form. Allow that page’s exact origin, and follow the response contract and the jsonScript or capScript returned with the form. Read an existing form with describe_form before update_form and edit it in place rather than creating a second form. If ZynoForms cannot represent a field, validation rule, choice, or bot protection exactly, explain the limitation and ask the user how to proceed instead of dropping it.',
-    'When the user wants to build a new site: ZynoHosting serves static files, plus PHP on sites with PHP turned on (get_site phpVersion is null when it is off, and .php files then return 404). It runs no Node.js or other server process, so server-side rendering and API routes are unavailable. If you can run commands, recommend Astro with its default static output and no server adapter, build it, and deploy the dist folder rather than the project root. If you cannot run a build, write plain HTML, CSS, and JavaScript files. Use PHP only for real server-side code, and ZynoForms rather than PHP for forms. Static sites have no single-page-app fallback, so pre-render every route. Everything deployed is publicly readable, so never deploy .env files or secrets. These tools cannot create sites: deploy only to an existing site the user names, and if they have none, tell them to ask ZynoHosting support to set one up.'
+    'When the user wants to build a new site: ZynoHosting serves static files, plus PHP on sites with PHP turned on (get_site phpVersion is null when it is off, and .php files then return 404). It runs no Node.js or other server process, so server-side rendering and API routes are unavailable. If you can run commands, recommend Astro with its default static output and no server adapter, build it, and deploy the dist folder rather than the project root. If you cannot run a build, write plain HTML, CSS, and JavaScript files. Use PHP only for real server-side code, and ZynoForms rather than PHP for forms. A static site returns 404 for unknown paths unless get_site notFoundHandling is single-page-application, which serves /index.html for unknown paths unless they end in a listed asset extension. Prefer pre-rendering every route; if a client-side router needs the fallback, ask the user, then call set_not_found_handling; it applies to production and preview and is unavailable with PHP. Everything deployed is publicly readable, so never deploy .env files or secrets. These tools cannot create sites: deploy only to an existing site the user names, and if they have none, tell them to ask ZynoHosting support to set one up.'
 ].join(' ');
 
 export async function createHostingMcpServer(options: McpServerOptions): Promise<McpServer> {
@@ -95,7 +96,7 @@ export async function createHostingMcpServer(options: McpServerOptions): Promise
             description: [
                 'Start, check, or cancel the local browser sign-in flow for ZynoHosting. Starting returns the one-time URL in this tool result and attempts to open it in a browser. Use this before authenticated tools when no login is saved, or when the requested domain is unavailable in the current login context. A browser login cannot replace API-key or token credentials injected into this MCP process; change those credentials and restart instead.',
                 `Request only these permissions — no others exist, and one invalid key rejects the whole request instead of granting the rest:\n${permissionCapabilityLines()}`,
-                'Include hosting.sitesRead in every hosting request. Ask for the narrowest complete set for the stated task: editing individual files needs hosting.filesRead and hosting.filesWrite (add hosting.filesDelete only to remove files); a full deploy needs hosting.deploy; a backup needs hosting.download, plus hosting.downloadSensitive only when user-generated content is wanted. A token cannot be widened later, so a missing permission means revoking and signing in again.',
+                'Include hosting.sitesRead in every hosting request. Ask for the narrowest complete set for the stated task: editing individual files needs hosting.filesRead and hosting.filesWrite (add hosting.filesDelete only to remove files); a full deploy, promotion, or not-found handling change needs hosting.deploy; a backup needs hosting.download, plus hosting.downloadSensitive only when user-generated content is wanted. A token cannot be widened later, so a missing permission means revoking and signing in again.',
                 'One browser flow runs at a time. Starting with the same permissions, name, and renewable flag returns that same in-flight URL with "reused": true; starting with a different request cancels the in-flight flow and returns a new URL, so the user must use the newest link. Use action "cancel" to abandon a flow the user is not going to finish.'
             ].join('\n\n'),
             inputSchema: {
@@ -372,6 +373,26 @@ export async function createHostingMcpServer(options: McpServerOptions): Promise
             const promoted = await applyPreparedPromotion(plan);
             promotions.delete(plan_id);
             return result(promoted);
+        }
+    );
+
+    server.registerTool(
+        'set_not_found_handling',
+        {
+            title: 'Set how a site handles missing pages',
+            description:
+                'Set a site\'s not-found handling. "single-page-application" serves /index.html (status 200) for unknown paths unless they end in a listed asset extension (.js, .css, images, fonts, .json, .txt, ...), which still return 404, so client-side routers can handle deep links. "404-page" (default) returns 404 for every unknown path. Applies immediately to both production and preview and purges the CDN cache; it changes live traffic, so ask the user first. Static sites only: fails if the site runs PHP. Prefer pre-rendering every route; use this only when a client-side router needs it. Idempotent; waits for serving reconciliation. Requires hosting.deploy.',
+            inputSchema: {
+                site: z.string().min(1),
+                mode: z.enum(NOT_FOUND_HANDLING_MODES)
+            },
+            annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false }
+        },
+        async ({ site, mode }) => {
+            const { config, manager } = await authentication.clients();
+            await authorizedSite(manager, normalizeSiteRef(site));
+            const plan = await prepareSiteSettings(site, mode, options, config);
+            return result(await applyPreparedSiteSettings(plan));
         }
     );
 

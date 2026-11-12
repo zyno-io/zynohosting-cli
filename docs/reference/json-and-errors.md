@@ -63,19 +63,27 @@ Promotion errors include `preview_unavailable` for an older manager, `promotion_
 failed serving reconciliation, and `promotion_pending` when an accepted operation is still pending.
 The latter includes its operation ID and status path; inspect that operation before resubmitting.
 
+## Site settings output
+
+`sites set --yes --json` emits `site_settings_plan`, progress events, then `site_settings_result`
+only after serving reconciliation succeeds. `--dry-run --json` emits the plan and `dry_run_complete`.
+Errors: `not_found_handling_requires_static` (exit 2, SPA on a PHP site), `not_found_handling_unavailable`
+(exit 5, older manager), `reconciliation_failed` and `reconciliation_pending` (exit 7; the latter
+includes the operation ID, and re-running the same command resumes waiting).
+
 ## Exit codes
 
-| Exit code | Category                                                                   |
-| --------- | -------------------------------------------------------------------------- |
-| `0`       | Success.                                                                   |
-| `1`       | Unexpected CLI or runtime failure.                                         |
-| `2`       | Invalid local input, unsafe path, configuration, or missing confirmation.  |
-| `3`       | Authentication or authorization failure, including expired login.          |
-| `4`       | Remote API failure or failed ETag/create-only precondition.                |
-| `5`       | Invalid, incompatible, or unsafe manager/agent response.                   |
-| `6`       | Unknown or expired plan/session, or a stated precondition no longer holds. |
-| `7`       | The node agent could not apply a deployment.                               |
-| `8`       | Mutation applied, but cache invalidation could not be queued.              |
+| Exit code | Category                                                                                                          |
+| --------- | ----------------------------------------------------------------------------------------------------------------- |
+| `0`       | Success.                                                                                                          |
+| `1`       | Unexpected CLI or runtime failure.                                                                                |
+| `2`       | Invalid local input, unsafe path, configuration, or missing confirmation.                                         |
+| `3`       | Authentication or authorization failure, including expired login.                                                 |
+| `4`       | Remote API failure or failed ETag/create-only precondition.                                                       |
+| `5`       | Invalid, incompatible, or unsafe manager/agent response.                                                          |
+| `6`       | Unknown or expired plan/session, or a stated precondition no longer holds.                                        |
+| `7`       | The node agent could not apply a deployment, or a promotion or site-settings reconciliation failed or is pending. |
+| `8`       | Mutation applied, but cache invalidation could not be queued.                                                     |
 
 ::: danger Exit code 8
 The remote mutation already succeeded. Do not blindly retry the deployment as though nothing changed; inspect the site and retry cache invalidation through an approved operational path.

@@ -9,9 +9,12 @@ import {
     PROTOCOL_VERSION,
     DeploymentSession,
     DeploymentTarget,
+    NotFoundHandling,
     PromotionAccepted,
+    SiteMutationAccepted,
     ReconciliationOperation,
     parsePromotionAccepted,
+    parseSiteMutationAccepted,
     parseReconciliation,
     parseAccessSession,
     parseAutomationSite,
@@ -100,6 +103,21 @@ export class ManagerClient {
             })
         );
         if (accepted.result.id !== siteId) throw new CliError('Manager returned a promotion for another site', 5, 'invalid_manager_response');
+        return accepted;
+    }
+
+    async updateSite(siteId: string, changes: { notFoundHandling: NotFoundHandling }): Promise<SiteMutationAccepted> {
+        const accepted = parseSiteMutationAccepted(
+            await requestJson(`${this.apiUrl}/v1/sites/${encodeURIComponent(siteId)}`, {
+                method: 'PATCH',
+                timeoutMs: this.timeoutMs,
+                headers: { ...(await authorizationHeaders(this.credential)), 'Content-Type': 'application/json', Accept: 'application/json' },
+                body: JSON.stringify({ notFoundHandling: changes.notFoundHandling })
+            })
+        );
+        if (accepted.result.id !== siteId || accepted.result.notFoundHandling !== changes.notFoundHandling) {
+            throw new CliError('Manager returned an unexpected site update result', 5, 'invalid_manager_response');
+        }
         return accepted;
     }
 

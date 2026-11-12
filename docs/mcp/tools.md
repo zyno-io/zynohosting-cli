@@ -18,19 +18,19 @@ Starts Zyno’s browser login flow from the MCP process and returns its one-time
 
 `permissions` is an enumeration. These are the only valid values; a plausible-looking key such as `hosting.sitesWrite` does not exist, and one invalid entry rejects the whole request rather than granting the remainder:
 
-| Permission                  | Capability                                                    |
-| --------------------------- | ------------------------------------------------------------- |
-| `hosting.sitesRead`         | List and inspect sites (required by every hosting operation). |
-| `hosting.filesRead`         | List files and read individual files.                         |
-| `hosting.filesWrite`        | Create and replace individual files.                          |
-| `hosting.filesDelete`       | Delete individual files.                                      |
-| `hosting.deploy`            | Deploy production/preview content and promote preview.        |
-| `hosting.download`          | Download the deployable snapshot.                             |
-| `hosting.downloadSensitive` | Include protected and user-generated content in a download.   |
-| `hosting.analyticsRead`     | Read hosting analytics.                                       |
-| `hosting.analyticsManage`   | Change analytics configuration.                               |
-| `forms.create`              | Create and publish a basic form.                              |
-| `forms.edit`                | Edit a form, its bot protection, and its allowed origins.     |
+| Permission                  | Capability                                                                            |
+| --------------------------- | ------------------------------------------------------------------------------------- |
+| `hosting.sitesRead`         | List and inspect sites (required by every hosting operation).                         |
+| `hosting.filesRead`         | List files and read individual files.                                                 |
+| `hosting.filesWrite`        | Create and replace individual files.                                                  |
+| `hosting.filesDelete`       | Delete individual files.                                                              |
+| `hosting.deploy`            | Deploy production/preview content, promote preview, and change missing-page handling. |
+| `hosting.download`          | Download the deployable snapshot.                                                     |
+| `hosting.downloadSensitive` | Include protected and user-generated content in a download.                           |
+| `hosting.analyticsRead`     | Read hosting analytics.                                                               |
+| `hosting.analyticsManage`   | Change analytics configuration.                                                       |
+| `forms.create`              | Create and publish a basic form.                                                      |
+| `forms.edit`                | Edit a form, its bot protection, and its allowed origins.                             |
 
 Request the narrowest complete set for the stated task, always including `hosting.sitesRead` for hosting work:
 
@@ -452,6 +452,21 @@ Preview has no separate database and uses the main site’s database. It shares 
 storage quota. Database changes from preview can affect the live site. See
 [the CLI feature details](../cli/deploy#preview-sites-and-promotion).
 
+## Site settings
+
+### `set_not_found_handling`
+
+```json
+{ "site": "example.com", "mode": "single-page-application" }
+```
+
+| Argument | Required | Meaning                                            |
+| -------- | -------- | -------------------------------------------------- |
+| `site`   | yes      | Site UUID or hostname.                             |
+| `mode`   | yes      | `404-page` (default) or `single-page-application`. |
+
+`single-page-application` serves `/index.html` with status 200 for unknown paths unless they end in a listed asset extension (`.js`, `.css`, images, fonts, `.json`, `.txt`, ...), which still return 404, so client-side routers can handle deep links. The change applies immediately to production and preview and clears the CDN cache, so ask the user first, and prefer pre-rendering every route. Static sites only: it fails with `not_found_handling_requires_static` on a PHP site. Older managers that do not report `notFoundHandling` fail with `not_found_handling_unavailable`. Idempotent; waits for serving reconciliation and returns `siteId`, `site`, `notFoundHandling`, `previous`, `changed`, `operationId`, and `status`. There is no plan step. Permission: `hosting.deploy` (plus `hosting.sitesRead`). `get_site` reports the current `notFoundHandling`.
+
 ## Complete downloads
 
 ### `plan_download`
@@ -488,11 +503,11 @@ The plan must come from `plan_download` in the same MCP process. A successful ap
 
 Treat these tools as follows:
 
-| Category        | Tools                                                                                                            | Review expectation                                         |
-| --------------- | ---------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
-| Remote read     | `list_sites`, `get_site`, `list_forms`, `get_form_integration`, `describe_form`                                  | Safe for routine discovery.                                |
-| Local write     | `get_file`, `apply_download`                                                                                     | Confirm the destination and overwrite behavior.            |
-| Remote mutation | `create_basic_form`, `update_form`, `update_form_bot_protection`, `update_form_origins`, file/deploy apply tools | Review form/site, fields, origins, paths, and plans.       |
-| Plan only       | `plan_deploy`, `plan_download`, `plan_promote`                                                                   | Inspect the returned target, scope, and URLs before apply. |
+| Category        | Tools                                                                                                                                      | Review expectation                                         |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------- |
+| Remote read     | `list_sites`, `get_site`, `list_forms`, `get_form_integration`, `describe_form`                                                            | Safe for routine discovery.                                |
+| Local write     | `get_file`, `apply_download`                                                                                                               | Confirm the destination and overwrite behavior.            |
+| Remote mutation | `create_basic_form`, `update_form`, `update_form_bot_protection`, `update_form_origins`, `set_not_found_handling`, file/deploy apply tools | Review form/site, fields, origins, paths, and plans.       |
+| Plan only       | `plan_deploy`, `plan_download`, `plan_promote`                                                                                             | Inspect the returned target, scope, and URLs before apply. |
 
 The MCP server enforces technical boundaries, but the calling agent or user remains responsible for choosing the intended site and reviewing destructive operations. Never infer a deployment domain. If an explicitly named domain is unavailable, do not substitute another site; offer `login` so the user can switch contexts. Likewise, never select `plan_promote` `force: true` unless the user explicitly requests that override.
