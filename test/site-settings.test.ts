@@ -197,7 +197,7 @@ test('MCP set_not_found_handling is annotated, applies the change, and instructi
     const hosting = await createHostingMcpServer({
         roots: await AllowedLocalRoots.create([root]),
         version: '0.6.0',
-        env: { ZYNOHOSTING_CONFIG: configFile }
+        env: { ZYNOHOSTING_CONFIG: configFile, ZYNOHOSTING_API_URL: fixture.baseUrl }
     });
     const client = new Client({ name: 'test-client', version: '1.0.0' });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -263,7 +263,7 @@ test('MCP set_not_found_handling normalizes the site reference like the CLI', as
     const hosting = await createHostingMcpServer({
         roots: await AllowedLocalRoots.create([root]),
         version: '0.6.0',
-        env: { ZYNOHOSTING_CONFIG: configFile }
+        env: { ZYNOHOSTING_CONFIG: configFile, ZYNOHOSTING_API_URL: fixture.baseUrl }
     });
     const client = new Client({ name: 'test-client', version: '1.0.0' });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
