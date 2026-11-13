@@ -9,6 +9,8 @@ const MAX_BODY_BYTES = 16 * 1024;
 const TOKEN_MAX_LENGTH = 12 * 1024;
 const RENEWAL_TOKEN_MAX_LENGTH = 16 * 1024;
 const MAX_ACCESS_LIFETIME_MS = 2 * 60 * 60 * 1000;
+// The server caps a grant at 30 days; a day of slack covers clock differences.
+const MAX_GRANT_LIFETIME_MS = 31 * 24 * 60 * 60 * 1000;
 const TENANT_ID_PATTERN = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const CANCELLATION_ERRORS = new Set(['access_denied', 'cancelled', 'canceled', 'user_cancelled', 'user_canceled']);
 
@@ -17,6 +19,10 @@ export interface UserCredential {
     tenantId: string;
     expiresAt: number;
     renewalToken?: string;
+    tenantName?: string;
+    accountEmail?: string;
+    /** Epoch milliseconds; the end of the lifetime the approver chose. */
+    grantExpiresAt?: number;
 }
 
 export interface LoopbackLogin {
@@ -160,9 +166,33 @@ async function handleCallback(
         return rejectRequest(response, 400, 'Invalid token expiration');
     }
     if (renewalToken !== undefined && !isRenewalToken(renewalToken)) return rejectRequest(response, 400, 'Invalid renewal credential');
+    // Optional fields from newer portals: each may appear at most once and must be well formed.
+    for (const key of ['tenantName', 'accountEmail', 'grantExpiresAt']) {
+        if (form.getAll(key).length > 1) return rejectRequest(response, 400, 'Invalid login response');
+    }
+    const tenantName = form.get('tenantName') ?? undefined;
+    const accountEmail = form.get('accountEmail') ?? undefined;
+    const grantExpiresAtValue = form.get('grantExpiresAt');
+    const grantExpiresAt = grantExpiresAtValue === null ? undefined : Number(grantExpiresAtValue);
+    if (tenantName !== undefined && !isDisplayText(tenantName, 255)) return rejectRequest(response, 400, 'Invalid tenant name');
+    if (accountEmail !== undefined && !isDisplayText(accountEmail, 320)) return rejectRequest(response, 400, 'Invalid account email');
+    if (
+        grantExpiresAt !== undefined &&
+        (!Number.isSafeInteger(grantExpiresAt) || grantExpiresAt <= Date.now() || grantExpiresAt > Date.now() + MAX_GRANT_LIFETIME_MS)
+    ) {
+        return rejectRequest(response, 400, 'Invalid grant expiration');
+    }
     if (!acceptCallback()) return rejectRequest(response, 409, 'A login callback is already being processed');
 
-    const credential = { accessToken, tenantId, expiresAt, ...(renewalToken === undefined ? {} : { renewalToken }) };
+    const credential: UserCredential = {
+        accessToken,
+        tenantId,
+        expiresAt,
+        ...(renewalToken === undefined ? {} : { renewalToken }),
+        ...(tenantName === undefined ? {} : { tenantName }),
+        ...(accountEmail === undefined ? {} : { accountEmail }),
+        ...(grantExpiresAt === undefined ? {} : { grantExpiresAt })
+    };
     try {
         await onCredential?.(credential);
     } catch (error) {
@@ -199,6 +229,10 @@ function isJwt(value: string): boolean {
 
 function isRenewalToken(value: string): boolean {
     return value.length <= RENEWAL_TOKEN_MAX_LENGTH && /^zrt_[A-Za-z0-9_-]+$/.test(value);
+}
+
+function isDisplayText(value: string, max: number): boolean {
+    return value.length > 0 && value.length <= max && !/[\u0000-\u001f\u007f-\u009f]/.test(value);
 }
 
 function hasSingleValue(form: URLSearchParams, key: string): boolean {

@@ -20,6 +20,9 @@ import {
 } from '../src/config.js';
 import { CliError, HttpError } from '../src/errors.js';
 
+// The browser flow is what these tests exercise; a headless CI machine would otherwise pick the device flow.
+process.env.DISPLAY ||= ':0';
+
 const PRODUCTION_URL = 'https://hosting.api.zyno.app';
 const ALPHA_URL = 'https://hosting.api-alpha.zyno.dev';
 const CUSTOM_URL = 'https://hosting.example.com';
@@ -187,7 +190,7 @@ test('logout removes only the selected profile and its renewal credential', asyn
     const store = new MemoryStore([[RENEWAL_KEY, 'zrt_secret']]);
     await saveKey(file, env, 'prod-key');
     await updateProfile('alpha', { apiUrl: ALPHA_URL, apiKey: 'alpha-key' }, file);
-    await updateProfile('dev', { apiUrl: 'http://localhost:39840', apiKey: 'dev-key', renewalKey: RENEWAL_KEY }, file);
+    await updateProfile('dev', { apiUrl: 'http://localhost:39840', accessToken: 'dev.jwt.signature', renewalKey: RENEWAL_KEY }, file);
 
     await logout({}, { configFile: file, env, write: () => {}, renewalTokenStore: store });
     let raw = await rawFile(file);
@@ -222,7 +225,7 @@ test('logout --all logs out of every profile', async () => {
     const { file, env } = await configFile();
     const store = new MemoryStore([[RENEWAL_KEY, 'zrt_secret']]);
     await saveKey(file, env, 'prod-key');
-    await updateProfile('alpha', { apiUrl: ALPHA_URL, apiKey: 'alpha-key', renewalKey: RENEWAL_KEY }, file);
+    await updateProfile('alpha', { apiUrl: ALPHA_URL, accessToken: 'alpha.jwt.signature', renewalKey: RENEWAL_KEY }, file);
     await updateProfile(`url:${CUSTOM_URL}`, { apiUrl: CUSTOM_URL, apiKey: 'custom-key' }, file);
 
     await logout({ all: true }, { configFile: file, env, write: () => {}, renewalTokenStore: store });
@@ -267,9 +270,10 @@ test('refresh updates only its profile and keeps a profile written while it was 
     assert.equal(resolved.credential.type === 'bearer' && resolved.credential.accessToken, 'new.jwt.signature');
 
     const raw = await rawFile(file);
-    assert.equal(raw.profiles?.alpha?.accessToken, 'new.jwt.signature');
-    assert.equal(raw.profiles?.alpha?.expiresAt, expiresAt);
-    assert.equal(raw.profiles?.alpha?.renewalKey, RENEWAL_KEY);
+    const renewed = (raw.profiles?.alpha?.logins as Record<string, Record<string, unknown>> | undefined)?.['00000000-0000-0000-0000-000000000024'];
+    assert.equal(renewed?.accessToken, 'new.jwt.signature');
+    assert.equal(renewed?.expiresAt, expiresAt);
+    assert.equal(renewed?.renewalKey, RENEWAL_KEY);
     assert.equal(raw.profiles?.production?.apiKey, 'prod-key');
     assert.equal(raw.profiles?.dev?.apiKey, 'dev-key');
     assert.equal(store.values.get(RENEWAL_KEY), 'zrt_new');
@@ -299,7 +303,7 @@ test('logout --all removes the other profiles when one revocation fails, then th
         },
         file
     );
-    await updateProfile(`url:${CUSTOM_URL}`, { apiUrl: CUSTOM_URL, apiKey: 'custom-key', renewalKey: RENEWAL_KEY }, file);
+    await updateProfile(`url:${CUSTOM_URL}`, { apiUrl: CUSTOM_URL, accessToken: 'custom.jwt.signature', renewalKey: RENEWAL_KEY }, file);
 
     await assert.rejects(
         logout(
@@ -454,7 +458,10 @@ test('refresh migrates a legacy login into the v2 file without touching the lega
             }
         })
     });
-    assert.equal((await rawFile(profiles)).profiles?.production?.accessToken, 'new.jwt.signature');
+    const migrated = (await rawFile(profiles)).profiles?.production;
+    assert.equal((migrated?.logins as Record<string, Record<string, unknown>>).unknown?.accessToken, 'new.jwt.signature');
+    assert.equal(migrated?.activeLogin, 'unknown');
+    assert.equal(migrated?.accessToken, undefined);
     assert.equal(await readFile(legacy, 'utf8'), legacyText);
 });
 
@@ -555,14 +562,39 @@ test('re-login removes the superseded credential from the legacy file (renewable
         JSON.stringify({
             apiUrl: PRODUCTION_URL,
             accessToken: 'old.jwt.signature',
+            tenantId: '00000000-0000-0000-0000-000000000024',
             expiresAt: Date.now() + 3_600_000,
             renewalKey: RENEWAL_KEY,
             scopedToken: true
         })
     );
-    await browserLogin({ renewable: true, authApiUrl: 'https://auth.api.zyno.app' }, { env, renewalTokenStore: store }, { renewalToken: 'zrt_new' });
+    const revoked: string[] = [];
+    await browserLogin(
+        { renewable: true, authApiUrl: 'https://auth.api.zyno.app' },
+        {
+            env,
+            renewalTokenStore: store,
+            scopedTokenClient: () => ({
+                async startDevice() {
+                    throw new Error('unexpected');
+                },
+                async pollDevice() {
+                    throw new Error('unexpected');
+                },
+                async cancelDevice() {},
+                async revoke(token: string) {
+                    revoked.push(token);
+                }
+            })
+        },
+        { renewalToken: 'zrt_new' }
+    );
     await assert.rejects(stat(legacy));
-    const saved = (await rawFile(profiles)).profiles?.production;
+    // The replaced grant for the same tenant is revoked, best effort.
+    assert.deepEqual(revoked, ['old.jwt.signature']);
+    const saved = ((await rawFile(profiles)).profiles?.production?.logins as Record<string, Record<string, unknown>>)[
+        '00000000-0000-0000-0000-000000000024'
+    ];
     assert.notEqual(saved?.renewalKey, RENEWAL_KEY);
     assert.equal(store.values.has(RENEWAL_KEY), false);
 });

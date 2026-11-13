@@ -1,25 +1,25 @@
 import { randomUUID } from 'node:crypto';
-import { chmod, mkdir, open, readFile, rename, rm, stat, writeFile, type FileHandle } from 'node:fs/promises';
+import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { setTimeout as delay } from 'node:timers/promises';
 
 import { ScopedTokenClient } from './api/scoped-token-client.js';
 import { attachCredentialRefresh, ensureFreshCredential } from './auth/credential-refresh.js';
-import { createSystemRenewalTokenStore, type RenewalTokenStore } from './auth/renewal-token-store.js';
+import { withRefreshLock } from './auth/file-lock.js';
+import {
+    type LoginEntry,
+    type StoredConfig,
+    type StoredLogin,
+    hasStoredCredential,
+    normalizeStoredConfig,
+    parseStoredConfig,
+    selectEntry
+} from './auth/logins.js';
+import { createRenewalTokenStore, type RenewalTokenStore } from './auth/renewal-token-store.js';
 import { CliError } from './errors.js';
 
-export interface StoredConfig {
-    apiUrl?: string;
-    suiteApiUrl?: string;
-    authApiUrl?: string;
-    apiKey?: string;
-    accessToken?: string;
-    tenantId?: string;
-    expiresAt?: number;
-    renewalKey?: string;
-    scopedToken?: boolean;
-}
+export { hasStoredCredential };
+export type { PendingDeviceLogin, StoredConfig, StoredLogin } from './auth/logins.js';
 
 export interface ApiKeyCredential {
     type: 'api-key';
@@ -31,13 +31,26 @@ export interface BearerCredential {
     accessToken: string;
     tenantId?: string;
     expiresAt?: number;
+    /** The end of the lifetime the approver chose, when known. Renewal stops there. */
+    grantExpiresAt?: number;
 }
 
 export type ManagerCredential = ApiKeyCredential | BearerCredential;
 export type HostingEnvironment = 'production' | 'alpha' | 'dev';
 
-export interface ConfigOverrides extends StoredConfig {
+export interface ConfigOverrides extends Omit<StoredConfig, 'logins' | 'activeLogin' | 'pendingDeviceLogin'> {
     environment?: HostingEnvironment;
+    /** Tenant name or id of the saved login to use for this call only, instead of the active one. */
+    tenant?: string;
+}
+
+/** The saved login a resolved credential came from. */
+export interface ResolvedLogin {
+    id: string;
+    kind: 'login' | 'api-key';
+    tenantName?: string;
+    accountEmail?: string;
+    grantExpiresAt?: number;
 }
 
 export interface ResolvedConfig {
@@ -45,6 +58,8 @@ export interface ResolvedConfig {
     suiteApiUrl?: string;
     authApiUrl?: string;
     credential: ManagerCredential;
+    /** Absent when the credential was injected through options or the environment. */
+    login?: ResolvedLogin;
 }
 
 export interface ResolveConfigDependencies {
@@ -86,20 +101,6 @@ function locate(target: ConfigTarget): ConfigLocation {
 export interface ConfigFile {
     version: 2;
     profiles: Record<string, StoredConfig>;
-}
-
-function parseStoredConfig(object: Record<string, unknown>): StoredConfig {
-    return {
-        ...(typeof object.apiUrl === 'string' ? { apiUrl: object.apiUrl } : {}),
-        ...(typeof object.suiteApiUrl === 'string' ? { suiteApiUrl: object.suiteApiUrl } : {}),
-        ...(typeof object.authApiUrl === 'string' ? { authApiUrl: object.authApiUrl } : {}),
-        ...(typeof object.apiKey === 'string' ? { apiKey: object.apiKey } : {}),
-        ...(typeof object.accessToken === 'string' ? { accessToken: object.accessToken } : {}),
-        ...(typeof object.tenantId === 'string' ? { tenantId: object.tenantId } : {}),
-        ...(typeof object.expiresAt === 'number' ? { expiresAt: object.expiresAt } : {}),
-        ...(typeof object.renewalKey === 'string' ? { renewalKey: object.renewalKey } : {}),
-        ...(object.scopedToken === true ? { scopedToken: true } : {})
-    };
 }
 
 class InvalidLegacyUrlError extends CliError {
@@ -234,28 +235,42 @@ export function selectionForKey(key: string, stored: StoredConfig = {}): Profile
     return { key, apiUrl: stored.apiUrl ? normalizeApiUrl(stored.apiUrl) : (apiUrl ?? key) };
 }
 
-export function hasStoredCredential(config: StoredConfig): boolean {
-    return Boolean(config.apiKey || config.accessToken || config.renewalKey);
-}
-
 /** Under the config lock, re-reads the file and replaces (or, with undefined, removes) only one profile before writing the v2 file. */
 export async function updateProfile(key: string, profile: StoredConfig | undefined, target: ConfigTarget = configLocation()): Promise<void> {
+    await mutateProfile(key, () => profile, target);
+}
+
+/**
+ * Under the config lock, re-reads the file, lets `change` turn the current profile (empty when absent) into its
+ * replacement (or undefined to remove it), and writes the v2 file. The change sees everything written up to that moment,
+ * so two logins to different tenants never overwrite each other.
+ */
+export async function mutateProfile(
+    key: string,
+    change: (current: StoredConfig) => StoredConfig | undefined,
+    target: ConfigTarget = configLocation()
+): Promise<void> {
     const location = locate(target);
-    await withRefreshLock(location.path, () => updateProfileUnlocked(key, profile, location), PROFILE_UPDATE_LOCK_WAIT_MS);
+    await withRefreshLock(location.path, () => mutateProfileUnlocked(key, change, location), PROFILE_UPDATE_LOCK_WAIT_MS);
 }
 
 /** For callers that already hold the config lock; the lock must never be taken twice in one process. */
-async function updateProfileUnlocked(key: string, profile: StoredConfig | undefined, location: ConfigLocation): Promise<void> {
+async function mutateProfileUnlocked(
+    key: string,
+    change: (current: StoredConfig) => StoredConfig | undefined,
+    location: ConfigLocation
+): Promise<void> {
     const file = await loadConfigFile(location, { lenientLegacy: true });
     const profiles = { ...file.profiles };
-    if (profile === undefined) delete profiles[key];
-    else profiles[key] = profile;
+    const next = change(profiles[key] ?? {});
+    if (next === undefined) delete profiles[key];
+    else profiles[key] = normalizeStoredConfig(next);
     await writeConfigFile({ version: 2, profiles }, location.path);
 }
 
 /**
- * Deletes the legacy flat file when it still holds the given credential, so an older CLI build cannot keep using a login
- * that was just removed. Does nothing for an explicit ZYNOHOSTING_CONFIG.
+ * Deletes the legacy flat file when it still holds a credential that was just removed or replaced, so an older CLI build
+ * cannot keep using it. Does nothing for an explicit ZYNOHOSTING_CONFIG.
  */
 export async function removeLegacyConfigIfMatching(target: ConfigTarget, removed: StoredConfig): Promise<void> {
     const { legacyPath } = locate(target);
@@ -268,10 +283,14 @@ export async function removeLegacyConfigIfMatching(target: ConfigTarget, removed
     } catch {
         return;
     }
+    const gone = Object.values(removed.logins ?? {});
     const matches =
         (removed.apiKey !== undefined && legacy.apiKey === removed.apiKey) ||
-        (removed.accessToken !== undefined && legacy.accessToken === removed.accessToken) ||
-        (removed.renewalKey !== undefined && legacy.renewalKey === removed.renewalKey);
+        Object.values(legacy.logins ?? {}).some(
+            held =>
+                gone.some(login => login.accessToken === held.accessToken) ||
+                (held.renewalKey !== undefined && gone.some(login => login.renewalKey === held.renewalKey))
+        );
     if (matches) await rm(legacyPath, { force: true });
 }
 
@@ -316,20 +335,21 @@ export async function resolveConfig(
 }
 
 export async function resolveSavedConfig(
-    overrides: Pick<ConfigOverrides, 'apiUrl' | 'suiteApiUrl' | 'authApiUrl' | 'environment'> = {},
+    overrides: Pick<ConfigOverrides, 'apiUrl' | 'suiteApiUrl' | 'authApiUrl' | 'environment' | 'tenant'> = {},
     env: NodeJS.ProcessEnv = process.env,
     dependencies: ResolveConfigDependencies = {}
 ): Promise<ResolvedConfig> {
     return resolveConfigWithSource(overrides, env, dependencies, true);
 }
 
-/** Resolves the saved credential of one specific profile, ignoring selection overrides and environment URLs. */
+/** Resolves one saved login of one specific profile, ignoring selection overrides and environment URLs. */
 export async function resolveSavedProfile(
     key: string,
+    loginId: string,
     env: NodeJS.ProcessEnv = process.env,
     dependencies: ResolveConfigDependencies = {}
 ): Promise<ResolvedConfig> {
-    return resolveConfigWithSource({}, env, dependencies, true, key);
+    return resolveConfigWithSource({}, env, dependencies, true, { key, loginId });
 }
 
 export function missingCredentialError(selectedKey: string, file: ConfigFile, action: 'login' | 'logout' = 'login'): CliError {
@@ -354,25 +374,25 @@ async function resolveConfigWithSource(
     env: NodeJS.ProcessEnv,
     dependencies: ResolveConfigDependencies,
     savedOnly: boolean,
-    forcedKey?: string
+    forced?: { key: string; loginId: string }
 ): Promise<ResolvedConfig> {
     const location = configLocation(env);
-    const file = location.path;
     const configFile = await loadConfigFile(location);
-    const preselected = forcedKey === undefined ? selectProfile(overrides, env) : undefined;
-    const stored = configFile.profiles[forcedKey ?? preselected!.key] ?? {};
-    const selection = preselected ?? selectionForKey(forcedKey!, stored);
+    const preselected = forced === undefined ? selectProfile(overrides, env) : undefined;
+    const stored = configFile.profiles[forced?.key ?? preselected!.key] ?? {};
+    const selection = preselected ?? selectionForKey(forced!.key, stored);
     const apiUrl = selection.apiUrl;
-    if (forcedKey !== undefined) {
+    const tenantQuery = forced ? forced.loginId : (overrides.tenant ?? env.ZYNOHOSTING_TENANT);
+    if (forced !== undefined) {
         overrides = {};
         env = isolatedEnvironment(env);
     }
     const suiteApiUrl = resolveSuiteApiUrl(overrides.suiteApiUrl, stored, apiUrl, env, overrides.environment, hostingUrlChosenByFlag(overrides));
     const authApiUrl = resolveAuthApiUrl(overrides.authApiUrl, stored, apiUrl, env, overrides.environment, hostingUrlChosenByFlag(overrides));
-    const overrideCredential = savedOnly ? undefined : credentialFrom(overrides, 'command options');
+    const overrideCredential = savedOnly ? undefined : injectedCredential(overrides, 'command options');
     const environmentCredential = savedOnly
         ? undefined
-        : credentialFrom(
+        : injectedCredential(
               {
                   ...(env.ZYNOHOSTING_API_KEY ? { apiKey: env.ZYNOHOSTING_API_KEY } : {}),
                   ...(env.ZYNOHOSTING_ACCESS_TOKEN ? { accessToken: env.ZYNOHOSTING_ACCESS_TOKEN } : {}),
@@ -381,34 +401,60 @@ async function resolveConfigWithSource(
               },
               'environment'
           );
-    const storedCredential = overrideCredential || environmentCredential ? undefined : credentialFrom(stored, 'saved configuration');
-    const credential = overrideCredential ?? environmentCredential ?? storedCredential;
-    if (!credential) throw missingCredentialError(selection.key, configFile);
+    const injected = overrideCredential ?? environmentCredential;
+    // An injected credential makes the saved logins irrelevant, so a missing or ambiguous choice among them cannot matter.
+    const entry = injected ? undefined : selectEntry(stored, tenantQuery, describeProfileKey(selection.key));
+    if (!injected && !entry) throw missingCredentialError(selection.key, configFile);
 
-    if (credential === storedCredential && credential.type === 'bearer' && stored.renewalKey) {
-        if (!authApiUrl) {
-            throw new CliError(
-                'The ZynoAuth API URL is required to renew this login. Pass --auth-api-url or set ZYNO_AUTH_API_URL.',
-                2,
-                'missing_auth_api_url'
+    let credential: ManagerCredential;
+    let login: ResolvedLogin | undefined;
+    if (injected) credential = injected;
+    else if (entry!.kind === 'api-key') {
+        credential = { type: 'api-key', apiKey: stored.apiKey! };
+        login = { id: entry!.id, kind: 'api-key' };
+    } else {
+        const saved = entry!.login!;
+        credential = loginCredential(saved);
+        login = {
+            id: entry!.id,
+            kind: 'login',
+            ...(saved.tenantName ? { tenantName: saved.tenantName } : {}),
+            ...(saved.accountEmail ? { accountEmail: saved.accountEmail } : {}),
+            ...(saved.grantExpiresAt === undefined ? {} : { grantExpiresAt: saved.grantExpiresAt })
+        };
+        if (saved.renewalKey) {
+            if (!authApiUrl) {
+                throw new CliError(
+                    'The ZynoAuth API URL is required to renew this login. Pass --auth-api-url or set ZYNO_AUTH_API_URL.',
+                    2,
+                    'missing_auth_api_url'
+                );
+            }
+            validateRenewalKey(saved.renewalKey);
+            const renewalTokenStore = dependencies.renewalTokenStore ?? createRenewalTokenStore(saved.renewalStore ?? 'system', location.path);
+            const scopedTokenClient = dependencies.scopedTokenClient?.(authApiUrl) ?? new ScopedTokenClient(authApiUrl);
+            const bearer = credential as BearerCredential;
+            attachCredentialRefresh(bearer, async () =>
+                refreshStoredCredential({
+                    credential: bearer,
+                    location,
+                    profileKey: selection.key,
+                    loginId: entry!.id,
+                    renewalKey: saved.renewalKey!,
+                    renewalTokenStore,
+                    scopedTokenClient
+                })
             );
         }
-        validateRenewalKey(stored.renewalKey);
-        const renewalTokenStore = dependencies.renewalTokenStore ?? createSystemRenewalTokenStore();
-        const scopedTokenClient = dependencies.scopedTokenClient?.(authApiUrl) ?? new ScopedTokenClient(authApiUrl);
-        attachCredentialRefresh(credential, async () =>
-            refreshStoredCredential({
-                credential,
-                location,
-                profileKey: selection.key,
-                renewalKey: stored.renewalKey!,
-                renewalTokenStore,
-                scopedTokenClient
-            })
-        );
     }
     await ensureFreshCredential(credential);
-    return { apiUrl, ...(suiteApiUrl ? { suiteApiUrl } : {}), ...(authApiUrl ? { authApiUrl } : {}), credential };
+    return {
+        apiUrl,
+        ...(suiteApiUrl ? { suiteApiUrl } : {}),
+        ...(authApiUrl ? { authApiUrl } : {}),
+        credential,
+        ...(login ? { login } : {})
+    };
 }
 
 export function resolveApiUrl(override: string | undefined, env: NodeJS.ProcessEnv = process.env, environmentOverride?: HostingEnvironment): string {
@@ -518,7 +564,10 @@ async function writeConfigFile(config: ConfigFile, path: string): Promise<void> 
     }
 }
 
-function credentialFrom(config: StoredConfig, source: string): ManagerCredential | undefined {
+function injectedCredential(
+    config: Pick<ConfigOverrides, 'apiKey' | 'accessToken' | 'tenantId' | 'expiresAt'>,
+    source: string
+): ManagerCredential | undefined {
     if (config.apiKey && config.accessToken) {
         throw new CliError(`${source} contains both an API key and a user access token`, 2, 'invalid_config');
     }
@@ -532,10 +581,21 @@ function credentialFrom(config: StoredConfig, source: string): ManagerCredential
     };
 }
 
+function loginCredential(login: StoredLogin): BearerCredential {
+    return {
+        type: 'bearer',
+        accessToken: login.accessToken,
+        tenantId: login.tenantId,
+        ...(login.expiresAt === undefined ? {} : { expiresAt: login.expiresAt }),
+        ...(login.grantExpiresAt === undefined ? {} : { grantExpiresAt: login.grantExpiresAt })
+    };
+}
+
 interface RefreshStoredCredentialOptions {
     credential: BearerCredential;
     location: ConfigLocation;
     profileKey: string;
+    loginId: string;
     renewalKey: string;
     renewalTokenStore: RenewalTokenStore;
     scopedTokenClient: Pick<ScopedTokenClient, 'renew'>;
@@ -562,15 +622,19 @@ async function legacyHoldsRenewalKey(legacyPath: string, renewalKey: string): Pr
 }
 
 async function refreshUnderLocks(options: RefreshStoredCredentialOptions): Promise<void> {
+    // The profiles lock covers the whole profile, so a renewal never loses a login another process saved meanwhile.
     await withRefreshLock(options.location.path, async () => {
-        const latest = await loadStoredConfig(options.location, options.profileKey);
-        if (latest.renewalKey !== options.renewalKey) {
+        const file = await loadConfigFile(options.location);
+        const profile = file.profiles[options.profileKey] ?? {};
+        const latest = profile.logins?.[options.loginId];
+        if (latest?.renewalKey !== options.renewalKey) {
             throw new CliError('The saved ZynoSuite login changed while it was being renewed. Retry the command.', 3, 'login_changed');
         }
         if (latest.accessToken && latest.expiresAt && latest.expiresAt > Date.now() + 5 * 60 * 1000) {
             options.credential.accessToken = latest.accessToken;
             options.credential.expiresAt = latest.expiresAt;
             if (latest.tenantId) options.credential.tenantId = latest.tenantId;
+            if (latest.grantExpiresAt !== undefined) options.credential.grantExpiresAt = latest.grantExpiresAt;
             return;
         }
 
@@ -583,40 +647,22 @@ async function refreshUnderLocks(options: RefreshStoredCredentialOptions): Promi
 
         options.credential.accessToken = renewed.jwt;
         options.credential.expiresAt = renewed.expiresAt;
-        await updateProfileUnlocked(options.profileKey, { ...latest, accessToken: renewed.jwt, expiresAt: renewed.expiresAt }, options.location);
+        const grantExpiresAt = renewed.grantExpiresAt ?? latest.grantExpiresAt;
+        if (grantExpiresAt !== undefined) options.credential.grantExpiresAt = grantExpiresAt;
+        const renewedLogin: StoredLogin = {
+            ...latest,
+            accessToken: renewed.jwt,
+            expiresAt: renewed.expiresAt,
+            ...(grantExpiresAt === undefined ? {} : { grantExpiresAt }),
+            ...(renewed.tenantName ? { tenantName: renewed.tenantName } : {}),
+            ...(renewed.accountEmail ? { accountEmail: renewed.accountEmail } : {})
+        };
+        await mutateProfileUnlocked(
+            options.profileKey,
+            current => ({ ...current, logins: { ...current.logins, [options.loginId]: renewedLogin } }),
+            options.location
+        );
     });
-}
-
-async function withRefreshLock<T>(file: string, operation: () => Promise<T>, waitMs = 30_000): Promise<T> {
-    const lockFile = `${file}.renew.lock`;
-    await mkdir(dirname(file), { recursive: true, mode: 0o700 });
-    const deadline = Date.now() + waitMs;
-    let handle: FileHandle | undefined;
-    while (!handle) {
-        try {
-            handle = await open(lockFile, 'wx', 0o600);
-        } catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-            const info = await stat(lockFile).catch(() => undefined);
-            if (info && info.mtimeMs < Date.now() - 2 * 60 * 1000) {
-                await rm(lockFile, { force: true });
-                continue;
-            }
-            if (Date.now() >= deadline) {
-                throw new CliError('Timed out waiting for another ZynoHosting CLI process that is updating saved logins.', 3, 'renewal_locked');
-            }
-            await delay(100);
-        }
-    }
-    try {
-        return await operation();
-    } finally {
-        try {
-            await handle.close();
-        } finally {
-            await rm(lockFile, { force: true });
-        }
-    }
 }
 
 function validateRenewalKey(value: string): void {

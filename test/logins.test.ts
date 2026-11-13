@@ -1,0 +1,526 @@
+import assert from 'node:assert/strict';
+import { mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { test } from 'node:test';
+
+import type { RenewalTokenStore } from '../src/auth/renewal-token-store.js';
+
+import { createFileRenewalTokenStore } from '../src/auth/file-renewal-token-store.js';
+import { createProgram } from '../src/cli.js';
+import { login } from '../src/commands/login.js';
+import { listLogins, useLogin, whoami } from '../src/commands/logins.js';
+import { logout } from '../src/commands/logout.js';
+import { loadConfigFile, resolveConfig, updateProfile } from '../src/config.js';
+import { CliError } from '../src/errors.js';
+
+const API_URL = 'https://hosting.api-alpha.zyno.dev';
+const AUTH_URL = 'https://auth.api-alpha.zyno.dev';
+const ACME = '00000000-0000-0000-0000-0000000000a1';
+const GLOBEX = '00000000-0000-0000-0000-0000000000b2';
+const KEY_ACME = '11111111-1111-4111-8111-111111111111';
+const KEY_GLOBEX = '22222222-2222-4222-8222-222222222222';
+
+class MemoryStore implements RenewalTokenStore {
+    constructor(public values = new Map<string, string>()) {}
+    async get(key: string) {
+        return this.values.get(key);
+    }
+    async set(key: string, token: string) {
+        this.values.set(key, token);
+    }
+    async delete(key: string) {
+        this.values.delete(key);
+    }
+}
+
+async function setup() {
+    const root = await mkdtemp(join(tmpdir(), 'hosting-cli-logins-'));
+    const file = join(root, 'config.json');
+    return { root, file, env: { ZYNOHOSTING_CONFIG: file } as NodeJS.ProcessEnv };
+}
+
+function savedLogin(tenantId: string, tenantName: string, extra: Record<string, unknown> = {}) {
+    return {
+        tenantId,
+        tenantName,
+        accountEmail: 'owner@example.com',
+        accessToken: `${tenantName.toLowerCase()}.jwt.signature`,
+        expiresAt: Date.now() + 3_600_000,
+        scopedToken: true as const,
+        ...extra
+    };
+}
+
+/** Two saved logins for alpha, with Globex active. */
+async function twoLogins(file: string, extra: { activeLogin?: string | null } = {}) {
+    await updateProfile(
+        'alpha',
+        {
+            apiUrl: API_URL,
+            authApiUrl: AUTH_URL,
+            logins: { [ACME]: savedLogin(ACME, 'Acme Co'), [GLOBEX]: savedLogin(GLOBEX, 'Globex') },
+            ...(extra.activeLogin === null ? {} : { activeLogin: extra.activeLogin ?? GLOBEX })
+        },
+        file
+    );
+}
+
+function token(config: Awaited<ReturnType<typeof resolveConfig>>): string | undefined {
+    return config.credential.type === 'bearer' ? config.credential.accessToken : undefined;
+}
+
+test('selection: --tenant, then ZYNOHOSTING_TENANT, then the active login', async () => {
+    const { file, env } = await setup();
+    await twoLogins(file);
+    assert.equal(token(await resolveConfig({ environment: 'alpha' }, env)), 'globex.jwt.signature');
+    assert.equal(token(await resolveConfig({ environment: 'alpha' }, { ...env, ZYNOHOSTING_TENANT: 'Acme Co' })), 'acme co.jwt.signature');
+    assert.equal(token(await resolveConfig({ environment: 'alpha', tenant: GLOBEX }, { ...env, ZYNOHOSTING_TENANT: ACME })), 'globex.jwt.signature');
+    // Names match case-insensitively; ids match exactly.
+    assert.equal(token(await resolveConfig({ environment: 'alpha', tenant: 'acme CO' }, env)), 'acme co.jwt.signature');
+    // Nothing sticky: the call above did not change the active login.
+    assert.equal((await loadConfigFile(file)).profiles.alpha?.activeLogin, GLOBEX);
+    const resolved = await resolveConfig({ environment: 'alpha', tenant: ACME }, env);
+    assert.deepEqual(resolved.login, { id: ACME, kind: 'login', tenantName: 'Acme Co', accountEmail: 'owner@example.com' });
+});
+
+test('an unknown or ambiguous tenant is an error that lists the candidates', async () => {
+    const { file, env } = await setup();
+    await twoLogins(file);
+    await assert.rejects(resolveConfig({ environment: 'alpha', tenant: 'Initech' }, env), (error: unknown) => {
+        assert(error instanceof CliError);
+        assert.equal(error.code, 'login_not_found');
+        assert.equal(error.exitCode, 2);
+        assert.match(error.message, /Acme Co/);
+        assert.match(error.message, /Globex/);
+        return true;
+    });
+    await updateProfile(
+        'alpha',
+        { apiUrl: API_URL, logins: { [ACME]: savedLogin(ACME, 'Same'), [GLOBEX]: savedLogin(GLOBEX, 'same') }, activeLogin: ACME },
+        file
+    );
+    await assert.rejects(
+        resolveConfig({ environment: 'alpha', tenant: 'SAME' }, env),
+        (error: unknown) =>
+            error instanceof CliError && error.code === 'login_ambiguous' && error.message.includes(ACME) && error.message.includes(GLOBEX)
+    );
+    assert.equal(token(await resolveConfig({ environment: 'alpha', tenant: GLOBEX }, env)), 'same.jwt.signature');
+});
+
+test('several logins and none active is login_selection_required; one login needs no choice', async () => {
+    const { file, env } = await setup();
+    await twoLogins(file, { activeLogin: null });
+    await assert.rejects(resolveConfig({ environment: 'alpha' }, env), (error: unknown) => {
+        assert(error instanceof CliError);
+        assert.equal(error.code, 'login_selection_required');
+        assert.equal(error.exitCode, 2);
+        assert.match(error.message, /Acme Co/);
+        assert.match(error.message, /--tenant/);
+        return true;
+    });
+    // An explicit choice still works, and so does an injected credential.
+    assert.equal(token(await resolveConfig({ environment: 'alpha', tenant: 'Globex' }, env)), 'globex.jwt.signature');
+    assert.equal(
+        token(await resolveConfig({ environment: 'alpha' }, { ...env, ZYNOHOSTING_ACCESS_TOKEN: 'env.jwt.signature' })),
+        'env.jwt.signature'
+    );
+
+    await updateProfile('alpha', { apiUrl: API_URL, logins: { [ACME]: savedLogin(ACME, 'Acme Co') } }, file);
+    assert.equal(token(await resolveConfig({ environment: 'alpha' }, env)), 'acme co.jwt.signature');
+});
+
+test('a single-credential profile (v2 flat) migrates into one login and is written back in the new format', async () => {
+    const { file, env } = await setup();
+    await writeFile(
+        file,
+        JSON.stringify({
+            version: 2,
+            profiles: {
+                alpha: { apiUrl: API_URL, accessToken: 'old.jwt.signature', tenantId: ACME, expiresAt: Date.now() + 3_600_000, scopedToken: true }
+            }
+        })
+    );
+    const config = await loadConfigFile(file);
+    assert.equal(config.profiles.alpha?.logins?.[ACME]?.accessToken, 'old.jwt.signature');
+    assert.equal(config.profiles.alpha?.activeLogin, ACME);
+    assert.equal(token(await resolveConfig({ environment: 'alpha' }, env)), 'old.jwt.signature');
+
+    await useLogin(ACME, { environment: 'alpha' }, { env, write: () => {} });
+    const raw = JSON.parse(await readFile(file, 'utf8')) as { profiles: { alpha: Record<string, unknown> } };
+    assert.equal(raw.profiles.alpha.accessToken, undefined);
+    assert.equal(raw.profiles.alpha.tenantId, undefined);
+    assert.deepEqual(Object.keys(raw.profiles.alpha.logins as object), [ACME]);
+});
+
+test('a login for another tenant adds to the profile and becomes active; the same tenant replaces its login', async () => {
+    const { file, env } = await setup();
+    const store = new MemoryStore();
+    const revoked: string[] = [];
+    const scopedTokenClient = () => ({
+        async startDevice(): Promise<never> {
+            throw new Error('unexpected');
+        },
+        async pollDevice(): Promise<never> {
+            throw new Error('unexpected');
+        },
+        async cancelDevice() {},
+        async revoke(accessToken: string) {
+            revoked.push(accessToken);
+        }
+    });
+    const signIn = async (tenantId: string, jwt: string, renewalToken: string) => {
+        let failure: unknown;
+        await login(
+            { apiUrl: API_URL, loginUrl: 'https://zyno.dev/cli/login', renewable: true, timeoutSeconds: 5, device: false },
+            {
+                configFile: file,
+                env,
+                renewalTokenStore: store,
+                scopedTokenClient,
+                write: () => {},
+                openUrl: async value => {
+                    try {
+                        const url = new URL(value);
+                        const response = await fetch(url.searchParams.get('callback')!, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                            body: new URLSearchParams({
+                                jwt,
+                                tenantId,
+                                expiresAt: String(Date.now() + 3_600_000),
+                                state: url.searchParams.get('state')!,
+                                renewalToken,
+                                tenantName: tenantId === ACME ? 'Acme Co' : 'Globex',
+                                accountEmail: 'owner@example.com',
+                                grantExpiresAt: String(Date.now() + 7 * 86_400_000)
+                            })
+                        });
+                        assert.equal(response.status, 200);
+                    } catch (error) {
+                        failure = error;
+                    }
+                }
+            }
+        );
+        if (failure) throw failure;
+    };
+
+    await signIn(ACME, 'acme1.jwt.signature', 'zrt_acme1');
+    await signIn(GLOBEX, 'globex.jwt.signature', 'zrt_globex');
+    let profile = (await loadConfigFile(file)).profiles.alpha!;
+    assert.deepEqual(Object.keys(profile.logins ?? {}).sort(), [ACME, GLOBEX]);
+    assert.equal(profile.activeLogin, GLOBEX);
+    assert.equal(profile.logins?.[ACME]?.tenantName, 'Acme Co');
+    assert.equal(typeof profile.logins?.[ACME]?.grantExpiresAt, 'number');
+    assert.equal(store.values.size, 2);
+    assert.deepEqual(revoked, []);
+
+    const firstKey = profile.logins![ACME]!.renewalKey!;
+    await signIn(ACME, 'acme2.jwt.signature', 'zrt_acme2');
+    profile = (await loadConfigFile(file)).profiles.alpha!;
+    assert.equal(profile.logins?.[ACME]?.accessToken, 'acme2.jwt.signature');
+    assert.equal(profile.activeLogin, ACME);
+    assert.equal(Object.keys(profile.logins ?? {}).length, 2);
+    // The replaced grant is revoked (best effort) and its renewal token removed.
+    assert.deepEqual(revoked, ['acme1.jwt.signature']);
+    assert.equal(store.values.has(firstKey), false);
+    assert.equal(store.values.size, 2);
+});
+
+test('renewal is per login: only the login in use renews, with its own key and store', async () => {
+    const { file, env } = await setup();
+    const store = new MemoryStore(
+        new Map([
+            [KEY_ACME, 'zrt_acme'],
+            [KEY_GLOBEX, 'zrt_globex']
+        ])
+    );
+    await updateProfile(
+        'alpha',
+        {
+            apiUrl: API_URL,
+            authApiUrl: AUTH_URL,
+            logins: {
+                [ACME]: savedLogin(ACME, 'Acme Co', { renewalKey: KEY_ACME, expiresAt: Date.now() - 1 }),
+                [GLOBEX]: savedLogin(GLOBEX, 'Globex', { renewalKey: KEY_GLOBEX, expiresAt: Date.now() - 1 })
+            },
+            activeLogin: ACME
+        },
+        file
+    );
+    const renewed: string[] = [];
+    const expiresAt = Date.now() + 3_600_000;
+    const resolved = await resolveConfig({ environment: 'alpha', tenant: GLOBEX }, env, {
+        renewalTokenStore: store,
+        scopedTokenClient: () => ({
+            async renew(value: string) {
+                renewed.push(value);
+                return {
+                    jwt: 'globex2.jwt.signature',
+                    expiresAt,
+                    renewalToken: 'zrt_globex2',
+                    tenantName: 'Globex Inc',
+                    grantExpiresAt: Date.now() + 86_400_000
+                };
+            }
+        })
+    });
+    assert.deepEqual(renewed, ['zrt_globex']);
+    assert.equal(token(resolved), 'globex2.jwt.signature');
+    const profile = (await loadConfigFile(file)).profiles.alpha!;
+    assert.equal(profile.logins?.[GLOBEX]?.accessToken, 'globex2.jwt.signature');
+    assert.equal(profile.logins?.[GLOBEX]?.tenantName, 'Globex Inc');
+    assert.equal(typeof profile.logins?.[GLOBEX]?.grantExpiresAt, 'number');
+    assert.equal(profile.logins?.[ACME]?.accessToken, 'acme co.jwt.signature');
+    assert.equal(profile.activeLogin, ACME);
+    assert.equal(store.values.get(KEY_GLOBEX), 'zrt_globex2');
+    assert.equal(store.values.get(KEY_ACME), 'zrt_acme');
+});
+
+test('logins lists every login with the active one marked, as JSON or a table', async () => {
+    const { file, env } = await setup();
+    await updateProfile(
+        'alpha',
+        {
+            apiUrl: API_URL,
+            logins: {
+                [ACME]: savedLogin(ACME, 'Acme Co', { renewalKey: KEY_ACME, grantExpiresAt: Date.now() + 5 * 86_400_000 }),
+                [GLOBEX]: savedLogin(GLOBEX, 'Globex', { renewalKey: KEY_GLOBEX, grantExpiresAt: Date.now() - 1000 })
+            },
+            activeLogin: ACME
+        },
+        file
+    );
+    const output: string[] = [];
+    const logins = await listLogins({ environment: 'alpha', json: true }, { env, write: message => output.push(message) });
+    const parsed = JSON.parse(output.join('')) as { profile: string; logins: typeof logins };
+    assert.equal(parsed.profile, 'alpha');
+    assert.deepEqual(
+        parsed.logins.map(item => [item.id, item.tenantName, item.active, item.expired, item.renewable]),
+        [
+            [ACME, 'Acme Co', true, false, true],
+            [GLOBEX, 'Globex', false, true, true]
+        ]
+    );
+    assert.equal(parsed.logins[0]!.account, 'owner@example.com');
+    assert.match(parsed.logins[0]!.grantExpiresAt ?? '', /^\d{4}-\d\d-\d\dT/);
+    assert(!JSON.stringify(parsed).includes('jwt.signature'), 'tokens are never listed');
+
+    const table: string[] = [];
+    await listLogins({ environment: 'alpha' }, { env, write: message => table.push(message) });
+    assert.match(table.join(''), /\* *Acme Co/);
+    assert.match(table.join(''), /Globex.*expired/);
+
+    const empty: string[] = [];
+    await listLogins({ environment: 'dev' }, { env, write: message => empty.push(message) });
+    assert.match(empty.join(''), /No saved logins/);
+});
+
+test('logins use switches the active login by id or unique name and rejects strangers', async () => {
+    const { file, env } = await setup();
+    await twoLogins(file);
+    await useLogin('acme co', { environment: 'alpha' }, { env, write: () => {} });
+    assert.equal((await loadConfigFile(file)).profiles.alpha?.activeLogin, ACME);
+    await useLogin(GLOBEX, { environment: 'alpha' }, { env, write: () => {} });
+    assert.equal((await loadConfigFile(file)).profiles.alpha?.activeLogin, GLOBEX);
+    await assert.rejects(
+        useLogin('Initech', { environment: 'alpha' }, { env, write: () => {} }),
+        (error: unknown) => error instanceof CliError && error.code === 'login_not_found'
+    );
+    await assert.rejects(
+        useLogin('x', { environment: 'dev' }, { env, write: () => {} }),
+        (error: unknown) => error instanceof CliError && error.code === 'missing_config'
+    );
+    const output: string[] = [];
+    const who = await whoami({ environment: 'alpha', tenant: 'Acme Co' }, { env, write: message => output.push(message) });
+    assert.match(output.join(''), /Signed in to alpha as owner@example\.com \(Acme Co\)/);
+    assert(!Array.isArray(who) && who.id === ACME);
+});
+
+test('logout removes the active login, --tenant removes another, and the active one is re-chosen only when unambiguous', async () => {
+    const { file, env } = await setup();
+    const store = new MemoryStore(
+        new Map([
+            [KEY_ACME, 'zrt_acme'],
+            [KEY_GLOBEX, 'zrt_globex']
+        ])
+    );
+    const revoked: string[] = [];
+    const dependencies = {
+        configFile: file,
+        env,
+        write: () => {},
+        renewalTokenStore: store,
+        scopedTokenClient: () => ({
+            async renew(): Promise<never> {
+                throw new Error('unexpected renew');
+            },
+            async revoke(accessToken: string) {
+                revoked.push(accessToken);
+            }
+        })
+    };
+    const seed = async () => {
+        store.values.set(KEY_ACME, 'zrt_acme');
+        store.values.set(KEY_GLOBEX, 'zrt_globex');
+        await updateProfile(
+            'alpha',
+            {
+                apiUrl: API_URL,
+                authApiUrl: AUTH_URL,
+                logins: {
+                    [ACME]: savedLogin(ACME, 'Acme Co', { renewalKey: KEY_ACME }),
+                    [GLOBEX]: savedLogin(GLOBEX, 'Globex', { renewalKey: KEY_GLOBEX })
+                },
+                activeLogin: GLOBEX
+            },
+            file
+        );
+    };
+
+    await seed();
+    await logout({ environment: 'alpha' }, dependencies);
+    let profile = (await loadConfigFile(file)).profiles.alpha!;
+    assert.deepEqual(Object.keys(profile.logins ?? {}), [ACME]);
+    assert.equal(profile.activeLogin, ACME);
+    assert.deepEqual(revoked, ['globex.jwt.signature']);
+    assert.equal(store.values.has(KEY_GLOBEX), false);
+    assert.equal(store.values.has(KEY_ACME), true);
+
+    revoked.length = 0;
+    await seed();
+    await logout({ environment: 'alpha', tenant: 'Acme Co' }, dependencies);
+    profile = (await loadConfigFile(file)).profiles.alpha!;
+    assert.deepEqual(Object.keys(profile.logins ?? {}), [GLOBEX]);
+    assert.equal(profile.activeLogin, GLOBEX);
+    assert.deepEqual(revoked, ['acme co.jwt.signature']);
+
+    // Without an active login and without --tenant, a logout must not guess.
+    await seed();
+    await updateProfile('alpha', { apiUrl: API_URL, authApiUrl: AUTH_URL, logins: (await loadConfigFile(file)).profiles.alpha!.logins! }, file);
+    await assert.rejects(
+        logout({ environment: 'alpha' }, dependencies),
+        (error: unknown) => error instanceof CliError && error.code === 'login_selection_required'
+    );
+
+    revoked.length = 0;
+    await logout({ all: true }, dependencies);
+    assert.deepEqual((await loadConfigFile(file)).profiles, {});
+    assert.deepEqual(revoked.sort(), ['acme co.jwt.signature', 'globex.jwt.signature']);
+    assert.equal(store.values.size, 0);
+});
+
+test('logout keeps the other logins of a profile, and an API key lives next to them', async () => {
+    const { file, env } = await setup();
+    await updateProfile('alpha', { apiUrl: API_URL, apiKey: 'key-1', logins: { [ACME]: savedLogin(ACME, 'Acme Co') }, activeLogin: 'api-key' }, file);
+    const output: string[] = [];
+    const listed = await listLogins({ environment: 'alpha', json: true }, { env, write: message => output.push(message) });
+    assert.deepEqual(
+        listed.map(item => [item.id, item.kind, item.tenantName, item.active]),
+        [
+            [ACME, 'login', 'Acme Co', false],
+            ['api-key', 'api-key', 'API key', true]
+        ]
+    );
+    assert.equal(((await resolveConfig({ environment: 'alpha' }, env)).credential as { apiKey: string }).apiKey, 'key-1');
+    await logout(
+        { environment: 'alpha' },
+        {
+            configFile: file,
+            env,
+            write: () => {},
+            scopedTokenClient: () => ({ renew: async () => Promise.reject(new Error('no')), revoke: async () => {} })
+        }
+    );
+    const profile = (await loadConfigFile(file)).profiles.alpha!;
+    assert.equal(profile.apiKey, undefined);
+    assert.deepEqual(Object.keys(profile.logins ?? {}), [ACME]);
+    assert.equal(profile.activeLogin, ACME);
+});
+
+test('the CLI accepts --tenant, lists logins as JSON, and `logins use` switches the active one', async () => {
+    const { file } = await setup();
+    await twoLogins(file);
+    const original = { config: process.env.ZYNOHOSTING_CONFIG, write: process.stdout.write.bind(process.stdout) };
+    const captured: string[] = [];
+    process.env.ZYNOHOSTING_CONFIG = file;
+    process.stdout.write = ((chunk: string | Uint8Array) => {
+        captured.push(String(chunk));
+        return true;
+    }) as typeof process.stdout.write;
+    try {
+        await createProgram().parseAsync(['node', 'zynohosting', '--environment', 'alpha', 'logins', '--json']);
+        await createProgram().parseAsync(['node', 'zynohosting', 'whoami', '--environment', 'alpha', '--tenant', 'Acme Co', '--json']);
+        await createProgram().parseAsync(['node', 'zynohosting', 'logins', 'use', 'Acme Co', '--environment', 'alpha']);
+    } finally {
+        process.stdout.write = original.write;
+        if (original.config === undefined) delete process.env.ZYNOHOSTING_CONFIG;
+        else process.env.ZYNOHOSTING_CONFIG = original.config;
+    }
+    const [listing, current] = captured.slice(0, 2).map(text => JSON.parse(text) as Record<string, unknown>);
+    assert.equal((listing!.logins as unknown[]).length, 2);
+    assert.equal((current!.login as { id: string }).id, ACME);
+    assert.equal((await loadConfigFile(file)).profiles.alpha?.activeLogin, ACME);
+});
+
+test('a login using the file store renews through the token file under the profile lock, and logout removes its entry', async () => {
+    const { root, file, env } = await setup();
+    const tokenStore = createFileRenewalTokenStore(file);
+    await tokenStore.set(KEY_ACME, 'zrt_acme');
+    await tokenStore.set(KEY_GLOBEX, 'zrt_orphan');
+    await updateProfile(
+        'alpha',
+        {
+            apiUrl: API_URL,
+            authApiUrl: AUTH_URL,
+            logins: { [ACME]: savedLogin(ACME, 'Acme Co', { renewalKey: KEY_ACME, renewalStore: 'file', expiresAt: Date.now() - 1 }) },
+            activeLogin: ACME
+        },
+        file
+    );
+    const renewed: string[] = [];
+    const resolved = await resolveConfig({ environment: 'alpha' }, env, {
+        scopedTokenClient: () => ({
+            async renew(value: string) {
+                renewed.push(value);
+                // The profiles lock is held for the whole renewal.
+                await stat(`${file}.renew.lock`);
+                return { jwt: 'acme2.jwt.signature', expiresAt: Date.now() + 3_600_000, renewalToken: 'zrt_acme2' };
+            }
+        })
+    });
+    assert.deepEqual(renewed, ['zrt_acme']);
+    assert.equal(token(resolved), 'acme2.jwt.signature');
+    assert.equal(await tokenStore.get(KEY_ACME), 'zrt_acme2');
+    await assert.rejects(stat(`${file}.renew.lock`));
+    await assert.rejects(stat(`${tokenStore.path}.renew.lock`));
+    assert.doesNotMatch(await readFile(file, 'utf8'), /zrt_/);
+
+    // Logout deletes the login's own entry. The orphan is too fresh to prune, so it stays for now.
+    await logout(
+        { environment: 'alpha' },
+        {
+            configFile: file,
+            env,
+            write: () => {},
+            scopedTokenClient: () => ({ renew: async () => Promise.reject(new Error('no')), revoke: async () => {} })
+        }
+    );
+    assert.equal(await tokenStore.get(KEY_ACME), undefined);
+    assert.equal(await tokenStore.get(KEY_GLOBEX), 'zrt_orphan');
+    void root;
+});
+
+test('logout --all prunes token-file entries that no profile references once they are old enough', async () => {
+    const { file, env } = await setup();
+    const tokenStore = createFileRenewalTokenStore(file);
+    await tokenStore.set(KEY_GLOBEX, 'zrt_orphan');
+    // Age the orphan by rewriting its timestamp.
+    const aged = JSON.parse(await readFile(tokenStore.path, 'utf8')) as { tokens: Record<string, { updatedAt: number }> };
+    aged.tokens[KEY_GLOBEX]!.updatedAt = Date.now() - 2 * 3_600_000;
+    await writeFile(tokenStore.path, JSON.stringify(aged), { mode: 0o600 });
+    await updateProfile('alpha', { apiUrl: API_URL, apiKey: 'key-1' }, file);
+    await logout({ all: true }, { configFile: file, env, write: () => {} });
+    await assert.rejects(stat(tokenStore.path));
+});

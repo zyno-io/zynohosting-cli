@@ -11,6 +11,9 @@ import { loadStoredConfig, resolveApiUrl, resolveAuthApiUrl, resolveConfig, reso
 import { CliError } from '../src/errors.js';
 import { startLoopbackLogin } from '../src/login/loopback.js';
 
+// The browser flow is what these tests exercise; a headless CI machine would otherwise pick the device flow.
+process.env.DISPLAY ||= ':0';
+
 const API_URL = 'https://hosting.api-alpha.zyno.dev';
 const SUITE_API_URL = 'https://suite.api-alpha.zyno.dev';
 const AUTH_API_URL = 'https://auth.api-alpha.zyno.dev';
@@ -72,11 +75,13 @@ test('browser login accepts a one-shot SPA form POST and saves Bearer credential
     assert.equal(stored.apiUrl, API_URL);
     assert.equal(stored.suiteApiUrl, SUITE_API_URL);
     assert.equal(stored.authApiUrl, AUTH_API_URL);
-    assert.equal(stored.accessToken, JWT);
-    assert.equal(stored.tenantId, TENANT_ID);
-    assert.equal(typeof stored.expiresAt, 'number');
+    const saved = stored.logins?.[TENANT_ID];
+    assert.equal(saved?.accessToken, JWT);
+    assert.equal(saved?.tenantId, TENANT_ID);
+    assert.equal(typeof saved?.expiresAt, 'number');
+    assert.equal(stored.activeLogin, TENANT_ID);
     assert.equal(stored.apiKey, undefined);
-    assert.equal(stored.scopedToken, true);
+    assert.equal(saved?.scopedToken, true);
     assert.match(output.join(''), /login complete/i);
     if (process.platform !== 'win32') assert.equal((await stat(file)).mode & 0o777, 0o600);
 });
@@ -188,9 +193,10 @@ test('renewable browser login requests exact scopes and stores only a credential
     );
 
     const stored = await loadStoredConfig(file, 'alpha');
-    assert.equal(stored.scopedToken, true);
-    assert.match(stored.renewalKey ?? '', /^[0-9a-f-]{36}$/);
-    assert.equal(store.values.get(stored.renewalKey!), renewalToken);
+    const saved = stored.logins?.[TENANT_ID];
+    assert.equal(saved?.scopedToken, true);
+    assert.match(saved?.renewalKey ?? '', /^[0-9a-f-]{36}$/);
+    assert.equal(store.values.get(saved!.renewalKey!), renewalToken);
     assert.doesNotMatch(await readFile(file, 'utf8'), /zrt_first-secret/);
 });
 
@@ -276,8 +282,9 @@ test('an aborted browser login stops waiting and closes its loopback listener', 
                 configFile: file,
                 write: () => {},
                 openUrl: async () => {},
-                onBrowserUrl: url => {
-                    callbackUrl = new URL(url).searchParams.get('callback') ?? '';
+                onLoginPrompt: prompt => {
+                    assert.equal(prompt.flow, 'browser');
+                    callbackUrl = new URL((prompt as { url: string }).url).searchParams.get('callback') ?? '';
                     abort.abort();
                 }
             }
@@ -316,6 +323,87 @@ test('loopback rejects repeated callback fields and unexpected renewal credentia
     } finally {
         await loopback.close();
     }
+});
+
+test('loopback accepts the tenant, account and grant end the portal adds, and rejects malformed ones', async () => {
+    const loopback = await startLoopbackLogin({ timeoutMs: 5_000 });
+    const post = (fields: Record<string, string>) =>
+        fetch(loopback.callbackUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: new URLSearchParams({ jwt: JWT, tenantId: TENANT_ID, expiresAt: String(Date.now() + 60_000), state: loopback.state, ...fields })
+        });
+    try {
+        assert.equal((await post({ grantExpiresAt: String(Date.now() - 1000) })).status, 400);
+        assert.equal((await post({ grantExpiresAt: String(Date.now() + 40 * 86_400_000) })).status, 400);
+        assert.equal((await post({ grantExpiresAt: 'soon' })).status, 400);
+        assert.equal((await post({ tenantName: 'Bad\u0007Name' })).status, 400);
+        assert.equal((await post({ accountEmail: 'x'.repeat(400) })).status, 400);
+        const grantExpiresAt = Date.now() + 30 * 86_400_000;
+        assert.equal((await post({ tenantName: 'Acme Co', accountEmail: 'owner@example.com', grantExpiresAt: String(grantExpiresAt) })).status, 200);
+        const credential = await loopback.result;
+        assert.equal(credential.tenantName, 'Acme Co');
+        assert.equal(credential.accountEmail, 'owner@example.com');
+        assert.equal(credential.grantExpiresAt, grantExpiresAt);
+    } finally {
+        await loopback.close();
+    }
+});
+
+test('the browser flow passes the requested lifetime to the portal and checks the credential store first', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'hosting-cli-login-lifetime-'));
+    const file = join(root, 'config.json');
+    let opened = 0;
+    await assert.rejects(
+        login(
+            { apiUrl: API_URL, loginUrl: LOGIN_URL, renewable: true, lifetime: '1d', device: false },
+            {
+                configFile: file,
+                write: () => {},
+                openUrl: async () => {
+                    opened++;
+                },
+                renewalTokenStore: {
+                    async get() {
+                        return undefined;
+                    },
+                    async set() {},
+                    async delete() {},
+                    async probe() {
+                        throw new CliError('no credential service', 3, 'credential_store_unavailable');
+                    }
+                }
+            }
+        ),
+        (error: unknown) => error instanceof CliError && error.code === 'credential_store_unavailable'
+    );
+    assert.equal(opened, 0);
+
+    let lifetime: string | null = null;
+    const abort = new AbortController();
+    await assert.rejects(
+        login(
+            { apiUrl: API_URL, loginUrl: LOGIN_URL, renewable: true, lifetime: '1d', device: false, signal: abort.signal },
+            {
+                configFile: file,
+                write: () => {},
+                openUrl: async () => {},
+                renewalTokenStore: {
+                    async get() {
+                        return undefined;
+                    },
+                    async set() {},
+                    async delete() {}
+                },
+                onLoginPrompt: prompt => {
+                    lifetime = new URL((prompt as { url: string }).url).searchParams.get('lifetime');
+                    abort.abort();
+                }
+            }
+        ),
+        /cancelled/i
+    );
+    assert.equal(lifetime, '86400');
 });
 
 test('loopback requires form encoding, enforces its body limit, and requires an opted-in renewal credential', async () => {
@@ -393,7 +481,8 @@ test('API-key login remains available for CI credentials', async () => {
         apiUrl: API_URL,
         suiteApiUrl: SUITE_API_URL,
         authApiUrl: AUTH_API_URL,
-        apiKey: 'ci-key'
+        apiKey: 'ci-key',
+        activeLogin: 'api-key'
     });
 });
 
@@ -406,7 +495,8 @@ test('saved browser credentials resolve for deployments and expire locally', asy
         apiUrl: API_URL,
         suiteApiUrl: SUITE_API_URL,
         authApiUrl: AUTH_API_URL,
-        credential: { type: 'bearer', accessToken: JWT, tenantId: TENANT_ID, expiresAt: EXPIRATION }
+        credential: { type: 'bearer', accessToken: JWT, tenantId: TENANT_ID, expiresAt: EXPIRATION },
+        login: { id: TENANT_ID, kind: 'login' }
     });
 
     await updateProfile('alpha', { apiUrl: API_URL, accessToken: JWT, tenantId: TENANT_ID, expiresAt: Date.now() - 1 }, file);
@@ -468,8 +558,8 @@ test('an expiring renewable login rotates once across concurrent config resoluti
     assert.equal(second.credential.type === 'bearer' && second.credential.accessToken, 'new.header.signature');
     assert.equal(renewals, 1);
     assert.equal(store.values.get(renewalKey), 'zrt_new');
-    assert.equal((await loadStoredConfig(file, 'alpha')).accessToken, 'new.header.signature');
-    assert.equal((await loadStoredConfig(file, 'alpha')).expiresAt, newExpiration);
+    assert.equal((await loadStoredConfig(file, 'alpha')).logins?.[TENANT_ID]?.accessToken, 'new.header.signature');
+    assert.equal((await loadStoredConfig(file, 'alpha')).logins?.[TENANT_ID]?.expiresAt, newExpiration);
 });
 
 test('an explicit SPA login URL works with a custom Hosting API hostname', () => {

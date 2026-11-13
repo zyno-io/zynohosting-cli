@@ -14,6 +14,9 @@ import { AllowedLocalRoots } from '../src/mcp/local-paths.js';
 import { createHostingMcpServer } from '../src/mcp/server.js';
 import { resolveMcpServerOptions } from '../src/mcp/start.js';
 
+// The browser flow is what these tests exercise; a headless CI machine would otherwise pick the device flow.
+process.env.DISPLAY ||= ':0';
+
 test('serves site metadata and downloads files only inside allowed roots', async () => {
     const root = await mkdtemp(join(tmpdir(), 'zynohosting-mcp-'));
     const snapshot = await siteArchive('snapshot');
@@ -197,6 +200,7 @@ test('serves site metadata and downloads files only inside allowed roots', async
             'get_site',
             'list_files',
             'list_forms',
+            'list_logins',
             'list_sites',
             'login',
             'plan_deploy',
@@ -205,7 +209,8 @@ test('serves site metadata and downloads files only inside allowed roots', async
             'put_file',
             'update_form',
             'update_form_bot_protection',
-            'update_form_origins'
+            'update_form_origins',
+            'use_login'
         ]);
         const sites = await client.callTool({ name: 'list_sites', arguments: {} });
         assert.match(JSON.stringify(sites.structuredContent), /example\.com/);
@@ -507,7 +512,7 @@ test('reports a failed browser context switch instead of the prior login', async
         apiUrl: baseUrl,
         env: { ZYNOHOSTING_CONFIG: configFile, ZYNOHOSTING_LOGIN_URL: 'https://login.example.test/cli/login' },
         loginDependencies: {
-            onBrowserUrl: async () => {
+            onLoginPrompt: async () => {
                 throw new Error('The sign-in was denied.');
             }
         }

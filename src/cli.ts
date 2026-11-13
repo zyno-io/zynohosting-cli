@@ -9,6 +9,7 @@ import { downloadSite, DownloadSiteOptions } from './commands/download-site.js';
 import { deleteFile, getFile, listFiles, putFile } from './commands/files.js';
 import { runFormCommand, runFormsGuide } from './commands/forms.js';
 import { login, LoginOptions } from './commands/login.js';
+import { listLogins, useLogin, whoami } from './commands/logins.js';
 import { logout, LogoutOptions } from './commands/logout.js';
 import { promoteSite, PromoteSiteOptions } from './commands/promote-site.js';
 import { getSite, listSites } from './commands/sites.js';
@@ -33,11 +34,12 @@ export function createProgram(): Command {
         .option('--auth-api-url <url>', 'ZynoAuth API URL')
         .addOption(environmentOption())
         .option('--api-key <key>', 'tenant API key (prefer ZYNOHOSTING_API_KEY)')
+        .option('--tenant <name|id>', 'use this saved login for this command only (or set ZYNOHOSTING_TENANT)')
         .option('--json', 'emit machine-readable JSON');
 
     program
         .command('login')
-        .description('sign in through ZynoSuite or save a CI API key')
+        .description('sign in through ZynoSuite (browser, or a link and code) or save a CI API key')
         .option('--api-url <url>', 'Hosting Manager API URL')
         .option('--suite-api-url <url>', 'ZynoSuite API URL')
         .option('--auth-api-url <url>', 'ZynoAuth API URL')
@@ -46,16 +48,32 @@ export function createProgram(): Command {
         .option('--login-url <url>', 'ZynoSuite SPA login page URL')
         .option('--name <description>', 'name shown on the authorization screen')
         .option('--permission <key>', 'permission to request, repeatable (see the list below)', collect, [])
-        .option('--renewable', 'securely store a renewable credential in the system credential store')
+        .option('--renewable', 'keep a renewable credential (system credential store by default; see --credential-store)')
+        .option('--lifetime <1h|1d|7d|30d>', 'suggest how long the login lasts; the approver decides. Anything above 1h needs --renewable')
+        .option(
+            '--credential-store <system|file>',
+            'where the renewal token lives with --renewable (default: system; env ZYNOHOSTING_CREDENTIAL_STORE)'
+        )
+        .option('--device', 'sign in with a link and code you open on any device, even where a browser is available')
+        .option('--no-device', 'use the browser even where a link and code would be chosen')
+        .option('--no-wait', 'with --device: print the link and code, save the pending sign-in, and exit; finish it with --resume')
+        .option('--resume', 'continue the pending sign-in started with --no-wait')
         .option('--no-open', 'print the login URL instead of opening a browser')
-        .addOption(new Option('--timeout <seconds>', 'browser login timeout').argParser(positiveInteger).default(300))
-        .action(async (commandOptions: LoginOptions & { timeout: number; permission: string[] }) => {
+        .option('--json', 'emit machine-readable JSON events on stdout')
+        .addOption(
+            new Option(
+                '--timeout <seconds>',
+                'how long to wait for approval (browser: 300; device: until the code expires; --resume: 300)'
+            ).argParser(positiveInteger)
+        )
+        .action(async (commandOptions: LoginOptions & { timeout?: number; permission: string[]; wait?: boolean; json?: boolean }) => {
             const global = program.opts<{
                 apiUrl?: string;
                 suiteApiUrl?: string;
                 authApiUrl?: string;
                 apiKey?: string;
                 environment?: HostingEnvironment;
+                json?: boolean;
             }>();
             await login({
                 ...((commandOptions.apiUrl ?? global.apiUrl) ? { apiUrl: commandOptions.apiUrl ?? global.apiUrl } : {}),
@@ -67,29 +85,40 @@ export function createProgram(): Command {
                 ...(commandOptions.name ? { name: commandOptions.name } : {}),
                 ...(commandOptions.permission.length ? { permissionKeys: commandOptions.permission } : {}),
                 ...(commandOptions.renewable ? { renewable: true } : {}),
-                timeoutSeconds: commandOptions.timeout,
-                ...(commandOptions.open === undefined ? {} : { open: commandOptions.open })
+                ...(commandOptions.lifetime ? { lifetime: commandOptions.lifetime } : {}),
+                ...(commandOptions.credentialStore ? { credentialStore: commandOptions.credentialStore } : {}),
+                ...(commandOptions.device === undefined ? {} : { device: commandOptions.device }),
+                ...(commandOptions.wait === false ? { noWait: true } : {}),
+                ...(commandOptions.resume ? { resume: true } : {}),
+                ...(commandOptions.timeout === undefined ? {} : { timeoutSeconds: commandOptions.timeout }),
+                ...(commandOptions.open === undefined ? {} : { open: commandOptions.open }),
+                json: commandOptions.json ?? global.json ?? false,
+                handleSigint: true
             });
         })
         .addHelpText(
             'after',
             [
                 '',
-                'Permissions (the complete list; any other key is rejected before the browser opens):',
+                'Permissions (the complete list; any other key is rejected before anything is started):',
                 permissionCapabilityLines()
                     .split('\n')
                     .map(line => `  ${line}`)
                     .join('\n'),
                 '',
                 'Every hosting permission also needs hosting.sitesRead. Request the narrowest complete set:',
-                'a token cannot be widened later, so changing scope means logging out and signing in again.'
+                'a token cannot be widened later, so changing scope means logging out and signing in again.',
+                '',
+                'Where no browser can open (SSH, no display) login picks the link-and-code flow by itself.',
+                'Agents that only show output when a command exits: login --device --no-wait --json, then login --resume --json.'
             ].join('\n')
         );
 
     program
         .command('logout')
-        .description('revoke the saved scoped token and remove local credentials for the selected environment')
-        .option('--all', 'log out of every saved environment')
+        .description('revoke the active saved login (or the one named by --tenant) and remove its local credentials')
+        .option('--all', 'log out of every login in every saved environment')
+        .option('--tenant <name|id>', 'log out of this saved login instead of the active one')
         .option('--api-url <url>', 'Hosting Manager API URL')
         .option('--suite-api-url <url>', 'ZynoSuite API URL')
         .option('--auth-api-url <url>', 'ZynoAuth API URL')
@@ -98,11 +127,42 @@ export function createProgram(): Command {
             const context = commandContext(program, commandOptions);
             await logout({
                 ...(commandOptions.all ? { all: true } : {}),
+                ...(context.tenant ? { tenant: context.tenant } : {}),
                 ...(context.apiUrl ? { apiUrl: context.apiUrl } : {}),
                 ...(context.suiteApiUrl ? { suiteApiUrl: context.suiteApiUrl } : {}),
                 ...(context.authApiUrl ? { authApiUrl: context.authApiUrl } : {}),
                 ...(context.environment ? { environment: context.environment } : {})
             });
+        });
+
+    const logins = program
+        .command('logins')
+        .description('list the saved logins for the selected environment, one per tenant')
+        .option('--api-url <url>', 'Hosting Manager API URL')
+        .addOption(environmentOption())
+        .option('--json', 'emit JSON')
+        .action(async (commandOptions: { json?: boolean; environment?: HostingEnvironment; apiUrl?: string }) => {
+            await listLogins(commandContext(program, commandOptions));
+        });
+    logins
+        .command('use')
+        .description('make a saved login the default, without signing in again')
+        .argument('<tenant>', 'tenant name or tenant ID, as listed by `zynohosting logins`')
+        .option('--api-url <url>', 'Hosting Manager API URL')
+        .addOption(environmentOption())
+        .option('--json', 'emit JSON')
+        .action(async (tenant: string, commandOptions: { json?: boolean; environment?: HostingEnvironment; apiUrl?: string }) => {
+            await useLogin(tenant, commandContext(program, commandOptions));
+        });
+    program
+        .command('whoami')
+        .description('show which saved login commands use now (with --all, every saved login)')
+        .option('--all', 'list every saved login, like `zynohosting logins`')
+        .option('--api-url <url>', 'Hosting Manager API URL')
+        .addOption(environmentOption())
+        .option('--json', 'emit JSON')
+        .action(async (commandOptions: { all?: boolean; json?: boolean; environment?: HostingEnvironment; apiUrl?: string }) => {
+            await whoami({ ...commandContext(program, commandOptions), ...(commandOptions.all ? { all: true } : {}) });
         });
 
     const sites = program.command('sites').description('list and inspect authorized sites');
@@ -350,6 +410,7 @@ function commandContext(
         authApiUrl?: string;
         apiKey?: string;
         environment?: HostingEnvironment;
+        tenant?: string;
         json?: boolean;
     }
 ): {
@@ -358,6 +419,7 @@ function commandContext(
     authApiUrl?: string;
     apiKey?: string;
     environment?: HostingEnvironment;
+    tenant?: string;
     json: boolean;
 } {
     const global = program.opts<{
@@ -366,6 +428,7 @@ function commandContext(
         authApiUrl?: string;
         apiKey?: string;
         environment?: HostingEnvironment;
+        tenant?: string;
         json?: boolean;
     }>();
     return {
@@ -374,6 +437,7 @@ function commandContext(
         ...((commandOptions.authApiUrl ?? global.authApiUrl) ? { authApiUrl: commandOptions.authApiUrl ?? global.authApiUrl } : {}),
         ...((commandOptions.apiKey ?? global.apiKey) ? { apiKey: commandOptions.apiKey ?? global.apiKey } : {}),
         ...((commandOptions.environment ?? global.environment) ? { environment: commandOptions.environment ?? global.environment } : {}),
+        ...((commandOptions.tenant ?? global.tenant) ? { tenant: commandOptions.tenant ?? global.tenant } : {}),
         json: commandOptions.json ?? global.json ?? false
     };
 }

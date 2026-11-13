@@ -14,6 +14,7 @@ const API_URL = 'https://hosting.api-alpha.zyno.dev';
 const SUITE_API_URL = 'https://suite.api-alpha.zyno.dev';
 const AUTH_API_URL = 'https://auth.api-alpha.zyno.dev';
 const RENEWAL_KEY = '11111111-1111-4111-8111-111111111111';
+const TENANT_ID = '00000000-0000-0000-0000-000000000024';
 
 test('logout self-revokes a scoped grant, removes its renewal credential, and removes only its profile', async () => {
     const root = await mkdtemp(join(tmpdir(), 'hosting-cli-logout-'));
@@ -67,10 +68,16 @@ test('logout preserves credentials when self-revocation cannot reach ZynoAuth', 
     const saved = {
         apiUrl: API_URL,
         authApiUrl: AUTH_API_URL,
-        accessToken: 'old.jwt.signature',
-        expiresAt: Date.now() + 60 * 60 * 1000,
-        renewalKey: RENEWAL_KEY,
-        scopedToken: true as const
+        logins: {
+            [TENANT_ID]: {
+                tenantId: TENANT_ID,
+                accessToken: 'old.jwt.signature',
+                expiresAt: Date.now() + 60 * 60 * 1000,
+                renewalKey: RENEWAL_KEY,
+                scopedToken: true as const
+            }
+        },
+        activeLogin: TENANT_ID
     };
     await updateProfile('alpha', saved, file);
 
