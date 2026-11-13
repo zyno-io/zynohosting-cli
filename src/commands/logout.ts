@@ -148,14 +148,27 @@ async function logoutEntry(
         }
     }
 
+    // Remove the entry only if it is still the one that was revoked: a same-tenant login saved in the meantime must survive.
+    let replaced = false;
     await mutateProfile(
         key,
         current => {
+            const now = loginEntries(current).find(candidate => candidate.id === entry.id);
+            const unchanged = entry.login
+                ? // A renewal during logout rotates the access token but keeps the renewal key, so the key identifies the login.
+                  now?.login !== undefined &&
+                  (entry.login.renewalKey ? now.login.renewalKey === entry.login.renewalKey : now.login.accessToken === entry.login.accessToken)
+                : now?.kind === 'api-key' && current.apiKey === stored.apiKey;
+            if (!unchanged) {
+                replaced = true;
+                return current;
+            }
             const next = withoutEntry(current, entry);
             return hasStoredCredential(next) || next.pendingDeviceLogin ? next : undefined;
         },
         location
     );
+    if (replaced) return;
     await removeLegacyConfigIfMatching(location, entry.login ? { logins: { [entry.id]: entry.login } } : { apiKey: stored.apiKey! });
     if (login?.renewalKey) {
         try {

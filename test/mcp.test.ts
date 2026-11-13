@@ -440,7 +440,10 @@ test('starts without credentials and can complete browser login through MCP', as
         assert.equal(beforeLogin.isError, true);
         assert.match(JSON.stringify(beforeLogin.content), /login MCP tool/);
 
-        const started = await client.callTool({ name: 'login', arguments: { permissions: ['hosting.sitesRead'], timeout_seconds: 5 } });
+        const started = await client.callTool({
+            name: 'login',
+            arguments: { flow: 'browser', permissions: ['hosting.sitesRead'], timeout_seconds: 5 }
+        });
         assert.equal(started.isError, undefined);
         const startedContent = started.structuredContent as { authenticated: boolean; status: string; browserUrl: string };
         assert.equal(startedContent.authenticated, false);
@@ -565,7 +568,10 @@ test('a changed permission request supersedes the in-flight browser flow and can
         return response.structuredContent as { status?: string; browserUrl?: string; reused?: boolean; permissions?: string[] };
     };
     try {
-        const invented = await client.callTool({ name: 'login', arguments: { permissions: ['hosting.sitesWrite'], timeout_seconds: 30 } });
+        const invented = await client.callTool({
+            name: 'login',
+            arguments: { flow: 'browser', permissions: ['hosting.sitesWrite'], timeout_seconds: 30 }
+        });
         assert.equal(invented.isError, true);
         assert.match(JSON.stringify(invented.content), /hosting\.filesWrite/);
 

@@ -349,6 +349,26 @@ test('--resume after the code expired reports it and drops the pending sign-in; 
     }
 });
 
+test('an uncertain delivery is remembered, so a later --resume reports a lost credential rather than an expiry', async () => {
+    const context = await setup(['drop']);
+    try {
+        await login({ ...context.options, noWait: true }, context.dependencies);
+        await assert.rejects(
+            login({ apiUrl: HOSTING_URL, resume: true, timeoutSeconds: 1 }, context.dependencies),
+            (error: unknown) => error instanceof CliError && error.code === 'login_pending'
+        );
+        assert.equal((await loadStoredConfig(context.file, 'alpha')).pendingDeviceLogin?.deliveryUncertain, true);
+        context.auth.polls = [{ status: 'expired' }];
+        await assert.rejects(
+            login({ apiUrl: HOSTING_URL, resume: true, timeoutSeconds: 20 }, context.dependencies),
+            (error: unknown) => error instanceof CliError && error.code === 'device_credential_lost'
+        );
+        assert.equal((await loadStoredConfig(context.file, 'alpha')).pendingDeviceLogin, undefined);
+    } finally {
+        await context.auth.close();
+    }
+});
+
 test('a newer --no-wait cancels the older pending code', async () => {
     const context = await setup([{ status: 'pending' }]);
     try {

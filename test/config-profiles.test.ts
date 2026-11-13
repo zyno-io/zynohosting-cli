@@ -63,7 +63,7 @@ test('login to alpha preserves production and the reverse, in a 0600 v2 file', a
     await saveKey(file, env, 'prod-key');
     await saveKey(file, env, 'alpha-key', { environment: 'alpha' });
     let raw = await rawFile(file);
-    assert.equal(raw.version, 2);
+    assert.equal(raw.version, 3);
     assert.deepEqual(Object.keys(raw.profiles ?? {}).sort(), ['alpha', 'production']);
     assert.equal(raw.profiles?.production?.apiKey, 'prod-key');
     assert.equal(raw.profiles?.alpha?.apiKey, 'alpha-key');
@@ -153,7 +153,7 @@ test('a legacy production file is read as the production profile and rewritten a
 
     await saveKey(file, env, 'alpha-key', { environment: 'alpha' });
     const raw = await rawFile(file);
-    assert.equal(raw.version, 2);
+    assert.equal(raw.version, 3);
     assert.equal(raw.profiles?.production?.apiKey, 'legacy-prod');
     assert.equal(raw.profiles?.alpha?.apiKey, 'alpha-key');
 });
@@ -180,7 +180,7 @@ test('a legacy alpha file needs --environment alpha and flagless commands get th
 
     await saveKey(file, env, 'prod-key');
     const raw = await rawFile(file);
-    assert.equal(raw.version, 2);
+    assert.equal(raw.version, 3);
     assert.equal(raw.profiles?.alpha?.apiKey, 'legacy-alpha');
     assert.equal(raw.profiles?.production?.apiKey, 'prod-key');
 });
@@ -433,7 +433,7 @@ test('the default v2 file is separate from the legacy file, which login never wr
 
     await login({ environment: 'alpha', apiKey: 'alpha-key' }, { env, write: () => {} });
     const raw = await rawFile(profiles);
-    assert.equal(raw.version, 2);
+    assert.equal(raw.version, 3);
     assert.equal(raw.profiles?.production?.apiKey, 'legacy-prod');
     assert.equal(raw.profiles?.alpha?.apiKey, 'alpha-key');
     assert.equal(await readFile(legacy, 'utf8'), legacyText);
@@ -513,7 +513,7 @@ async function browserLogin(
 ): Promise<void> {
     let failure: unknown;
     await login(
-        { loginUrl: 'https://zyno.app/cli/login', timeoutSeconds: 5, ...options },
+        { loginUrl: 'https://zyno.app/cli/login', timeoutSeconds: 5, device: false, ...options },
         {
             ...dependencies,
             write: () => {},
@@ -701,7 +701,7 @@ test('login replaces an explicit ZYNOHOSTING_CONFIG flat file whose apiUrl is in
     await assert.rejects(resolveConfig({}, env), /log.* again or delete the file/);
     await login({ environment: 'alpha', apiKey: 'alpha-key' }, { configFile: file, env, write: () => {} });
     const raw = await rawFile(file);
-    assert.equal(raw.version, 2);
+    assert.equal(raw.version, 3);
     assert.equal(raw.profiles?.alpha?.apiKey, 'alpha-key');
 });
 

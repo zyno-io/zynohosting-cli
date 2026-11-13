@@ -42,6 +42,8 @@ export interface PendingDeviceLogin {
     permissionKeys: string[];
     name: string;
     createdAt?: number;
+    /** A poll failed in transit, so the credential may already have been handed over. An `expired` answer then means it was lost. */
+    deliveryUncertain?: boolean;
 }
 
 export interface StoredConfig {
@@ -134,6 +136,7 @@ function parsePending(value: unknown): PendingDeviceLogin | undefined {
         ...(value.renewalStore === 'file' ? { renewalStore: 'file' as const } : {}),
         permissionKeys,
         name,
+        ...(value.deliveryUncertain === true ? { deliveryUncertain: true } : {}),
         ...(number(value.createdAt) !== undefined ? { createdAt: number(value.createdAt)! } : {})
     };
 }

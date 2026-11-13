@@ -551,6 +551,8 @@ class McpAuthentication {
     private readonly current = new Map<string, AuthenticatedMcpClients>();
     private readonly pending = new Map<string, Promise<AuthenticatedMcpClients>>();
     private readonly stopRefresh = new Map<string, () => void>();
+    /** Bumped whenever the default login may have changed, so a load that began earlier cannot cache a stale client. */
+    private generation = 0;
     private pendingLogin: PendingMcpLogin | undefined;
     private lastLoginError: unknown;
 
@@ -566,7 +568,10 @@ class McpAuthentication {
         if (cached) return cached;
         let loading = this.pending.get(key);
         if (!loading) {
-            loading = this.load(key).finally(() => this.pending.delete(key));
+            const started: Promise<AuthenticatedMcpClients> = this.load(key).finally(() => {
+                if (this.pending.get(key) === started) this.pending.delete(key);
+            });
+            loading = started;
             this.pending.set(key, loading);
         }
         return loading;
@@ -662,9 +667,10 @@ class McpAuthentication {
                 }
             }
         )
-            .then(async () => {
+            .then(async result => {
                 this.resetClients();
-                const config = await this.resolve();
+                // Report the tenant that was just approved, even if ZYNOHOSTING_TENANT would select another.
+                const config = await this.resolve(result.status === 'authenticated' ? result.tenantId : undefined);
                 this.setCurrent(DEFAULT_LOGIN, config);
                 this.onLoginComplete();
                 return config;
@@ -761,7 +767,10 @@ class McpAuthentication {
     }
 
     private async load(key: string): Promise<AuthenticatedMcpClients> {
+        const generation = this.generation;
         const config = await this.resolve(key === DEFAULT_LOGIN ? undefined : key);
+        // The default login changed while this resolved, so what it read may be the old one: use it for this call only.
+        if (generation !== this.generation) return this.build(config);
         return this.setCurrent(key, config);
     }
 
@@ -776,21 +785,27 @@ class McpAuthentication {
         }
     }
 
-    private setCurrent(key: string, config: ResolvedConfig): AuthenticatedMcpClients {
-        this.stopRefresh.get(key)?.();
-        this.stopRefresh.set(key, startCredentialRefreshLoop(config.credential, { onError: this.onRefreshError }));
-        const current = {
+    private build(config: ResolvedConfig): AuthenticatedMcpClients {
+        return {
             config,
             manager: new ManagerClient(config.apiUrl, config.credential),
             forms: new FormsClient(config.suiteApiUrl, config.credential),
             ...(config.suiteApiUrl ? { suiteApiUrl: config.suiteApiUrl } : {})
         };
+    }
+
+    private setCurrent(key: string, config: ResolvedConfig): AuthenticatedMcpClients {
+        this.stopRefresh.get(key)?.();
+        this.stopRefresh.set(key, startCredentialRefreshLoop(config.credential, { onError: this.onRefreshError }));
+        const current = this.build(config);
         this.current.set(key, current);
         return current;
     }
 
     /** The default login changed (a sign-in or use_login), so every cached client may now be wrong. */
     private resetClients(): void {
+        this.generation++;
+        this.pending.clear();
         for (const stop of this.stopRefresh.values()) stop();
         this.stopRefresh.clear();
         this.current.clear();

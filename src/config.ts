@@ -99,7 +99,7 @@ function locate(target: ConfigTarget): ConfigLocation {
 }
 
 export interface ConfigFile {
-    version: 2;
+    version: 3;
     profiles: Record<string, StoredConfig>;
 }
 
@@ -115,11 +115,13 @@ async function readConfigFile(path: string): Promise<ConfigFile> {
         if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('config must be an object');
         const object = value as Record<string, unknown>;
         if ('version' in object) {
-            if (object.version !== 2) throw new Error(`unsupported config version ${String(object.version)}`);
+            // Version 2 (one credential per profile) is read and migrated; version 3 is what is written. A build that only
+            // knows version 2 refuses a version 3 file instead of treating it as empty and saving over it.
+            if (object.version !== 2 && object.version !== 3) throw new Error(`unsupported config version ${String(object.version)}`);
             const profiles = object.profiles;
             if (!profiles || typeof profiles !== 'object' || Array.isArray(profiles)) throw new Error('profiles must be an object');
             return {
-                version: 2,
+                version: 3,
                 profiles: Object.fromEntries(
                     Object.entries(profiles as Record<string, unknown>).map(([key, profile]) => {
                         if (!profile || typeof profile !== 'object' || Array.isArray(profile)) throw new Error(`profile ${key} must be an object`);
@@ -129,7 +131,7 @@ async function readConfigFile(path: string): Promise<ConfigFile> {
             };
         }
         const legacy = parseStoredConfig(object);
-        if (Object.keys(legacy).length === 0) return { version: 2, profiles: {} };
+        if (Object.keys(legacy).length === 0) return { version: 3, profiles: {} };
         let key: string;
         try {
             key = profileKeyForApiUrl(legacy.apiUrl ?? API_URLS.production);
@@ -138,7 +140,7 @@ async function readConfigFile(path: string): Promise<ConfigFile> {
                 `its saved API URL is invalid (${error instanceof Error ? error.message : String(error)}). Run \`zynohosting login\` again or delete the file`
             );
         }
-        return { version: 2, profiles: { [key]: legacy } };
+        return { version: 3, profiles: { [key]: legacy } };
     } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw error;
         const message = `Could not read config at ${path}: ${error instanceof Error ? error.message : String(error)}`;
@@ -164,7 +166,7 @@ export async function loadConfigFile(target: ConfigTarget = configLocation(), op
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
             // A flat file whose only problem is an unusable API URL holds no usable login, so a writer may replace it.
             if (options.lenientLegacy && error instanceof InvalidLegacyUrlError) {
-                return { version: 2, profiles: {} };
+                return { version: 3, profiles: {} };
             }
             throw error;
         }
@@ -173,11 +175,11 @@ export async function loadConfigFile(target: ConfigTarget = configLocation(), op
         try {
             return await readConfigFile(legacyPath);
         } catch (error) {
-            if ((error as NodeJS.ErrnoException).code === 'ENOENT' || options.lenientLegacy) return { version: 2, profiles: {} };
+            if ((error as NodeJS.ErrnoException).code === 'ENOENT' || options.lenientLegacy) return { version: 3, profiles: {} };
             throw error;
         }
     }
-    return { version: 2, profiles: {} };
+    return { version: 3, profiles: {} };
 }
 
 /** Reads one saved profile; an absent profile is an empty config. */
@@ -265,7 +267,7 @@ async function mutateProfileUnlocked(
     const next = change(profiles[key] ?? {});
     if (next === undefined) delete profiles[key];
     else profiles[key] = normalizeStoredConfig(next);
-    await writeConfigFile({ version: 2, profiles }, location.path);
+    await writeConfigFile({ version: 3, profiles }, location.path);
 }
 
 /**
@@ -402,6 +404,13 @@ async function resolveConfigWithSource(
               'environment'
           );
     const injected = overrideCredential ?? environmentCredential;
+    if (injected && !forced && (overrides.tenant?.trim() || env.ZYNOHOSTING_TENANT?.trim())) {
+        throw new CliError(
+            'A tenant was chosen (--tenant, the MCP tenant input, or ZYNOHOSTING_TENANT), but this process uses an API key or access token from its options or environment, which is tied to one tenant and cannot switch. Remove the tenant choice, or remove the injected credential to use a saved login.',
+            2,
+            'fixed_credential_source'
+        );
+    }
     // An injected credential makes the saved logins irrelevant, so a missing or ambiguous choice among them cannot matter.
     const entry = injected ? undefined : selectEntry(stored, tenantQuery, describeProfileKey(selection.key));
     if (!injected && !entry) throw missingCredentialError(selection.key, configFile);

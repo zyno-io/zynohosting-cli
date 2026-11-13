@@ -35,7 +35,7 @@
         "docs:build": "vitepress build docs",
         "docs:preview": "vitepress preview docs",
         "format": "oxfmt --write src test scripts docs skills .github *.md .oxfmtrc.json tsconfig.json tsconfig.build.json",
-        "test": "tsx --test test/**/*.test.ts",
+        "test": "tsx --import ./test/support/clean-env.ts --test test/**/*.test.ts",
         "typecheck": "tsc -p tsconfig.json --noEmit",
         "verify-package": "node scripts/verify-package.mjs",
         "prepack": "yarn clean && yarn build && yarn verify-package"

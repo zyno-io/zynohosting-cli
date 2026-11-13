@@ -32,7 +32,7 @@ test('browser login accepts a one-shot SPA form POST and saves Bearer credential
     let callbackFailure: unknown;
 
     await login(
-        { apiUrl: API_URL, loginUrl: LOGIN_URL, timeoutSeconds: 5 },
+        { apiUrl: API_URL, loginUrl: LOGIN_URL, device: false, timeoutSeconds: 5 },
         {
             configFile: file,
             write: message => output.push(message),
@@ -208,7 +208,7 @@ test('browser reports failure and preserves config when a renewal credential can
 
     await assert.rejects(
         login(
-            { apiUrl: API_URL, loginUrl: LOGIN_URL, renewable: true, timeoutSeconds: 5 },
+            { apiUrl: API_URL, loginUrl: LOGIN_URL, device: false, renewable: true, timeoutSeconds: 5 },
             {
                 configFile: file,
                 write: () => {},
@@ -277,7 +277,7 @@ test('an aborted browser login stops waiting and closes its loopback listener', 
 
     await assert.rejects(
         login(
-            { apiUrl: API_URL, loginUrl: LOGIN_URL, timeoutSeconds: 60, signal: abort.signal },
+            { apiUrl: API_URL, loginUrl: LOGIN_URL, device: false, timeoutSeconds: 60, signal: abort.signal },
             {
                 configFile: file,
                 write: () => {},

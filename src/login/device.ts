@@ -25,6 +25,10 @@ export interface DevicePollOptions {
     giveUpAt: number;
     /** Leave the code alive on a timeout, so `--resume` can continue. */
     keepPendingOnTimeout?: boolean | undefined;
+    /** Start from an earlier run's uncertain state (a resumed sign-in). */
+    uncertain?: boolean | undefined;
+    /** Called when the uncertain state changes, so it can be saved for a later `--resume`. */
+    onUncertainChange?: ((uncertain: boolean) => void | Promise<void>) | undefined;
 }
 
 const MIN_INTERVAL_SECS = 0.001;
@@ -39,7 +43,18 @@ const MAX_BACKOFF_MS = 60_000;
  */
 export async function pollDeviceApproval(options: DevicePollOptions): Promise<DeviceApproval> {
     let interval = clampInterval(options.interval);
-    let uncertain = false;
+    let uncertain = options.uncertain ?? false;
+    const setUncertain = async (value: boolean) => {
+        if (value === uncertain) return;
+        uncertain = value;
+        await Promise.resolve(options.onUncertainChange?.(value)).catch(() => {});
+    };
+    const lost = () =>
+        new CliError(
+            'The connection dropped while the approved sign-in was being delivered, so the credential was lost. Run `zynohosting login` again.',
+            3,
+            'device_credential_lost'
+        );
     let failures = 0;
     let waitMs = interval * 1000;
 
@@ -82,7 +97,7 @@ export async function pollDeviceApproval(options: DevicePollOptions): Promise<De
                 continue;
             }
             if (error instanceof HttpError && (error.status === 0 || error.status === 408 || error.status >= 500)) {
-                uncertain = true;
+                await setUncertain(true);
                 failures++;
                 waitMs = Math.min(MAX_BACKOFF_MS, interval * 1000 * 2 ** Math.min(failures, 6));
                 continue;
@@ -97,11 +112,7 @@ export async function pollDeviceApproval(options: DevicePollOptions): Promise<De
                 throw new CliError('The sign-in request was denied.', 3, 'login_denied');
             case 'expired':
                 throw uncertain
-                    ? new CliError(
-                          'The connection dropped while the approved sign-in was being delivered, so the credential was lost. Run `zynohosting login` again.',
-                          3,
-                          'device_credential_lost'
-                      )
+                    ? lost()
                     : new CliError('The sign-in code expired or was already used. Run `zynohosting login` again.', 3, 'device_code_expired');
             case 'slow_down':
                 interval = clampInterval(poll.interval ?? interval + SLOW_DOWN_STEP_SECS);
@@ -110,7 +121,7 @@ export async function pollDeviceApproval(options: DevicePollOptions): Promise<De
                 if (poll.interval !== undefined) interval = clampInterval(poll.interval);
                 break;
         }
-        uncertain = false;
+        await setUncertain(false);
         failures = 0;
         waitMs = interval * 1000;
     }

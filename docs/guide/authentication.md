@@ -107,7 +107,7 @@ The renewal token is the long-lived secret. By default the CLI stores it in macO
 
 The CLI checks the credential store before it asks for any approval, so a missing store fails at once with `credential_store_unavailable` instead of leaving an unused grant behind.
 
-If renewal is forbidden because tenant policy changed, the current access token remains usable until its normal expiration. An invalid or already-used renewal token requires a new login. Non-renewable tokens simply report `login_expired` after 60 minutes.
+If renewal is forbidden because tenant policy changed, the current access token remains usable until its normal expiration. An invalid or already-used renewal token requires a new login. A non-renewable login reports `login_expired` after 60 minutes. A renewable one reports `grant_expired` when the lifetime the approver chose ends.
 
 ### File-backed renewal storage
 

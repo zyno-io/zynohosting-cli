@@ -524,3 +524,138 @@ test('logout --all prunes token-file entries that no profile references once the
     await logout({ all: true }, { configFile: file, env, write: () => {} });
     await assert.rejects(stat(tokenStore.path));
 });
+
+test('signing in again to a tenant whose access token expired renews it to revoke the old grant, then removes the old key', async () => {
+    const { file, env } = await setup();
+    const store = new MemoryStore(new Map([[KEY_ACME, 'zrt_old']]));
+    await updateProfile(
+        'alpha',
+        {
+            apiUrl: API_URL,
+            authApiUrl: AUTH_URL,
+            logins: { [ACME]: savedLogin(ACME, 'Acme Co', { renewalKey: KEY_ACME, expiresAt: Date.now() - 1000 }) },
+            activeLogin: ACME
+        },
+        file
+    );
+    const calls: string[] = [];
+    let failure: unknown;
+    await login(
+        { apiUrl: API_URL, loginUrl: 'https://zyno.dev/cli/login', renewable: true, timeoutSeconds: 5, device: false },
+        {
+            configFile: file,
+            env,
+            renewalTokenStore: store,
+            write: () => {},
+            scopedTokenClient: () => ({
+                async startDevice(): Promise<never> {
+                    throw new Error('unexpected');
+                },
+                async pollDevice(): Promise<never> {
+                    throw new Error('unexpected');
+                },
+                async cancelDevice() {},
+                async renew(token: string) {
+                    calls.push(`renew ${token}`);
+                    return { jwt: 'renewed.jwt.signature', expiresAt: Date.now() + 3_600_000, renewalToken: 'zrt_rotated' };
+                },
+                async revoke(accessToken: string) {
+                    calls.push(`revoke ${accessToken}`);
+                }
+            }),
+            openUrl: async value => {
+                try {
+                    const url = new URL(value);
+                    const response = await fetch(url.searchParams.get('callback')!, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                        body: new URLSearchParams({
+                            jwt: 'new.jwt.signature',
+                            tenantId: ACME,
+                            expiresAt: String(Date.now() + 3_600_000),
+                            state: url.searchParams.get('state')!,
+                            renewalToken: 'zrt_new'
+                        })
+                    });
+                    assert.equal(response.status, 200);
+                } catch (error) {
+                    failure = error;
+                }
+            }
+        }
+    );
+    if (failure) throw failure;
+    assert.deepEqual(calls, ['renew zrt_old', 'revoke renewed.jwt.signature']);
+    assert.equal(store.values.has(KEY_ACME), false);
+    assert.equal(store.values.size, 1);
+});
+
+test('an explicit tenant alongside an injected credential is fixed_credential_source, not silently ignored', async () => {
+    const { file, env } = await setup();
+    await twoLogins(file);
+    const rejected = (error: unknown) => error instanceof CliError && error.code === 'fixed_credential_source' && error.exitCode === 2;
+    await assert.rejects(resolveConfig({ environment: 'alpha', tenant: 'Acme Co' }, { ...env, ZYNOHOSTING_API_KEY: 'key' }), rejected);
+    await assert.rejects(resolveConfig({ environment: 'alpha', apiKey: 'key', tenant: GLOBEX }, env), rejected);
+    await assert.rejects(
+        resolveConfig({ environment: 'alpha' }, { ...env, ZYNOHOSTING_ACCESS_TOKEN: 'a.b.c', ZYNOHOSTING_TENANT: 'Acme Co' }),
+        rejected
+    );
+    // Without a tenant choice an injected credential still works.
+    assert.equal((await resolveConfig({ environment: 'alpha' }, { ...env, ZYNOHOSTING_API_KEY: 'key' })).credential.type, 'api-key');
+});
+
+test('profiles are written as version 3, version 2 is read, and an unknown version is refused untouched', async () => {
+    const { file, env } = await setup();
+    await writeFile(file, JSON.stringify({ version: 2, profiles: { alpha: { apiUrl: API_URL, accessToken: 'old.jwt.signature', tenantId: ACME } } }));
+    await useLogin(ACME, { environment: 'alpha' }, { env, write: () => {} });
+    assert.equal((JSON.parse(await readFile(file, 'utf8')) as { version: number }).version, 3);
+
+    // What an older build that knows only version 2 sees: an error, never an empty file to overwrite.
+    const future = JSON.stringify({ version: 4, profiles: { alpha: { apiUrl: API_URL } } });
+    await writeFile(file, future);
+    await assert.rejects(
+        updateProfile('alpha', { apiUrl: API_URL, apiKey: 'k' }, file),
+        (error: unknown) => error instanceof CliError && error.code === 'invalid_config'
+    );
+    assert.equal(await readFile(file, 'utf8'), future);
+});
+
+test('logout leaves a login that a concurrent sign-in replaced while it was being revoked', async () => {
+    const { file, env } = await setup();
+    const store = new MemoryStore(new Map([[KEY_ACME, 'zrt_old']]));
+    await updateProfile(
+        'alpha',
+        { apiUrl: API_URL, authApiUrl: AUTH_URL, logins: { [ACME]: savedLogin(ACME, 'Acme Co', { renewalKey: KEY_ACME }) }, activeLogin: ACME },
+        file
+    );
+    await logout(
+        { environment: 'alpha' },
+        {
+            configFile: file,
+            env,
+            write: () => {},
+            renewalTokenStore: store,
+            scopedTokenClient: () => ({
+                async renew(): Promise<never> {
+                    throw new Error('unexpected');
+                },
+                async revoke() {
+                    // Another process signs in to the same tenant while this revocation is in flight.
+                    await updateProfile(
+                        'alpha',
+                        {
+                            apiUrl: API_URL,
+                            authApiUrl: AUTH_URL,
+                            logins: { [ACME]: savedLogin(ACME, 'Acme Co', { renewalKey: KEY_GLOBEX, accessToken: 'new.jwt.signature' }) },
+                            activeLogin: ACME
+                        },
+                        file
+                    );
+                }
+            })
+        }
+    );
+    assert.equal((await loadConfigFile(file)).profiles.alpha?.logins?.[ACME]?.accessToken, 'new.jwt.signature');
+    // The old login's renewal token is left alone too: it is not what the profile holds any more.
+    assert.equal(store.values.get(KEY_ACME), 'zrt_old');
+});

@@ -79,7 +79,9 @@ const REQUIRED_NODE = '>=24';
 // Listing tools is optional for installation but populates the install dialog,
 // and the connector directory requires it. Keep in step with SERVER_TOOLS.
 const tools = [
-    { name: 'login', description: 'Start or check the browser sign-in flow' },
+    { name: 'login', description: 'Start or check the sign-in (browser, or a link and code to approve on any device)' },
+    { name: 'list_logins', description: 'List the saved logins, one per organization' },
+    { name: 'use_login', description: 'Choose which saved login is the default' },
     { name: 'list_sites', description: 'List the sites this login can reach' },
     { name: 'get_site', description: 'Describe a single site' },
     { name: 'list_forms', description: 'List ZynoForms forms' },
@@ -109,7 +111,7 @@ const manifest = {
     version: pkg.version,
     description: 'Publish sites and manage ZynoForms integrations on ZynoHosting.',
     long_description:
-        'Sign in to ZynoHosting through your browser, publish a folder on this computer to one of your sites, and create or edit the forms on those pages. Deployments are planned and shown to you for approval before anything goes live.',
+        'Sign in to ZynoHosting through your browser, or with a link and code you approve on any device, publish a folder on this computer to one of your sites, and create or edit the forms on those pages. Deployments are planned and shown to you for approval before anything goes live.',
     // Shown as "Developed by" in the install dialog. Keep it matching the signing
     // certificate's common name so the stated and cryptographic identity agree.
     author: { name: 'Zyno Consulting', url: 'https://zyno.io' },

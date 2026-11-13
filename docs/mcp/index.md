@@ -172,9 +172,11 @@ After the user names a domain, the agent verifies it with `list_sites` or `get_s
 
 ## Available tools
 
-The server exposes twenty tools:
+The server exposes twenty-two tools:
 
 - `login`
+- `list_logins`
+- `use_login`
 - `list_sites`
 - `get_site`
 - `list_forms`

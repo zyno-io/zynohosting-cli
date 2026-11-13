@@ -52,11 +52,11 @@ Trailing slashes are normalized away.
 
 ## Saved configuration schema
 
-The file is JSON, version 2, with one profile per environment. A profile holds one login per tenant, keyed by tenant id, and the id of the active one:
+The file is JSON, version 3, with one profile per environment. A profile holds one login per tenant, keyed by tenant id, and the id of the active one:
 
 ```json
 {
-    "version": 2,
+    "version": 3,
     "profiles": {
         "production": {
             "apiUrl": "https://hosting.api.zyno.app",
@@ -112,11 +112,13 @@ The profile key is `production`, `alpha`, or `dev` when the Hosting API URL is t
 
 A profile may also hold one `apiKey`, which `logins` lists as `API key` (id `api-key`), and a `pendingDeviceLogin` while a `login --device --no-wait` sign-in is waiting for `--resume`. The pending record holds the device code, so treat the file as secret, as before.
 
-`login` writes only the selected profile, adding or replacing the login for the approved tenant and making it active. `logout` removes one login, or with `--all` every login in every profile. Token renewal rewrites only its own login. The profiles lock covers the whole profile: each write re-reads the file under the lock, so logins saved meanwhile are kept. Renewal of each login is serialized separately by its own renewal key, and the file store takes its own lock after the profiles lock, never the reverse.
+`login` writes only the selected profile, adding or replacing the login for the approved tenant and making it active. `logout` removes one login, or with `--all` every login in every profile. Token renewal rewrites only its own login. The profiles lock covers the whole profile: each write re-reads the file under the lock, so logins saved meanwhile are kept. A renewal holds the whole-profile lock for its duration (taking the legacy file's lock first when that file holds the same login), so two processes never consume the same one-time renewal token. The file store takes its own lock after the profiles lock, never the reverse.
 
 If the selected profile has no credential but others do, the command fails with `missing_config` (exit 2) and lists the saved logins. If it has several logins and none is active, the command fails with `login_selection_required`.
 
 ### Migration
+
+The file's `version` is 3 because older builds that know only version 2 would read the new profile shape as having no login and rewrite it. A build that knows only version 2 refuses a version 3 file with an `invalid_config` error ("unsupported config version 3") and leaves it untouched, so no login is lost. This CLI reads version 2 files, migrates them, and writes version 3 on the next save. Released builds up to 0.5.0 read only the flat `hosting-cli.json` and are unaffected.
 
 A profile saved by an earlier version holds one credential directly (`accessToken`, `tenantId`, `expiresAt`, `renewalKey`, `scopedToken`). It is read as a single login keyed by its tenant id (`unknown` if the tenant was never recorded) and made active, and it is written in the format above the next time anything is saved. The tenant name is filled in the next time the login renews. The same applies to the flat `hosting-cli.json`. An older CLI build reads the new format as having no login, so use the new build for everything once you have signed in with it.
 

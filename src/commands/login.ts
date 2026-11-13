@@ -112,7 +112,7 @@ export interface LoginDependencies {
     /** Receives JSON events when `json` is set. */
     emit?: (event: Record<string, unknown>) => void;
     renewalTokenStore?: RenewalTokenStore;
-    scopedTokenClient?: (authApiUrl: string) => DeviceLoginClient & Pick<ScopedTokenClient, 'revoke'>;
+    scopedTokenClient?: (authApiUrl: string) => DeviceLoginClient & Pick<ScopedTokenClient, 'revoke'> & Partial<Pick<ScopedTokenClient, 'renew'>>;
 }
 
 interface IssuedCredential {
@@ -251,19 +251,34 @@ export async function login(options: LoginOptions, dependencies: LoginDependenci
         return login;
     };
 
-    /** A login for the same tenant was replaced: drop its renewal token and, best effort, its grant. */
+    /**
+     * A login for the same tenant was replaced: revoke its grant (best effort, never blocking the new login), then drop
+     * its renewal token. An expired access token is renewed first, as logout does, because revoking needs a live one.
+     */
     const retire = async (previous: StoredLogin): Promise<void> => {
-        if (previous.renewalKey) {
+        const store = previous.renewalKey
+            ? (dependencies.renewalTokenStore ?? createRenewalTokenStore(previous.renewalStore ?? 'system', configPath))
+            : undefined;
+        const url = authApiUrl ?? pendingSaved?.authApiUrl;
+        if (previous.scopedToken && previous.accessToken && url) {
             try {
-                await (dependencies.renewalTokenStore ?? createRenewalTokenStore(previous.renewalStore ?? 'system', configPath)).delete(
-                    previous.renewalKey
-                );
+                const client = dependencies.scopedTokenClient?.(url) ?? new ScopedTokenClientImpl(url, 5_000);
+                let accessToken = previous.accessToken;
+                if (previous.expiresAt !== undefined && previous.expiresAt <= Date.now()) {
+                    const renewalToken = previous.renewalKey ? await store?.get(previous.renewalKey) : undefined;
+                    accessToken = renewalToken && client.renew ? (await client.renew(renewalToken)).jwt : '';
+                }
+                if (accessToken) await client.revoke(accessToken);
+            } catch {
+                // Best effort: the grant ends at its own expiry if it cannot be revoked now.
+            }
+        }
+        if (previous.renewalKey && store) {
+            try {
+                await store.delete(previous.renewalKey);
             } catch {
                 write('Warning: the previous renewal credential could not be removed from its credential store.\n');
             }
-        }
-        if (previous.scopedToken && previous.accessToken && !(previous.expiresAt !== undefined && previous.expiresAt <= Date.now())) {
-            await revokeQuietly(previous.accessToken);
         }
     };
 
@@ -354,7 +369,19 @@ export async function login(options: LoginOptions, dependencies: LoginDependenci
                     signal: abort.signal,
                     deadline: Date.now() + (options.timeoutSeconds ?? DEFAULT_WAIT_SECONDS) * 1000,
                     giveUpAt: Infinity,
-                    keepPendingOnTimeout: true
+                    keepPendingOnTimeout: true,
+                    uncertain: pending.deliveryUncertain ?? false,
+                    onUncertainChange: async deliveryUncertain => {
+                        await mutateProfile(
+                            profileKey,
+                            current => {
+                                if (!current.pendingDeviceLogin) return current;
+                                const { deliveryUncertain: _old, ...rest } = current.pendingDeviceLogin;
+                                return { ...current, pendingDeviceLogin: deliveryUncertain ? { ...rest, deliveryUncertain: true } : rest };
+                            },
+                            file
+                        );
+                    }
                 });
                 const login = await persist(toIssued(approval.credential), approval.approvedBy);
                 return finish(login, 'device');
