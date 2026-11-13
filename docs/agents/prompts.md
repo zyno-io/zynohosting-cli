@@ -15,7 +15,7 @@ Build a website for [what the site is for] that I can host on ZynoHosting at [yo
 ## Publish your site
 
 ```text:no-line-numbers
-Publish this project to [your-domain.com]. Do not infer or substitute a domain. First verify that I can access this exact domain with the current ZynoHosting login. If I cannot, offer to sign in again and switch context. Create and show me the deployment plan, then wait for my approval before applying it.
+Publish this project to [your-domain.com]. Do not infer or substitute a domain. First verify that I can access this exact domain with the current ZynoHosting login. If I belong to several organizations, ask me which one first. If I cannot access it, offer to sign in again and switch context. Create and show me the deployment plan, then wait for my approval before applying it.
 ```
 
 **What happens.** Your agent checks you can publish to that exact address, then shows a plan: what it will upload, change, and remove. Nothing goes live until you say yes.

@@ -63,6 +63,21 @@ Promotion errors include `preview_unavailable` for an older manager, `promotion_
 failed serving reconciliation, and `promotion_pending` when an accepted operation is still pending.
 The latter includes its operation ID and status path; inspect that operation before resubmitting.
 
+## Login output
+
+`zynohosting login --json` writes one event per line to stdout and human text to stderr. The device code, access token and renewal token never appear.
+
+| Event                                                                                                                                                            | When                                                                                      |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `{"type":"login_started","flow":"device","reason","verificationUri","verificationUriComplete","userCode","expiresAt","interval"}`                                | A code was issued. `reason` is `explicit`, `ssh`, `no_display` or `loopback_unavailable`. |
+| `{"type":"login_started","flow":"browser","reason","url"}`                                                                                                       | The browser flow started.                                                                 |
+| `{"type":"login_pending","resume":"zynohosting login --resume"}`                                                                                                 | `--no-wait` saved a pending sign-in, or `--resume` timed out.                             |
+| `{"type":"login_resuming","userCode"}`                                                                                                                           | `--resume` began waiting.                                                                 |
+| `{"type":"result","status":"authenticated","flow","profile","tenantId","tenantName","account","renewable","credentialStore","accessExpiresAt","grantExpiresAt"}` | The login was saved. Times are ISO strings; the last four fields can be absent.           |
+| `{"type":"result","status":"api_key_saved","profile"}`                                                                                                           | `--api-key` was saved.                                                                    |
+
+`zynohosting logins --json` prints `{"profile","logins":[{"id","kind","tenantId","tenantName","account","active","renewable","credentialStore","accessExpiresAt","grantExpiresAt","expired"}]}`, and `zynohosting whoami --json` prints `{"profile","login":{…}}`. Tokens are never listed.
+
 ## Exit codes
 
 | Exit code | Category                                                                   |
@@ -83,21 +98,35 @@ The remote mutation already succeeded. Do not blindly retry the deployment as th
 
 ## Common error codes
 
-| Code                        | Typical resolution                                                |
-| --------------------------- | ----------------------------------------------------------------- |
-| `missing_config`            | Run `zynohosting login` or provide an API key.                    |
-| `login_expired`             | Log in again, or use `--renewable` for a long-running client.     |
-| `renewal_invalid`           | The one-time renewal token is invalid/used; log in again.         |
-| `renewal_forbidden`         | Tenant policy prohibits renewal; contact a tenant administrator.  |
-| `renewal_missing`           | The OS credential entry is unavailable; log in again.             |
-| `credential_store_failed`   | Unlock or repair the operating system credential store.           |
-| `invalid_environment`       | Use `production`, `alpha`, or `dev`.                              |
-| `confirmation_required`     | Use a terminal, `--dry-run`, or reviewed `--yes`.                 |
-| `precondition_failed`       | Refresh the file listing and review the new ETag/content.         |
-| `plan_expired`              | Create and review a new plan.                                     |
-| `unsafe_local_path`         | Choose an absolute destination inside an allowed MCP root.        |
-| `unsupported_protocol`      | Upgrade the CLI or resolve cluster version skew.                  |
-| `cache_invalidation_failed` | Treat the mutation as applied and investigate cache invalidation. |
+| Code                           | Typical resolution                                                                                                 |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------ |
+| `missing_config`               | Run `zynohosting login` or provide an API key.                                                                     |
+| `login_expired`                | Log in again, or use `--renewable` for a long-running client.                                                      |
+| `renewal_invalid`              | The one-time renewal token is invalid/used; log in again.                                                          |
+| `renewal_forbidden`            | Tenant policy prohibits renewal; contact a tenant administrator.                                                   |
+| `renewal_missing`              | The OS credential entry is unavailable; log in again.                                                              |
+| `credential_store_failed`      | Unlock or repair the operating system credential store.                                                            |
+| `credential_store_unavailable` | No system credential service. Use a non-renewable login, or on a computer only you use, `--credential-store file`. |
+| `credential_store_insecure`    | The token file is a symlink or readable by others; fix or delete it, then log in again.                            |
+| `invalid_credential_store`     | Use `system` or `file`, and only with `--renewable`.                                                               |
+| `invalid_lifetime`             | Use `1h`, `1d`, `7d` or `30d`; anything above `1h` needs `--renewable`.                                            |
+| `grant_expired`                | The approved lifetime ended (exit 3). Log in again.                                                                |
+| `login_denied`                 | The person denied the sign-in (exit 3).                                                                            |
+| `device_code_expired`          | The code ran out or was already used (exit 3). Log in again.                                                       |
+| `device_credential_lost`       | The connection dropped while the approval was delivered (exit 3). Log in again.                                    |
+| `login_pending`                | `login --resume` timed out with nobody approving (exit 3). Run it again.                                           |
+| `no_pending_login`             | `login --resume` with nothing started (exit 2). Start with `--device --no-wait`.                                   |
+| `device_flow_unavailable`      | The server does not offer the link-and-code sign-in (exit 4). Use the browser flow.                                |
+| `login_selection_required`     | Several logins and none is the default (exit 2). Pass `--tenant`.                                                  |
+| `login_not_found`              | No saved login matches `--tenant` (exit 2). See `zynohosting logins`.                                              |
+| `login_ambiguous`              | More than one login has that tenant name (exit 2). Use the tenant id.                                              |
+| `invalid_environment`          | Use `production`, `alpha`, or `dev`.                                                                               |
+| `confirmation_required`        | Use a terminal, `--dry-run`, or reviewed `--yes`.                                                                  |
+| `precondition_failed`          | Refresh the file listing and review the new ETag/content.                                                          |
+| `plan_expired`                 | Create and review a new plan.                                                                                      |
+| `unsafe_local_path`            | Choose an absolute destination inside an allowed MCP root.                                                         |
+| `unsupported_protocol`         | Upgrade the CLI or resolve cluster version skew.                                                                   |
+| `cache_invalidation_failed`    | Treat the mutation as applied and investigate cache invalidation.                                                  |
 
 ## Shell example
 

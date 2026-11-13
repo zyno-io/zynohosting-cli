@@ -30,7 +30,7 @@ There is no TTY in an agent shell, so the CLI never prompts you. `deploy` and `p
 
 ## Sign in
 
-Login opens the user's browser and waits up to 300 seconds for them to finish. Run it as a background or long-running command, with a timeout above 300 seconds. In a remote, containerized, sandboxed, or display-less shell, add `--no-open` and give the user the URL it prints. Without `--no-open`, the URL is printed only if launching the browser fails outright. If the user says nothing opened and no URL appeared, stop the command and rerun it with `--no-open`.
+`login` picks how the user signs in. On a computer with a browser it opens the browser and waits up to 300 seconds. Over SSH, or on a machine with no display (including your own cloud computer), it uses a **link and a short code** that the user opens on any device. `--device` forces the link and code; `--no-device` forces the browser.
 
 Logins are saved per environment; production is the default. For alpha or dev, pass `--environment alpha` on `login` and on every later command. `logout` affects only the selected environment (`--all` for every one).
 
@@ -47,11 +47,56 @@ Request the narrowest complete permission set for the task. `hosting.sitesRead` 
 | Edit forms, their origins, or bot protection | `forms.edit`                                                            |
 | Back up the site                             | `hosting.download` (`hosting.downloadSensitive` for uploads and config) |
 
-```bash
-zynohosting login --name "Claude Code — <project>" --renewable \
-  --permission hosting.sitesRead --permission hosting.deploy
-zynohosting sites list   # confirms the login works
-```
+### Sign in with a link and code (use this unless you are on the user's own computer with a browser)
+
+This works in every agent shell, including ones that show a command's output only when it exits.
+
+1. Start it. It prints JSON and exits at once:
+
+    ```bash
+    zynohosting login --device --no-wait --json --name "<agent> — <project>" --renewable       --permission hosting.sitesRead --permission hosting.deploy
+    ```
+
+    Read `verificationUriComplete` (or `verificationUri`) and `userCode` from the `login_started` line. Never print or ask for anything else from it.
+
+2. Give the user the link and the code exactly as printed. Tell them to open the link on any device, check that the code on the page matches, choose how long the access lasts, tick the confirmation box, and approve. Tell them to approve only a code you just asked for, and never one someone else sent them.
+
+3. Wait for them. Run this as a long-running command with a timeout above 600 seconds:
+
+    ```bash
+    zynohosting login --resume --json
+    ```
+
+    It waits up to 300 seconds. If it exits with `login_pending` (exit 3), the user has not approved yet: run it again. When the `result` line appears, it is done. If the code expired, start again from step 1.
+
+4. Say "Signed in as `<account>` (`<tenant>`)" using `account` and `tenantName` from the `result` line, and ask the user to confirm it is their account and organization. If it is not, run `zynohosting logout` and start again. Then run `zynohosting sites list` to check that it works.
+
+`--lifetime 1h|1d|7d|30d` only suggests how long the access lasts; the user decides on the approval page. Anything above `1h` needs `--renewable`.
+
+On a computer where a browser can open and the user is present, `zynohosting login --name "<agent> — <project>" --renewable --permission hosting.sitesRead` opens the page directly. Run it as a long-running command with a timeout above 300 seconds. If the user says nothing opened, stop it and use the link-and-code steps above.
+
+### Credential storage on your own cloud computer
+
+A renewable login keeps its renewal token in the system credential store. A cloud computer usually has none, and `login` stops with `credential_store_unavailable` before anything is approved. On a computer that only you use, add `--credential-store file` (or set `ZYNOHOSTING_CREDENTIAL_STORE=file`). The token is then kept in a private file next to the saved logins. Never read, print, copy, or upload that file or the saved logins file, and never use the file store on the user's own computer.
+
+### Several logins
+
+A person can belong to several organizations (tenants). The CLI keeps one login for each. Before you change anything, run `zynohosting logins --json`. If there is more than one login, ask the user which organization they mean, then pass `--tenant "<name or id>"` on every command, for example `zynohosting sites list --tenant "Acme Co"`. Do not rely on the default login, and do not run `logins use` unless the user asks to change the default. Signing in again to the same organization replaces its login; signing in to another one adds a login. `zynohosting logout --tenant "<name or id>"` removes one login.
+
+### Sign-in errors
+
+| Code                                                             | What to do                                                                                     |
+| ---------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `login_denied`                                                   | The user denied it. Ask whether to try again.                                                  |
+| `device_code_expired`                                            | The code ran out or was already used. Start again from step 1.                                 |
+| `device_credential_lost`                                         | The connection dropped as it was approved. Start again from step 1.                            |
+| `device_flow_unavailable`                                        | This server does not offer link-and-code sign-in. Use the browser flow on a computer with one. |
+| `login_pending`                                                  | Not approved yet. Run `login --resume --json` again.                                           |
+| `no_pending_login`                                               | Nothing to resume. Start from step 1.                                                          |
+| `grant_expired`                                                  | The approved time ran out. Sign in again and ask the user for a longer time.                   |
+| `credential_store_unavailable`, `credential_store_insecure`      | See the credential storage section above. Never loosen file permissions yourself.              |
+| `invalid_lifetime`                                               | Use 1h, 1d, 7d or 30d, and `--renewable` for anything above 1h.                                |
+| `login_selection_required`, `login_not_found`, `login_ambiguous` | Ask the user which organization, then pass `--tenant`.                                         |
 
 A token cannot gain permissions later. On `login_expired`, a permission error (exit 3), or a need for more scope, run `zynohosting logout` and then `login` with the complete set. `zynohosting login --help` lists every valid permission. Invented keys are rejected.
 

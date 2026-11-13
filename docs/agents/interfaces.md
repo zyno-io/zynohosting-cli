@@ -6,13 +6,13 @@ Agents reach ZynoHosting through one of two interfaces. Use the CLI with the Zyn
 | ---------------------------------------------------- | ----------------------------------------------- | --------------------------------------------------------- |
 | Claude Code (terminal, IDE, desktop Code tab), Codex | **CLI + skill**                                 | Has a shell. Nothing runs or loads until a task needs it. |
 | Muse Code, Cursor, and other local coding agents     | **CLI + skill**                                 | Same as above.                                            |
-| Grok Bot, ChatGPT dots                               | **CLI + skill**, run on the user's computer     | Their cloud computer can't see local files or sign in.    |
+| Grok Bot, ChatGPT dots                               | **CLI + skill**, run on their cloud computer    | Sign-in is a link and code the user approves anywhere.    |
 | Claude desktop app, Chat and Cowork tabs             | **Desktop extension** (`.mcpb`, the MCP server) | No shell, so a CLI is unusable there.                     |
 | CI and scripts                                       | **CLI** with `ZYNOHOSTING_API_KEY`              | No agent involved.                                        |
 
 ## Why the CLI is the default for coding agents
 
-An MCP server is configured per project and starts with every agent session. It spawns `npx` at startup and adds about twenty tool schemas and its instructions to the agent's context, even in sessions that never touch hosting. Adding one also requires restarting the agent and approving the server.
+An MCP server is configured per project and starts with every agent session. It spawns `npx` at startup and adds over twenty tool schemas and its instructions to the agent's context, even in sessions that never touch hosting. Adding one also requires restarting the agent and approving the server.
 
 A skill costs a one-line description until the agent decides it is relevant, then loads its instructions. The CLI runs only when invoked. The agent can install the skill and use it in the same session, so there is no restart.
 
@@ -33,11 +33,12 @@ For Codex and Claude Code, the project-level MCP setup ([`mcp install`](../mcp/a
 
 ## What the CLI does not do that the MCP server does
 
-| MCP behavior                                                                | CLI equivalent                                                                                                                      |
-| --------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `plan_deploy` returns a `planId`; `apply_deploy` applies exactly that plan. | `deploy --dry-run` shows a plan; `deploy --yes` plans again and applies at once. The agent re-runs the dry run if anything changed. |
-| `login` returns the one-time URL as a tool result.                          | `login` opens the browser and blocks for up to 300 seconds. The agent runs it as a long-running command.                            |
-| Local roots (`--root`, `ZYNOHOSTING_MCP_ROOTS`) confine local paths.        | None. The agent's own permission system governs the shell.                                                                          |
+| MCP behavior                                                                | CLI equivalent                                                                                                                                                                                                                                         |
+| --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `plan_deploy` returns a `planId`; `apply_deploy` applies exactly that plan. | `deploy --dry-run` shows a plan; `deploy --yes` plans again and applies at once. The agent re-runs the dry run if anything changed.                                                                                                                    |
+| `login` returns the one-time URL, or a link and code, as a tool result.     | `login` opens the browser and blocks for up to 300 seconds. Where no browser can open it shows a link and code. For shells that show output only when a command exits, the agent runs `login --device --no-wait --json`, then `login --resume --json`. |
+| `list_logins`, `use_login`, and a `tenant` input on every tool.             | `logins`, `logins use`, and `--tenant` (or `ZYNOHOSTING_TENANT`).                                                                                                                                                                                      |
+| Local roots (`--root`, `ZYNOHOSTING_MCP_ROOTS`) confine local paths.        | None. The agent's own permission system governs the shell.                                                                                                                                                                                             |
 
 ## Possible follow-ups
 

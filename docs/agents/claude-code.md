@@ -17,7 +17,7 @@ If Claude Code says Node.js is missing or the wrong version, install **Node.js 2
 ## 2. Sign in
 
 ```text:no-line-numbers
-Sign in to ZynoHosting. Ask only for the permissions this task needs, open the browser sign-in page, and give me the link if my browser does not open. Confirm the sign-in worked before continuing.
+Sign in to ZynoHosting. Ask only for the permissions this task needs. If my browser can't open the sign-in page, give me a link and a code instead and wait while I approve it. Tell me which account and organization you signed in to, and confirm the sign-in worked before continuing.
 ```
 
 A sign-in page opens in your browser. Sign in as usual, read what you are allowing, and approve it.

@@ -22,8 +22,8 @@ ZynoHosting works inside the AI agent you already use. You describe what you wan
   </a>
   <a class="agent-card" href="./always-on.html">
     <strong>Grok Bot or ChatGPT dots</strong>
-    <span>An always-on agent with its own cloud computer, given access to yours.</span>
-    <em>Setup: turn on computer access, paste one message</em>
+    <span>An always-on agent with its own cloud computer. You approve its sign-in from any device.</span>
+    <em>Setup: paste one message</em>
   </a>
   <a class="agent-card" href="./other.html">
     <strong>Another coding agent</strong>
@@ -34,12 +34,12 @@ ZynoHosting works inside the AI agent you already use. You describe what you wan
 
 **Not sure?** If you open the Claude app and type into a chat box, choose **Claude desktop app**. If your agent works inside a project folder and can run commands, choose that agent.
 
-**Not supported:** Claude or ChatGPT in a web browser, and any agent working only on its own cloud computer. They cannot reach the files on your computer, so they cannot publish them.
+**Not supported:** Claude or ChatGPT in a web browser. They cannot run commands, so they cannot publish a site. An agent with its own cloud computer works fine: it builds or downloads the site there, and you approve its sign-in with a link and a code.
 
 ## You need
 
 - **A ZynoHosting account** you can sign in to in a browser.
-- **Your website's files in a folder on your computer**, the same computer your agent runs on.
+- **Your website's files**, in a folder on the same computer your agent runs on. An agent with its own cloud computer can instead build a new site there, or download an existing one first.
 
 ## After setup
 

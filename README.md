@@ -48,9 +48,11 @@ zynohosting login \
   --renewable
 ```
 
-Browser login creates a tenant-bound scoped CLI token. `hosting.sitesRead` is requested when no `--permission` is supplied; repeat the option to request the narrowest complete set for your workflow. Access tokens always expire after 60 minutes. `--renewable` stores the rotating renewal credential in the operating system credential store and lets long-running CLI/MCP processes refresh automatically. While MCP remains alive, it renews in the background even when no tools are being called; each request also checks freshness as a backstop. The renewal secret is never written to the JSON config file.
+Where no browser can open (SSH, a cloud computer, no display), `login` shows a link and a short code instead, which the person opens and approves on any device (`--device` forces it). Agents that only show output when a command exits use `zynohosting login --device --no-wait --json`, then `zynohosting login --resume --json`. The person chooses how long the access lasts: 1 hour, 1 day, 7 days or 30 days (`--lifetime` only suggests one). A cloud computer with no system credential store can add `--credential-store file`.
 
-Logins are saved per environment, so signing in to alpha never replaces the production login. Production is the default; pass `--environment alpha` (or set `ZYNOHOSTING_ENVIRONMENT`) to use another saved login. Revoke the selected environment's scoped grant and remove its local credentials with `zynohosting logout`, or every saved login with `zynohosting logout --all`.
+Login creates a tenant-bound scoped CLI token. `hosting.sitesRead` is requested when no `--permission` is supplied; repeat the option to request the narrowest complete set for your workflow. Access tokens always expire after 60 minutes. `--renewable` stores the rotating renewal credential in the operating system credential store and lets long-running CLI/MCP processes refresh automatically. While MCP remains alive, it renews in the background even when no tools are being called; each request also checks freshness as a backstop. The renewal secret is never written to the JSON config file.
+
+Logins are saved per environment, so signing in to alpha never replaces the production login. Production is the default; pass `--environment alpha` (or set `ZYNOHOSTING_ENVIRONMENT`) to use another saved login. Each environment keeps one login per tenant: `zynohosting logins` lists them, `zynohosting logins use <tenant>` changes the default, and `--tenant <name|id>` (or `ZYNOHOSTING_TENANT`) picks one for a single command. Revoke the active login and remove its local credentials with `zynohosting logout`, one named login with `--tenant`, or every saved login with `zynohosting logout --all`.
 
 For CI or another non-interactive environment, inject a tenant API key:
 
@@ -243,6 +245,8 @@ On macOS and Linux, multiple `ZYNOHOSTING_MCP_ROOTS` use `:` as the delimiter. W
 The MCP tools are:
 
 - `login`
+- `list_logins`
+- `use_login`
 - `list_sites`
 - `get_site`
 - `list_forms`
@@ -265,7 +269,7 @@ The MCP tools are:
 
 Full deploys and downloads intentionally use separate plan/apply calls. Plans are held only in the local MCP process, contain no exposed bearer token, expire with their short-lived access session, and cannot be applied after the server restarts.
 
-The MCP can start without a saved login. The agent calls `login` to open the ZynoSuite browser sign-in flow and receives the one-time URL in its tool result; after the browser callback, it calls `login` with `action: "status"` to confirm the login. It must never infer a deployment domain from the project or select a similar authorized site; it asks when the project does not state the target domain. If the stated domain is unavailable in the current login context, it must not substitute another one and should offer `login` again to switch contexts.
+The MCP can start without a saved login. The agent calls `login`, which picks the browser flow or the link-and-code flow for the computer it runs on and returns the one-time URL, or the link and code, in its tool result; after the person finishes, it calls `login` with `action: "status"` to confirm the login. Every other tool accepts an optional `tenant` to use one saved login for that call. It must never infer a deployment domain from the project or select a similar authorized site; it asks when the project does not state the target domain. If the stated domain is unavailable in the current login context, it must not substitute another one and should offer `login` again to switch contexts.
 
 ## Permissions
 
@@ -291,7 +295,7 @@ Tenant admins receive the normal administrative defaults. Non-admin credentials 
 
 That table is the complete set. `zynohosting login --help` prints it, and the MCP `login` tool enumerates it in its schema, so an invented key such as `hosting.sitesWrite` is rejected locally—naming the closest valid key—before a browser opens. CLI-token requests cannot include `msp.login`, `msp.impersonate`, `core.changePassword`, or `core.manageFingerprints`. The browser also refuses unknown permissions and permissions the current user does not possess; it never partially grants a request.
 
-Only one MCP browser flow runs at a time. Repeating `login` with the same request returns the same one-time URL (`"reused": true`); requesting different permissions cancels the in-flight flow and issues a new URL rather than handing back the earlier scope. `action: "cancel"` abandons a flow and closes its loopback listener.
+Only one MCP sign-in runs at a time. Repeating `login` with the same request returns the same one-time URL or code (`"reused": true`); requesting different permissions cancels the in-flight sign-in and issues a new one rather than handing back the earlier scope. `action: "cancel"` abandons a sign-in and closes its loopback listener or cancels its code.
 
 ## JSON output
 

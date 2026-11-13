@@ -6,7 +6,7 @@ If you can run shell commands, you use ZynoHosting through its CLI and a skill f
 
 If you cannot run shell commands, skip to "Agents without a shell".
 
-If you have your own cloud computer as well as access to the user's computer (Grok Bot, ChatGPT dots), run every command in this page, and every ZynoHosting command afterward, on the user's computer in their website folder. The cloud computer cannot see their files, and sign-in only completes on the machine whose browser approves it. If you only have the cloud computer, stop and send the user to https://cli.zyno.host/agents/always-on.html to turn on access to their computer.
+If you have your own cloud computer (Grok Bot, ChatGPT dots), work on that computer by default and run every command in this page, and every ZynoHosting command afterward, there. Sign-in uses a link and a code the user approves on any device, so nothing has to happen on the user's own computer. Use the user's computer only when they ask you to work on files that are on it, and then run every command there, in their website folder.
 
 ## Install the skill
 
@@ -31,10 +31,10 @@ If you have your own cloud computer as well as access to the user's computer (Gr
     npx -y @zyno-io/zynohosting --version
     ```
 
-    A failure that mentions the Node version or an unsupported engine means the user needs Node.js 24 from https://nodejs.org/.
+    A failure that mentions the Node version or an unsupported engine means Node.js 24 is missing. On your own cloud computer, install it yourself (for example with `nvm install 24`, or from https://nodejs.org/). On the user's computer, ask them to install it from https://nodejs.org/.
 
 6. Read the skill file you just wrote, and follow it for the rest of this session. You do not need a restart. New sessions load it automatically when ZynoHosting comes up.
-7. Tell the user it is set up. The skill file holds no credentials and is safe to commit. Sign-in happens later, in their browser, the first time a task needs it.
+7. Tell the user it is set up. The skill file holds no credentials and is safe to commit. Sign-in happens later, the first time a task needs it: the skill gives them a link and a short code to approve on any device, and tells you how to wait for it.
 
 ## Agents without a shell
 

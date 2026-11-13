@@ -17,7 +17,7 @@ Agents that run commands in a sandbox, such as Muse Code, may ask to allow netwo
 ## 2. Sign in
 
 ```text:no-line-numbers
-Sign in to ZynoHosting. Ask only for the permissions this task needs, open the browser sign-in page, and give me the link if my browser does not open. Confirm the sign-in worked before continuing.
+Sign in to ZynoHosting. Ask only for the permissions this task needs. If my browser can't open the sign-in page, give me a link and a code instead and wait while I approve it. Tell me which account and organization you signed in to, and confirm the sign-in worked before continuing.
 ```
 
 ## 3. Start working
@@ -28,4 +28,4 @@ If your agent forgets about ZynoHosting in a later conversation, start with: _Re
 
 ## Agents that can't run commands
 
-An agent that only chats, or runs commands only on its own cloud computer, cannot use ZynoHosting. If you have the Claude desktop app, use [its setup](./claude-desktop) instead.
+An agent that only chats and cannot run commands cannot use ZynoHosting. If you have the Claude desktop app, use [its setup](./claude-desktop) instead.

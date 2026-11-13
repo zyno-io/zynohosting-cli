@@ -1,20 +1,31 @@
 # MCP tool reference
 
-All tools return JSON as structured content and as a text content block. Argument names use snake case.
+All tools return JSON as structured content and as a text content block. Argument names use snake case. There are 22 tools.
+
+Every tool except `login`, `list_logins` and `use_login` also accepts an optional `tenant` (a tenant name or id from `list_logins`). It picks which saved login to use for that one call and never changes the default. Omit it to use the default login. The tool schemas show it, so it is not repeated in the tables below.
 
 ## Site discovery
 
 ### `login`
 
-Starts Zyno’s browser login flow from the MCP process and returns its one-time URL in the tool result, then saves the resulting scoped credential for subsequent MCP calls. Use it when no login is saved or when the explicitly requested domain is unavailable in the current login context. After the browser callback completes, call it with `action: "status"` to confirm the login is ready.
+Starts a sign-in from the MCP process, then saves the resulting scoped credential for subsequent MCP calls. Use it when no login is saved, when the explicitly requested domain is unavailable in the current login context, or to add a login for another tenant. It chooses the flow itself:
 
-| Input             | Required | Default             | Meaning                                                           |
-| ----------------- | -------- | ------------------- | ----------------------------------------------------------------- |
-| `action`          | no       | `start`             | `start`, `status` to check completion, or `cancel` to abandon it. |
-| `permissions`     | no       | `hosting.sitesRead` | Explicit permissions to request, from the list below.             |
-| `name`            | no       | host-based CLI name | Name shown on the authorization page.                             |
-| `renewable`       | no       | `false`             | Store a rotating renewal credential in the system key store.      |
-| `timeout_seconds` | no       | `300`               | Time to wait for browser sign-in to complete.                     |
+- **Browser flow:** where a browser can open on the computer running the MCP. The tool result holds a one-time `browserUrl`, and the server also tries to open it.
+- **Device flow (link and code):** over SSH or on a machine with no display. The tool result holds `verificationUri`, `verificationUriComplete` (the link with the code filled in), `userCode` and `expiresAt`. Give the user the link and the code verbatim. They open it on any device, check that the code matches, pick how long the access lasts, tick the confirmation box, and approve. The agent never opens the link or approves it. The device code itself is never returned.
+
+After the person finishes, call it with `action: "status"` until it reports `authenticated`. The status then includes `tenant`, `tenantName`, `account` and `grantExpiresAt`; tell the user which account and organization it is and ask them to confirm.
+
+| Input             | Required | Default                                        | Meaning                                                                                  |
+| ----------------- | -------- | ---------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `action`          | no       | `start`                                        | `start`, `status` to check completion, or `cancel` to abandon it.                        |
+| `permissions`     | no       | `hosting.sitesRead`                            | Explicit permissions to request, from the list below.                                    |
+| `name`            | no       | host-based CLI name                            | Name shown on the authorization page.                                                    |
+| `renewable`       | no       | `false`                                        | Keep a rotating renewal credential, in the system key store.                             |
+| `flow`            | no       | `auto`                                         | `auto`, `browser` or `device`. Set it only to override the choice.                       |
+| `lifetime`        | no       | none                                           | `1h`, `1d`, `7d` or `30d`: a suggestion; the user decides. Above `1h` needs `renewable`. |
+| `timeout_seconds` | no       | 300 (browser); until the code expires (device) | Time to wait for the sign-in to complete (1–600).                                        |
+
+The renewal token can only go in the system store unless the MCP host sets `ZYNOHOSTING_CREDENTIAL_STORE=file` in its environment. The model cannot choose the file store through a tool input.
 
 `permissions` is an enumeration. These are the only valid values; a plausible-looking key such as `hosting.sitesWrite` does not exist, and one invalid entry rejects the whole request rather than granting the remainder:
 
@@ -47,13 +58,23 @@ Request the narrowest complete set for the stated task, always including `hostin
 
 A token’s scope is fixed for its lifetime; a missing permission means logging out and signing in again.
 
-Only one browser flow runs at a time, and the result says which one you received:
+Only one sign-in runs at a time, and the result says which one you received:
 
-- `start` with the same `permissions`, `name`, and `renewable` as the flow already in flight returns that same URL with `"reused": true`.
-- `start` with any different request cancels the in-flight flow—closing its loopback listener and invalidating its URL—and returns a new URL with `"reused": false`. The requested scope is never silently replaced by the earlier one.
-- `cancel` ends the in-flight flow and reports `cancelled`; it reports `not_pending` when nothing is in flight, and the normal authenticated status when the browser completed sign-in first.
+- `start` with the same `permissions`, `name`, `renewable`, `flow` and `lifetime` as the one already in flight returns that same URL or code with `"reused": true`.
+- `start` with any different request cancels the in-flight sign-in—closing its loopback listener or cancelling its code on the server, so the old URL or code stops working—and returns a new one with `"reused": false`. The requested scope is never silently replaced by the earlier one.
+- `cancel` ends the in-flight sign-in and reports `cancelled`; it reports `not_pending` when nothing is in flight, and the normal authenticated status when the person completed sign-in first.
+
+Each tenant has one saved login. Signing in again to the same tenant replaces it; signing in to another tenant adds one and makes it the default.
 
 `status` echoes the pending request’s `permissions` so a long-running flow can be checked against what was asked for. The tool cannot replace an API key or bearer token injected into the MCP process. Change that injected credential and restart the MCP host instead.
+
+### `list_logins`
+
+Lists the saved logins for this environment, one per tenant: `id`, `tenantName`, `account`, `active` (the default), `renewable`, `accessExpiresAt`, `grantExpiresAt`, and `expired`. It takes no input and changes nothing. When there is more than one login, ask the user which organization to work in before acting, then pass its name or id as `tenant`.
+
+### `use_login`
+
+Makes a saved login the default for later calls, without signing in again. Input: `tenant` (required), a tenant name or id. It clears pending deploy, promote and download plans, because the context changes. It fails with `fixed_credential_source` when the MCP process was given an API key or token. To use another login for one call only, pass `tenant` on that tool instead.
 
 ### `list_sites`
 

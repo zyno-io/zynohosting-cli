@@ -4,7 +4,7 @@ The CLI and MCP server support scoped CLI tokens and tenant API keys. Credential
 
 ## Interactive login
 
-Run:
+On a computer with a browser, run:
 
 ```bash
 zynohosting login
@@ -38,8 +38,59 @@ zynohosting login --no-open
 The command prints a one-time URL and waits for the same loopback callback. The default timeout is 300 seconds so password, SSO, and MFA flows have time to finish; change it with `--timeout <seconds>`.
 
 ::: warning
-Scoped access tokens have a fixed 60-minute lifetime. There is no duration or scope-edit operation. Revoke and log in again to change permissions.
+Scoped access tokens last 60 minutes. A login without `--renewable` simply ends after that hour. A renewable login renews itself until the lifetime the approver chose runs out; see [How long a login lasts](#how-long-a-login-lasts). There is no scope-edit operation. Revoke and log in again to change permissions.
 :::
+
+## Device sign-in (link and code)
+
+Where no browser can open, such as over SSH, on a cloud computer, or on a machine with no display, the CLI shows a link and a short code instead. The person opens the link on any device, checks the code, and approves. The credential goes straight from ZynoAuth to the CLI. It never passes through the browser.
+
+```bash
+zynohosting login --device
+```
+
+`login` chooses this by itself when `SSH_CONNECTION`, `SSH_CLIENT` or `SSH_TTY` is set, or on Linux with no `DISPLAY` or `WAYLAND_DISPLAY` (not under WSL). If it cannot start its local listener it falls back to this flow too. `--device` forces it and `--no-device` forces the browser. It never falls back from the code flow to the browser.
+
+The output looks like this:
+
+```text
+To sign in to ZynoHosting, open this link on any device:
+
+    https://zyno.app/cli/device?code=ABCD-EFGH
+
+Or go to https://zyno.app/cli/device and type this code: ABCD-EFGH
+```
+
+On the approval page the person checks that the code matches, picks how long the access lasts, ticks a box confirming they started this sign-in themselves, and approves. The code works for about ten minutes. Ctrl+C, `--timeout`, or an expired code cancels it on the server. Anyone who sends you a link and code is asking you to hand over access to your account, so approve only a code you just started.
+
+The CLI prints `Signed in as <account> (<tenant>)` when it is done. Check it. Someone who tricked you into approving with their own account would show up here.
+
+### Two steps for agents
+
+Some agent shells only show a command's output when it exits. Split the sign-in in two:
+
+```bash
+zynohosting login --device --no-wait --json   # prints the link and code, saves the pending sign-in, exits 0
+zynohosting login --resume --json             # waits up to 300 seconds for the approval
+```
+
+`--resume` exits with `login_pending` (exit 3) if nobody approved in time and keeps the pending sign-in, so it can simply be run again. A pending sign-in is saved in the selected environment's profile and is removed when it completes, is denied, or expires. Starting a new one cancels the old code.
+
+With `--json`, stdout holds one JSON event per line and human text goes to stderr:
+
+```json
+{"type":"login_started","flow":"device","reason":"no_display","verificationUri":"https://zyno.app/cli/device","verificationUriComplete":"https://zyno.app/cli/device?code=ABCD-EFGH","userCode":"ABCD-EFGH","expiresAt":"2026-11-12T18:10:00.000Z","interval":5}
+{"type":"login_pending","resume":"zynohosting login --resume"}
+{"type":"result","status":"authenticated","flow":"device","profile":"production","tenantId":"…","tenantName":"Acme Co","account":"owner@example.com","renewable":true,"credentialStore":"file","accessExpiresAt":"2026-11-12T19:00:00.000Z","grantExpiresAt":"2026-11-19T18:00:00.000Z"}
+```
+
+The device code, the access token and the renewal token are never printed. The browser flow prints a `login_started` event with `"flow":"browser"` and the one-time `url`.
+
+## How long a login lasts
+
+An approver picks the lifetime of a renewable login on the approval page: 1 hour, 1 day, 7 days or 30 days. The maximum is 30 days. `--lifetime 1h|1d|7d|30d` only suggests a choice, and the person can change it. Anything above `1h` needs `--renewable`; any other value is `invalid_lifetime`. A login without `--renewable` always lasts 60 minutes.
+
+Renewal stops at the end of that lifetime. The CLI then reports `grant_expired` (exit 3) and the person has to approve a new sign-in. `zynohosting logins` shows when each login ends.
 
 ## Renewable login
 
@@ -52,24 +103,63 @@ zynohosting login \
   --renewable
 ```
 
-The renewal token is the long-lived secret. The CLI stores it in macOS Keychain, the Linux Secret Service (`secret-tool`), or Windows Credential Locker. Only an opaque UUID reference is written to the JSON config. A running MCP schedules renewal shortly before expiration even while idle, and every authenticated request retains the same freshness check as a backstop. The replacement renewal token is committed to the credential store before the new access token and expiration are atomically written to config. A per-config lock prevents two local CLI processes from consuming the same one-time token. The background timer is unreferenced, so it never keeps the process alive after the MCP host disconnects.
+The renewal token is the long-lived secret. By default the CLI stores it in macOS Keychain, the Linux Secret Service (`secret-tool`), or Windows Credential Locker. Only an opaque UUID reference is written to the JSON config. A running MCP schedules renewal shortly before expiration even while idle, and every authenticated request retains the same freshness check as a backstop. The replacement renewal token is committed to the store before the new access token and expiration are atomically written to config. A lock prevents two local CLI processes from consuming the same one-time token. The background timer is unreferenced, so it never keeps the process alive after the MCP host disconnects.
+
+The CLI checks the credential store before it asks for any approval, so a missing store fails at once with `credential_store_unavailable` instead of leaving an unused grant behind.
 
 If renewal is forbidden because tenant policy changed, the current access token remains usable until its normal expiration. An invalid or already-used renewal token requires a new login. Non-renewable tokens simply report `login_expired` after 60 minutes.
 
+### File-backed renewal storage
+
+A cloud computer or container usually has no system credential service. On a computer that only you or your agent use, opt in to a file:
+
+```bash
+zynohosting login --renewable --credential-store file
+# or: export ZYNOHOSTING_CREDENTIAL_STORE=file
+```
+
+The flag wins over the variable. The flag without `--renewable` is an error; the variable without it is ignored. The token file sits next to the saved configuration, as `hosting-cli-profiles.renewal-tokens.json` for the default path:
+
+```json
+{ "version": 1, "tokens": { "<renewal key>": { "token": "zrt_…", "updatedAt": 1784246400000 } } }
+```
+
+The file is written with mode `0600` in a `0700` directory, replaced atomically under its own lock, and deleted when it empties. The CLI refuses to use it if it is a symbolic link or readable by anyone else (`credential_store_insecure`). The login records `"renewalStore": "file"`, so each login in a profile can use its own store.
+
 ::: danger
-Never copy a renewal token into a dotfile, MCP config, log, shell history, or crash report. It is equivalent to a persistent credential for the approved permissions.
+Never copy a renewal token anywhere yourself: not into MCP config, environment variables, logs, shell history, or crash reports. The only sanctioned on-disk copy is the opt-in file store (`--credential-store file`), which the CLI writes with mode 0600 and rotates on every renewal. Anyone who can read that file (root, VM snapshots or backups, or another process running as you) can act with the approved permissions until the grant expires or you log out.
 :::
+
+## Multiple logins
+
+A person can belong to several organizations (tenants). The CLI keeps **one login per tenant** in each environment, so you can switch without signing in again.
+
+```bash
+zynohosting logins                       # list them: tenant, id, account, which one is used by default, when it ends
+zynohosting logins --json
+zynohosting logins use "Acme Co"         # make one the default (a tenant name or id)
+zynohosting sites list --tenant "Acme Co"   # use one for this command only
+ZYNOHOSTING_TENANT="Acme Co" zynohosting sites list
+zynohosting whoami                       # the login a command uses now
+```
+
+Signing in again to the same tenant replaces its login (the old grant is revoked on a best-effort basis). Signing in to another tenant adds a login and makes it the default.
+
+The login a command uses is chosen in this order: `--tenant`, then `ZYNOHOSTING_TENANT`, then the default login, then the only login. A tenant name matches case-insensitively when it identifies exactly one login, and a tenant ID matches exactly. If there are several logins and none is the default, the command fails with `login_selection_required` and lists them. An unknown name is `login_not_found`, and one that matches several is `login_ambiguous`. `--tenant` never changes the default.
+
+An expired login stays in the list, marked expired, until you log out of it or sign in to that tenant again. Using it fails with `grant_expired`.
 
 ## Logout and revocation
 
 ```bash
-zynohosting logout
-zynohosting logout --all
+zynohosting logout                    # the default login of the selected environment
+zynohosting logout --tenant "Acme Co"  # a different one
+zynohosting logout --all              # every login in every environment
 ```
 
-`logout` affects only the selected environment's saved login, chosen the same way as for any command (see [Saved configuration](#saved-configuration)). `--all` logs out of every saved login, revoking each in turn using that login's own stored URLs. If the selected environment has no login but others do, plain `logout` fails and lists them rather than reporting success. Other logins are never touched otherwise.
+`logout` removes one login: the one `--tenant` or `ZYNOHOSTING_TENANT` names, else the default one, chosen the same way as for any command (see [Saved configuration](#saved-configuration)). Other logins in the profile are kept. `--all` logs out of every saved login in every environment, revoking each in turn using its own stored URLs, and cancels any pending sign-in. If the selected environment has no login but others do, plain `logout` fails and lists them rather than reporting success.
 
-For a saved scoped token, logout calls `POST /identity/scoped-tokens/revoke` with the scoped access token. That revokes only its own grant and clears the server-side renewal token. Local config and credential-store entries are removed only after revocation succeeds or the access/renewal credential is already unusable. Tenant API keys are only removed locally.
+For a saved scoped token, logout calls `POST /identity/scoped-tokens/revoke` with the scoped access token. That revokes only its own grant and clears the server-side renewal token. Local config and credential-store entries are removed only after revocation succeeds or the access/renewal credential is already unusable. Tenant API keys are only removed locally. After a logout, token-file entries that no saved login uses and that are more than an hour old are removed too.
 
 ## Tenant API keys
 
@@ -85,6 +175,8 @@ You may save an API key for local use:
 ```bash
 zynohosting login --api-key 'your-tenant-api-key'
 ```
+
+A saved API key is listed beside the logins of its environment as `API key` (id `api-key`). Select it with `--tenant api-key` or `logins use api-key`; saving one makes it the default.
 
 Do not put API keys in command histories, MCP configuration committed to source control, workflow files, or logs. Prefer your CI secret store and environment injection.
 
@@ -109,7 +201,7 @@ The default path is:
 
 Set `ZYNOHOSTING_CONFIG` to use a different file. On POSIX systems, the CLI creates the directory with mode `0700` and the file with mode `0600`.
 
-The file holds one login per environment, keyed `production`, `alpha`, or `dev`, or `url:<Hosting API URL>` for a custom API URL. Logging in to alpha leaves the production login alone, and there is no "current" environment: a command with no environment or URL selected always uses `production`. The Hosting API URL comes from `--api-url`, then `--environment`, then `ZYNOHOSTING_API_URL`, then `ZYNOHOSTING_ENVIRONMENT`, and the saved login is the one for that URL (an `--api-url` equal to alpha's URL uses the `alpha` login). If the selected environment has no login but others do, the command fails with `missing_config` and names them, for example `Not signed in to production. Saved logins: alpha. Pass --environment alpha, or run `zynohosting login`.` Files saved by earlier versions are read as one login and converted the next time they are saved; see the [configuration reference](../reference/configuration#saved-configuration-schema).
+The file holds one profile per environment, keyed `production`, `alpha`, or `dev`, or `url:<Hosting API URL>` for a custom API URL. Each profile holds one login per tenant (see [Multiple logins](#multiple-logins)). Logging in to alpha leaves the production logins alone, and there is no "current" environment: a command with no environment or URL selected always uses `production`. The Hosting API URL comes from `--api-url`, then `--environment`, then `ZYNOHOSTING_API_URL`, then `ZYNOHOSTING_ENVIRONMENT`, and the saved profile is the one for that URL (an `--api-url` equal to alpha's URL uses the `alpha` login). If the selected environment has no login but others do, the command fails with `missing_config` and names them, for example `Not signed in to production. Saved logins: alpha. Pass --environment alpha, or run `zynohosting login`.` Files saved by earlier versions are read as one login for their tenant and converted the next time they are saved; see the [configuration reference](../reference/configuration#saved-configuration-schema).
 
 ## Environments
 
