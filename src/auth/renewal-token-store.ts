@@ -1,6 +1,8 @@
 import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 
 import { CliError } from '../errors.js';
+import { createFileRenewalTokenStore } from './file-renewal-token-store.js';
 
 const SERVICE = 'io.zyno.zynohosting.cli';
 const MAX_SECRET_BYTES = 16 * 1024;
@@ -10,6 +12,15 @@ export interface RenewalTokenStore {
     get(key: string): Promise<string | undefined>;
     set(key: string, token: string): Promise<void>;
     delete(key: string): Promise<void>;
+    /** Fails with `credential_store_unavailable` when the store cannot work, without writing anything. */
+    probe?(): Promise<void>;
+}
+
+export type RenewalStoreChoice = 'system' | 'file';
+
+/** The store a login uses: the operating system's, or the opt-in file next to the profiles file. */
+export function createRenewalTokenStore(kind: RenewalStoreChoice, configPath: string): RenewalTokenStore {
+    return kind === 'file' ? createFileRenewalTokenStore(configPath) : createSystemRenewalTokenStore();
 }
 
 export function createSystemRenewalTokenStore(platform: NodeJS.Platform = process.platform): RenewalTokenStore {
@@ -21,15 +32,15 @@ export function createSystemRenewalTokenStore(platform: NodeJS.Platform = proces
 
 function macOsKeychainStore(): RenewalTokenStore {
     const get = async (key: string): Promise<string | undefined> => {
-        validateKey(key);
+        validateRenewalKey(key);
         const result = await run('/usr/bin/security', ['find-generic-password', '-s', SERVICE, '-a', key, '-w'], undefined, [44]);
         return result.exitCode === 44 ? undefined : requireSecret(result.stdout);
     };
     return {
         get,
         async set(key, token) {
-            validateKey(key);
-            validateToken(token);
+            validateRenewalKey(key);
+            validateRenewalToken(token);
             // Interactive mode accepts the command on stdin, keeping the URL-safe token out of argv and process listings.
             await run(
                 '/usr/bin/security',
@@ -40,7 +51,7 @@ function macOsKeychainStore(): RenewalTokenStore {
                 throw new CliError('The system credential store did not save the renewal credential', 3, 'credential_store_failed');
         },
         async delete(key) {
-            validateKey(key);
+            validateRenewalKey(key);
             await run('/usr/bin/security', ['delete-generic-password', '-s', SERVICE, '-a', key], undefined, [44]);
         }
     };
@@ -48,7 +59,7 @@ function macOsKeychainStore(): RenewalTokenStore {
 
 function linuxSecretServiceStore(): RenewalTokenStore {
     const get = async (key: string): Promise<string | undefined> => {
-        validateKey(key);
+        validateRenewalKey(key);
         const result = await run('secret-tool', ['lookup', 'service', SERVICE, 'account', key], undefined, [1]);
         if (result.exitCode === 1) {
             if (result.stderr.trim()) throw credentialStoreFailure(result.stderr);
@@ -58,15 +69,22 @@ function linuxSecretServiceStore(): RenewalTokenStore {
     };
     return {
         get,
+        async probe() {
+            // A lookup for a random key exits 1 with no output when the service works; anything on stderr means it does not.
+            const result = await run('secret-tool', ['lookup', 'service', SERVICE, 'account', randomUUID()], undefined, [1]).catch(error => {
+                throw error instanceof CliError && error.code === 'credential_store_failed' ? unavailable(error.message) : error;
+            });
+            if (result.exitCode === 1 && result.stderr.trim()) throw unavailable('The system credential service is not running');
+        },
         async set(key, token) {
-            validateKey(key);
-            validateToken(token);
+            validateRenewalKey(key);
+            validateRenewalToken(token);
             await run('secret-tool', ['store', '--label=ZynoHosting CLI renewal token', 'service', SERVICE, 'account', key], token);
             if ((await get(key)) !== token)
                 throw new CliError('The system credential store did not save the renewal credential', 3, 'credential_store_failed');
         },
         async delete(key) {
-            validateKey(key);
+            validateRenewalKey(key);
             const result = await run('secret-tool', ['clear', 'service', SERVICE, 'account', key], undefined, [1]);
             if (result.exitCode === 1 && result.stderr.trim()) throw credentialStoreFailure(result.stderr);
         }
@@ -112,17 +130,17 @@ if ('${operation}' -eq 'set') {
 
     return {
         async get(key) {
-            validateKey(key);
+            validateRenewalKey(key);
             const result = await invoke('get', key);
             return result.exitCode === 44 ? undefined : requireSecret(result.stdout);
         },
         async set(key, token) {
-            validateKey(key);
-            validateToken(token);
+            validateRenewalKey(key);
+            validateRenewalToken(token);
             await invoke('set', key, token);
         },
         async delete(key) {
-            validateKey(key);
+            validateRenewalKey(key);
             await invoke('delete', key);
         }
     };
@@ -204,17 +222,17 @@ function credentialStoreFailure(detail: string): CliError {
 
 function requireSecret(value: string): string {
     const token = value.trim();
-    validateToken(token);
+    validateRenewalToken(token);
     return token;
 }
 
-function validateKey(value: string): void {
+export function validateRenewalKey(value: string): void {
     if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value)) {
         throw new CliError('The saved renewal credential reference is invalid', 3, 'invalid_renewal_credential');
     }
 }
 
-function validateToken(value: string): void {
+export function validateRenewalToken(value: string): void {
     if (value.length > MAX_SECRET_BYTES || !/^zrt_[A-Za-z0-9_-]+$/.test(value)) {
         throw new CliError('The saved renewal credential is invalid', 3, 'invalid_renewal_credential');
     }
@@ -222,7 +240,7 @@ function validateToken(value: string): void {
 
 function unavailable(reason: string): CliError {
     return new CliError(
-        `${reason}. Use a non-renewable login, or install/configure the operating system credential service.`,
+        `${reason}. Use a non-renewable login, install or start the operating system credential service, or (on a computer only you use) pass --credential-store file to keep the renewal token in a private file instead.`,
         3,
         'credential_store_unavailable'
     );
