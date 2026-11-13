@@ -540,3 +540,78 @@ test('a resume only changes or removes the pending sign-in it is handling', asyn
         await context.auth.close();
     }
 });
+
+test('a credential granting a subset of the requested permissions is accepted and stored, with the denied ones reported', async () => {
+    const context = await setup([approvedPoll({}, { permissionKeys: ['hosting.sitesRead'], deniedPermissionKeys: ['hosting.deploy'] })]);
+    try {
+        const result = await login(
+            { ...context.options, permissionKeys: ['hosting.sitesRead', 'hosting.deploy'], json: true, timeoutSeconds: 20 },
+            context.dependencies
+        );
+        assert(result.status === 'authenticated');
+        assert.deepEqual(result.permissionKeys, ['hosting.sitesRead']);
+        assert.deepEqual(result.deniedPermissionKeys, ['hosting.deploy']);
+        const saved = (await loadStoredConfig(context.file, 'alpha')).logins?.[`unknown:${TENANT_ID}`];
+        assert.deepEqual(saved?.permissionKeys, ['hosting.sitesRead']);
+        assert.deepEqual(saved?.deniedPermissionKeys, ['hosting.deploy']);
+        const done = context.events.at(-1)!;
+        assert.deepEqual(done.permissionKeys, ['hosting.sitesRead']);
+        assert.deepEqual(done.deniedPermissionKeys, ['hosting.deploy']);
+        assert.match(context.output.join(''), /Not granted: hosting\.deploy \(you don't have it in Acme Co\)/);
+    } finally {
+        await context.auth.close();
+    }
+});
+
+test('the denied keys alone are enough: the rest of the requested set is what was granted', async () => {
+    const context = await setup([approvedPoll({}, { deniedPermissionKeys: ['hosting.deploy'] })]);
+    try {
+        const result = await login(
+            { ...context.options, permissionKeys: ['hosting.sitesRead', 'hosting.deploy'], timeoutSeconds: 20 },
+            context.dependencies
+        );
+        assert(result.status === 'authenticated');
+        assert.deepEqual(result.permissionKeys, ['hosting.sitesRead']);
+    } finally {
+        await context.auth.close();
+    }
+});
+
+test('a server that says nothing about permissions granted everything that was requested', async () => {
+    const context = await setup([approvedPoll()]);
+    try {
+        const result = await login(
+            { ...context.options, permissionKeys: ['hosting.sitesRead', 'hosting.deploy'], timeoutSeconds: 20 },
+            context.dependencies
+        );
+        assert(result.status === 'authenticated');
+        assert.deepEqual(result.permissionKeys, ['hosting.sitesRead', 'hosting.deploy']);
+        assert.deepEqual(result.deniedPermissionKeys, []);
+        assert.doesNotMatch(context.output.join(''), /Not granted/);
+    } finally {
+        await context.auth.close();
+    }
+});
+
+test('a credential with permissions that were not requested, or with none at all, is rejected', async () => {
+    for (const granted of [['hosting.sitesRead', 'hosting.download'], [], ['hosting.deploy']]) {
+        const context = await setup([approvedPoll({}, { permissionKeys: granted })]);
+        try {
+            await assert.rejects(
+                login(
+                    {
+                        ...context.options,
+                        permissionKeys: granted.includes('hosting.deploy') ? ['hosting.sitesRead'] : ['hosting.sitesRead', 'hosting.deploy'],
+                        timeoutSeconds: 20
+                    },
+                    context.dependencies
+                ),
+                (error: unknown) => error instanceof CliError && error.code === 'invalid_auth_response',
+                JSON.stringify(granted)
+            );
+            assert.deepEqual(await loadStoredConfig(context.file, 'alpha'), {});
+        } finally {
+            await context.auth.close();
+        }
+    }
+});

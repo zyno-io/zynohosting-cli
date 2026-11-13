@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { resolvePermissionGrant } from '../auth/permission-grant.js';
 import { CliError, HttpError } from '../errors.js';
 import { requestJson } from './http.js';
 
@@ -77,6 +78,10 @@ export interface DeviceCredential {
     accountId?: string | undefined;
     tenantName?: string | undefined;
     accountEmail?: string | undefined;
+    /** The permissions the approver granted. */
+    permissionKeys: string[];
+    /** Requested but not granted. */
+    deniedPermissionKeys: string[];
 }
 
 export interface DeviceStartRequest {
@@ -152,6 +157,7 @@ const deviceCredentialSchema = z.object({
         .max(16 * 1024)
         .optional(),
     permissionKeys: z.array(z.string()).optional(),
+    deniedPermissionKeys: z.array(z.string()).optional(),
     ...identityFields()
 });
 
@@ -164,11 +170,6 @@ const devicePollSchema = z.object({
         .optional()
         .catch(undefined)
 });
-
-function sameSet(a: readonly string[], b: readonly string[]): boolean {
-    const left = new Set(a);
-    return left.size === new Set(b).size && b.every(item => left.has(item));
-}
 
 function invalidDevice(error: z.ZodError): CliError {
     // Issue paths only: a response value (a device code, a token) must never reach a message.
@@ -244,7 +245,7 @@ export class ScopedTokenClient {
 
     /**
      * Asks whether the person approved. The credential is returned exactly once. When `renewable` is stated, a renewal
-     * token must be present exactly then, and `permissionKeys` (if the server echoes them) must match what was requested.
+     * token must be present exactly then, and the granted `permissionKeys` must be a non-empty subset of what was requested.
      */
     async pollDevice(deviceCode: string, expectation: { renewable: boolean; permissionKeys: string[] }): Promise<DevicePoll> {
         const value = await requestJson(`${this.apiUrl}/identity/scoped-tokens/device/poll`, {
@@ -261,17 +262,19 @@ export class ScopedTokenClient {
             if (Boolean(credential.renewalToken) !== expectation.renewable) {
                 throw new CliError('ZynoAuth returned a credential that does not match the sign-in request (renewal)', 5, 'invalid_auth_response');
             }
-            if (credential.permissionKeys && !sameSet(credential.permissionKeys, expectation.permissionKeys)) {
+            // The approver may grant only some of what was asked for, never more and never nothing.
+            const grant = resolvePermissionGrant(expectation.permissionKeys, credential.permissionKeys, credential.deniedPermissionKeys);
+            if (!grant) {
                 throw new CliError(
                     'ZynoAuth returned a credential that does not match the sign-in request (permissions)',
                     5,
                     'invalid_auth_response'
                 );
             }
-            const { permissionKeys: _permissionKeys, ...issued } = credential;
+            const { permissionKeys: _granted, deniedPermissionKeys: _denied, ...rest } = credential;
             return {
                 status,
-                credential: issued,
+                credential: { ...rest, permissionKeys: grant.granted, deniedPermissionKeys: grant.denied },
                 ...(approvedBy ? { approvedBy: { email: approvedBy.email ?? undefined, tenantName: approvedBy.tenantName } } : {})
             };
         }

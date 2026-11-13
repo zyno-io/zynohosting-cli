@@ -1,6 +1,9 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { createServer, IncomingMessage, Server, ServerResponse } from 'node:http';
 
+import type { PermissionGrant } from '../auth/permission-grant.js';
+
+import { resolvePermissionGrant } from '../auth/permission-grant.js';
 import { CliError } from '../errors.js';
 import { renderCallbackPage } from './callback-page.js';
 
@@ -24,6 +27,9 @@ export interface UserCredential {
     accountEmail?: string;
     /** Epoch milliseconds; the end of the lifetime the approver chose. */
     grantExpiresAt?: number;
+    /** Granted permissions and the requested ones that were not; absent from an older portal, meaning all were granted. */
+    permissionKeys?: string[];
+    deniedPermissionKeys?: string[];
 }
 
 export interface LoopbackLogin {
@@ -36,6 +42,8 @@ export interface LoopbackLogin {
 export async function startLoopbackLogin(options: {
     timeoutMs: number;
     renewable?: boolean;
+    /** What the sign-in asked for, so a granted subset can be checked. */
+    requestedPermissions?: string[];
     onCredential?: (credential: UserCredential) => Promise<void>;
 }): Promise<LoopbackLogin> {
     const state = randomBytes(32).toString('base64url');
@@ -53,7 +61,7 @@ export async function startLoopbackLogin(options: {
     void result.catch(() => {});
 
     const server = createServer((request, response) => {
-        void handleCallback(request, response, state, options.renewable ?? false, options.onCredential, () => {
+        void handleCallback(request, response, state, options.renewable ?? false, options.requestedPermissions, options.onCredential, () => {
             if (processing || settled) return false;
             processing = true;
             if (timer) clearTimeout(timer);
@@ -109,6 +117,7 @@ async function handleCallback(
     response: ServerResponse,
     expectedState: string,
     renewable: boolean,
+    requestedPermissions: string[] | undefined,
     onCredential: ((credential: UserCredential) => Promise<void>) | undefined,
     acceptCallback: () => boolean
 ): Promise<UserCredential | Error | undefined> {
@@ -168,8 +177,24 @@ async function handleCallback(
     }
     if (renewalToken !== undefined && !isRenewalToken(renewalToken)) return rejectRequest(response, 400, 'Invalid renewal credential');
     // Optional fields from newer portals: each may appear at most once and must be well formed.
-    for (const key of ['accountId', 'tenantName', 'accountEmail', 'grantExpiresAt']) {
+    for (const key of ['accountId', 'tenantName', 'accountEmail', 'grantExpiresAt', 'permissionKeys', 'deniedPermissionKeys']) {
         if (form.getAll(key).length > 1) return rejectRequest(response, 400, 'Invalid login response');
+    }
+    const keyList = (name: string): string[] | undefined => {
+        const value = form.get(name);
+        return value === null
+            ? undefined
+            : value
+                  .split(',')
+                  .map(key => key.trim())
+                  .filter(Boolean);
+    };
+    const grantedField = keyList('permissionKeys');
+    const deniedField = keyList('deniedPermissionKeys');
+    let grant: PermissionGrant | undefined;
+    if (requestedPermissions && (grantedField || deniedField)) {
+        grant = resolvePermissionGrant(requestedPermissions, grantedField, deniedField);
+        if (!grant) return rejectRequest(response, 400, 'Invalid granted permissions');
     }
     const accountId = form.get('accountId') ?? undefined;
     const tenantName = form.get('tenantName') ?? undefined;
@@ -193,6 +218,7 @@ async function handleCallback(
         expiresAt,
         ...(renewalToken === undefined ? {} : { renewalToken }),
         ...(accountId === undefined ? {} : { accountId }),
+        ...(grant ? { permissionKeys: grant.granted, deniedPermissionKeys: grant.denied } : {}),
         ...(tenantName === undefined ? {} : { tenantName }),
         ...(accountEmail === undefined ? {} : { accountEmail }),
         ...(grantExpiresAt === undefined ? {} : { grantExpiresAt })

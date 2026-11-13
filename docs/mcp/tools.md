@@ -13,7 +13,7 @@ Starts a sign-in from the MCP process, then saves the resulting scoped credentia
 - **Browser flow:** where a browser can open on the computer running the MCP. The tool result holds a one-time `browserUrl`, and the server also tries to open it.
 - **Device flow (link and code):** over SSH or on a machine with no display. The tool result holds `verificationUri`, `verificationUriComplete` (the link with the code filled in), `userCode` and `expiresAt`. Give the user the link and the code verbatim. They open it on any device, check that the code matches, pick how long the access lasts, tick the confirmation box, and approve. The agent never opens the link or approves it. The device code itself is never returned.
 
-After the person finishes, call it with `action: "status"` until it reports `authenticated`. The status then includes `tenant`, `tenantName`, `account` and `grantExpiresAt`; tell the user which account and organization it is and ask them to confirm.
+After the person finishes, call it with `action: "status"` until it reports `authenticated`. The status then includes `tenant`, `tenantName`, `account`, `grantExpiresAt`, `permissionKeys` (what the approver granted) and `deniedPermissionKeys` (requested but not granted, because the approver does not hold them in that tenant). If any were not granted, tell the user exactly which and what that means, and do not request them again unless asked; tell the user which account and organization it is and ask them to confirm.
 
 | Input             | Required | Default                                        | Meaning                                                                                  |
 | ----------------- | -------- | ---------------------------------------------- | ---------------------------------------------------------------------------------------- |
@@ -70,7 +70,7 @@ Each tenant has one saved login. Signing in again to the same tenant replaces it
 
 ### `list_logins`
 
-Lists the saved logins for this environment, one per account and tenant: `loginId`, `accountId`, `accountEmail`, `tenantId`, `tenantName`, `active` (the default), `renewable`, `accessExpiresAt`, `grantExpiresAt`, and `expired`. It takes no input and changes nothing. When there is more than one login, ask the user which organization to work in before acting, then pass its name or id as `tenant`.
+Lists the saved logins for this environment, one per account and tenant: `loginId`, `accountId`, `accountEmail`, `tenantId`, `tenantName`, `active` (the default), `renewable`, `permissionKeys`, `deniedPermissionKeys`, `accessExpiresAt`, `grantExpiresAt`, and `expired`. It takes no input and changes nothing. When there is more than one login, ask the user which organization to work in before acting, then pass its name or id as `tenant`.
 
 ### `use_login`
 

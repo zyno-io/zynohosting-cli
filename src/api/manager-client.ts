@@ -1,6 +1,7 @@
 import type { ManagerCredential } from '../config.js';
 
 import { ensureFreshCredential } from '../auth/credential-refresh.js';
+import { rememberDeniedPermissions } from '../auth/denied-permissions.js';
 import { CliError } from '../errors.js';
 import {
     AccessSession,
@@ -131,5 +132,6 @@ export async function authorizationHeaders(credential: ManagerCredential): Promi
     if (credential.type === 'api-key') {
         return { Authorization: `Basic ${Buffer.from(`api:${credential.apiKey}`, 'utf8').toString('base64')}` };
     }
+    rememberDeniedPermissions(credential.accessToken, credential.deniedPermissionKeys);
     return { Authorization: `Bearer ${credential.accessToken}` };
 }

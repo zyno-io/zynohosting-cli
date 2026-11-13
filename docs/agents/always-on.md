@@ -26,6 +26,8 @@ Your agent shows a link and a short code, like `ABCD-EFGH`. Then:
 4. Choose how long this access lasts: 1 hour, 1 day, 7 days, or 30 days.
 5. Tick the box that confirms you started this sign-in yourself, then approve.
 
+If you do not hold some of the permissions your agent asked for in that organization, you can approve only the ones you have. Your agent tells you which were left out, and anything that needs them will not work until someone who has them signs in.
+
 Your agent finishes by itself. It then tells you which account and organization it signed in to. Check that they are yours.
 
 ::: warning Only approve a code you just asked for

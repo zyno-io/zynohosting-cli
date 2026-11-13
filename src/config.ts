@@ -33,6 +33,8 @@ export interface BearerCredential {
     expiresAt?: number;
     /** The end of the lifetime the approver chose, when known. Renewal stops there. */
     grantExpiresAt?: number;
+    /** Requested at sign-in but not granted, so a permission error can say so. */
+    deniedPermissionKeys?: string[];
 }
 
 export type ManagerCredential = ApiKeyCredential | BearerCredential;
@@ -56,6 +58,8 @@ export interface ResolvedLogin {
     tenantName?: string;
     accountEmail?: string;
     grantExpiresAt?: number;
+    permissionKeys?: string[];
+    deniedPermissionKeys?: string[];
 }
 
 export interface ResolvedConfig {
@@ -441,7 +445,9 @@ async function resolveConfigWithSource(
             tenantId: saved.tenantId,
             ...(saved.tenantName ? { tenantName: saved.tenantName } : {}),
             ...(saved.accountEmail ? { accountEmail: saved.accountEmail } : {}),
-            ...(saved.grantExpiresAt === undefined ? {} : { grantExpiresAt: saved.grantExpiresAt })
+            ...(saved.grantExpiresAt === undefined ? {} : { grantExpiresAt: saved.grantExpiresAt }),
+            ...(saved.permissionKeys ? { permissionKeys: saved.permissionKeys } : {}),
+            ...(saved.deniedPermissionKeys ? { deniedPermissionKeys: saved.deniedPermissionKeys } : {})
         };
         if (saved.renewalKey) {
             if (!authApiUrl) {
@@ -608,7 +614,8 @@ function loginCredential(login: StoredLogin): BearerCredential {
         accessToken: login.accessToken,
         tenantId: login.tenantId,
         ...(login.expiresAt === undefined ? {} : { expiresAt: login.expiresAt }),
-        ...(login.grantExpiresAt === undefined ? {} : { grantExpiresAt: login.grantExpiresAt })
+        ...(login.grantExpiresAt === undefined ? {} : { grantExpiresAt: login.grantExpiresAt }),
+        ...(login.deniedPermissionKeys ? { deniedPermissionKeys: login.deniedPermissionKeys } : {})
     };
 }
 

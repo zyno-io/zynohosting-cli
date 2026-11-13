@@ -660,3 +660,60 @@ class MemoryRenewalTokenStore implements RenewalTokenStore {
         this.values.delete(key);
     }
 }
+
+test('loopback accepts a granted subset, assumes everything for an older portal, and rejects strangers or an empty grant', async () => {
+    const requested = ['hosting.sitesRead', 'hosting.deploy'];
+    const attempt = async (fields: Record<string, string>) => {
+        const loopback = await startLoopbackLogin({ timeoutMs: 5_000, requestedPermissions: requested });
+        try {
+            const response = await fetch(loopback.callbackUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: new URLSearchParams({ jwt: JWT, tenantId: TENANT_ID, expiresAt: String(Date.now() + 60_000), state: loopback.state, ...fields })
+            });
+            return { status: response.status, credential: response.status === 200 ? await loopback.result : undefined };
+        } finally {
+            await loopback.close();
+        }
+    };
+    const subset = await attempt({ permissionKeys: 'hosting.sitesRead', deniedPermissionKeys: 'hosting.deploy' });
+    assert.equal(subset.status, 200);
+    assert.deepEqual(subset.credential?.permissionKeys, ['hosting.sitesRead']);
+    assert.deepEqual(subset.credential?.deniedPermissionKeys, ['hosting.deploy']);
+    const older = await attempt({});
+    assert.equal(older.status, 200);
+    assert.equal(older.credential?.permissionKeys, undefined);
+    assert.equal((await attempt({ permissionKeys: 'hosting.sitesRead,hosting.download' })).status, 400);
+    assert.equal((await attempt({ permissionKeys: '' })).status, 400);
+    assert.equal((await attempt({ permissionKeys: 'hosting.sitesRead', deniedPermissionKeys: 'hosting.download' })).status, 400);
+});
+
+test('a forbidden response names the permissions the login was not granted, without guessing which one the action needed', async () => {
+    const { createServer } = await import('node:http');
+    const { requestJson } = await import('../src/api/http.js');
+    const { authorizationHeaders } = await import('../src/api/manager-client.js');
+    const server = createServer((_request, response) => {
+        response.statusCode = 403;
+        response.setHeader('Content-Type', 'application/json');
+        response.end(JSON.stringify({ message: 'Forbidden' }));
+    });
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    assert(address && typeof address === 'object');
+    try {
+        const url = `http://127.0.0.1:${address.port}/x`;
+        const limited = await authorizationHeaders({
+            type: 'bearer',
+            accessToken: 'limited.jwt.signature',
+            deniedPermissionKeys: ['hosting.deploy']
+        });
+        await assert.rejects(
+            requestJson(url, { headers: limited }),
+            /Forbidden This login was not granted hosting\.deploy when it was approved.*sign in again as someone who has it/
+        );
+        const full = await authorizationHeaders({ type: 'bearer', accessToken: 'full.jwt.signature' });
+        await assert.rejects(requestJson(url, { headers: full }), (error: unknown) => error instanceof Error && error.message === 'Forbidden');
+    } finally {
+        await new Promise<void>(resolve => server.close(() => resolve()));
+    }
+});

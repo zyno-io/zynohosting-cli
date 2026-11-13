@@ -861,3 +861,27 @@ test('logins saved by tenant id migrate to account:tenant keys using the token s
     assert.deepEqual(Object.keys(raw.profiles.alpha.logins).sort(), [`${ALICE}:${ACME}`, `unknown:${GLOBEX}`].sort());
     assert.equal(raw.profiles.alpha.activeLogin, `unknown:${GLOBEX}`);
 });
+
+test('logins lists what each login was granted and what it was not', async () => {
+    const { file, env } = await setup();
+    await updateProfile(
+        'alpha',
+        {
+            apiUrl: API_URL,
+            logins: {
+                [ACME]: savedLogin(ACME, 'Acme Co', { permissionKeys: ['hosting.sitesRead'], deniedPermissionKeys: ['hosting.deploy'] }),
+                [GLOBEX]: savedLogin(GLOBEX, 'Globex')
+            },
+            activeLogin: ACME
+        },
+        file
+    );
+    const output: string[] = [];
+    const listed = await listLogins({ environment: 'alpha', json: true }, { env, write: message => output.push(message) });
+    assert.deepEqual(listed[0]!.permissionKeys, ['hosting.sitesRead']);
+    assert.deepEqual(listed[0]!.deniedPermissionKeys, ['hosting.deploy']);
+    assert.equal(listed[1]!.permissionKeys, undefined);
+    const table: string[] = [];
+    await listLogins({ environment: 'alpha' }, { env, write: message => table.push(message) });
+    assert.match(table.join(''), /1 \(1 not granted\)/);
+});

@@ -71,6 +71,8 @@ This works in every agent shell, including ones that show a command's output onl
 
 4. Say "Signed in as `<account>` (`<tenant>`)" using `account` and `tenantName` from the `result` line, and ask the user to confirm it is their account and organization. If it is not, run `zynohosting logout` and start again. Then run `zynohosting sites list` to check that it works.
 
+After sign-in, check `permissionKeys` and `deniedPermissionKeys` in the `result` line (or the printed "Not granted" text). If any were not granted, tell the user exactly which ones and what that means: the approver does not hold them in that organization, so anything that needs them will fail with a 403. Do not request them again unless the user asks you to. If they do, someone who holds those permissions has to approve the new sign-in.
+
 `--lifetime 1h|1d|7d|30d` only suggests how long the access lasts; the user decides on the approval page. Anything above `1h` needs `--renewable`.
 
 On a computer where a browser can open and the user is present, `zynohosting login --name "<agent> — <project>" --renewable --permission hosting.sitesRead` opens the page directly. Run it as a long-running command with a timeout above 300 seconds. If the user says nothing opened, stop it and use the link-and-code steps above.

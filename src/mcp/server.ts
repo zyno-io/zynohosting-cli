@@ -763,6 +763,8 @@ class McpAuthentication {
                 ...(done.tenantName ? { tenantName: done.tenantName } : {}),
                 ...(done.account ? { account: done.account } : {}),
                 ...(done.grantExpiresAt === undefined ? {} : { grantExpiresAt: new Date(done.grantExpiresAt).toISOString() }),
+                permissionKeys: done.permissionKeys,
+                deniedPermissionKeys: done.deniedPermissionKeys,
                 message:
                     'ZynoHosting login is ready. Tell the user which account and tenant this signed in to so they can confirm it is theirs. Any pending deployment or download plans were cleared because the login context changed.'
             };
@@ -899,6 +901,8 @@ function authenticatedLoginStatus(config: ResolvedConfig): Record<string, unknow
             : {}),
         ...(login?.accountEmail ? { account: login.accountEmail } : {}),
         ...(login?.grantExpiresAt === undefined ? {} : { grantExpiresAt: new Date(login.grantExpiresAt).toISOString() }),
+        ...(login?.permissionKeys ? { permissionKeys: login.permissionKeys } : {}),
+        ...(login?.deniedPermissionKeys ? { deniedPermissionKeys: login.deniedPermissionKeys } : {}),
         message:
             'ZynoHosting login is ready. Tell the user which account and tenant this is signed in to so they can confirm it is theirs. Any pending deployment or download plans were cleared because the login context changed.'
     };

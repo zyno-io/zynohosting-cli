@@ -86,6 +86,18 @@ With `--json`, stdout holds one JSON event per line and human text goes to stder
 
 The device code, the access token and the renewal token are never printed. The browser flow prints a `login_started` event with `"flow":"browser"` and the one-time `url`.
 
+## Partial approval
+
+The approver can grant only some of the permissions a login asked for: the ones they hold in that tenant. The login then carries the granted subset, never more, and never none. The CLI prints what was left out:
+
+```text
+Signed in as owner@example.com (Acme Co). Not granted: hosting.deploy (you don't have it in Acme Co).
+```
+
+The `result` event of `login --json` lists `permissionKeys` (granted) and `deniedPermissionKeys`, `zynohosting logins --json` lists both for every login, and the MCP `login` status does the same. A login saved before this existed lists no permissions. An older portal or server says nothing about permissions, which means everything requested was granted.
+
+If a later request fails with a 403 and the login was not granted something, the error adds which permissions were left out and suggests signing in again as someone who has them. The CLI does not know which permission a given command needs, so it lists what was left out and does not say which one is missing.
+
 ## How long a login lasts
 
 An approver picks the lifetime of a renewable login on the approval page: 1 hour, 1 day, 7 days or 30 days. The maximum is 30 days. `--lifetime 1h|1d|7d|30d` only suggests a choice, and the person can change it. Anything above `1h` needs `--renewable`; any other value is `invalid_lifetime`. A login without `--renewable` always lasts 60 minutes.

@@ -13,6 +13,7 @@ import {
     type StoredLogin,
     UNKNOWN_ACCOUNT
 } from '../auth/logins.js';
+import { resolvePermissionGrant } from '../auth/permission-grant.js';
 import { createRenewalTokenStore, type RenewalTokenStore } from '../auth/renewal-token-store.js';
 import {
     configLocation,
@@ -106,6 +107,8 @@ export type LoginResult =
           tenantName?: string;
           account?: string;
           renewable: boolean;
+          permissionKeys: string[];
+          deniedPermissionKeys: string[];
           credentialStore?: 'system' | 'file';
           accessExpiresAt: number;
           grantExpiresAt?: number;
@@ -134,6 +137,9 @@ interface IssuedCredential {
     tenantName?: string | undefined;
     accountEmail?: string | undefined;
     grantExpiresAt?: number | undefined;
+    /** Granted and denied permissions, when the approver said; absent means everything requested was granted. */
+    permissionKeys?: string[] | undefined;
+    deniedPermissionKeys?: string[] | undefined;
 }
 
 export async function login(options: LoginOptions, dependencies: LoginDependencies = {}): Promise<LoginResult> {
@@ -229,6 +235,10 @@ export async function login(options: LoginOptions, dependencies: LoginDependenci
         // The account comes from the server's credential, else from the token's `sub` (the account id for a scoped token).
         const accountId = credential.accountId ?? jwtSubject(credential.accessToken);
         const loginId = loginIdFor(accountId ?? UNKNOWN_ACCOUNT, credential.tenantId);
+        // An approver may grant only some of what was asked for; an older portal says nothing, meaning all of it.
+        const grant = resolvePermissionGrant(permissionKeys, credential.permissionKeys, credential.deniedPermissionKeys);
+        if (!grant)
+            throw new CliError('The sign-in granted none of the requested permissions, or ones that were not requested.', 5, 'invalid_auth_response');
         const login: StoredLogin = {
             ...(accountId ? { accountId } : {}),
             tenantId: credential.tenantId,
@@ -239,7 +249,8 @@ export async function login(options: LoginOptions, dependencies: LoginDependenci
             expiresAt: credential.expiresAt,
             ...(renewalKey ? { renewalKey, ...(storeKind === 'file' ? { renewalStore: 'file' as const } : {}) } : {}),
             scopedToken: true,
-            permissionKeys,
+            permissionKeys: grant.granted,
+            ...(grant.denied.length ? { deniedPermissionKeys: grant.denied } : {}),
             createdAt: Date.now()
         };
         let previous: StoredLogin | undefined;
@@ -308,16 +319,21 @@ export async function login(options: LoginOptions, dependencies: LoginDependenci
             ...(login.tenantName ? { tenantName: login.tenantName } : {}),
             ...(login.accountEmail ? { account: login.accountEmail } : {}),
             renewable: Boolean(login.renewalKey),
+            permissionKeys: login.permissionKeys ?? permissionKeys,
+            deniedPermissionKeys: login.deniedPermissionKeys ?? [],
             ...(login.renewalKey ? { credentialStore: login.renewalStore ?? ('system' as const) } : {}),
             accessExpiresAt: login.expiresAt!,
             ...(login.grantExpiresAt === undefined ? {} : { grantExpiresAt: login.grantExpiresAt })
         };
         const who = login.accountEmail ? `${login.accountEmail} (${login.tenantName ?? login.tenantId})` : (login.tenantName ?? login.tenantId);
         const until = login.grantExpiresAt === undefined ? '' : `, renews until ${new Date(login.grantExpiresAt).toISOString().slice(0, 10)}`;
+        const notGranted = result.deniedPermissionKeys.length
+            ? ` Not granted: ${result.deniedPermissionKeys.join(', ')} (you don't have ${result.deniedPermissionKeys.length > 1 ? 'them' : 'it'} in ${login.tenantName ?? login.tenantId}).`
+            : '';
         write(
             login.renewalKey
-                ? `ZynoHosting renewable login complete. Signed in as ${who}${until}. The renewal credential was saved in ${login.renewalStore === 'file' ? 'a private file next to your saved logins' : 'your system credential store'}.\n`
-                : `ZynoHosting login complete. Signed in as ${who}.\n`
+                ? `ZynoHosting renewable login complete. Signed in as ${who}${until}. The renewal credential was saved in ${login.renewalStore === 'file' ? 'a private file next to your saved logins' : 'your system credential store'}.${notGranted}\n`
+                : `ZynoHosting login complete. Signed in as ${who}.${notGranted}\n`
         );
         emit({
             type: 'result',
@@ -330,6 +346,8 @@ export async function login(options: LoginOptions, dependencies: LoginDependenci
             ...(result.tenantName ? { tenantName: result.tenantName } : {}),
             ...(result.account ? { account: result.account } : {}),
             renewable: result.renewable,
+            permissionKeys: result.permissionKeys,
+            deniedPermissionKeys: result.deniedPermissionKeys,
             ...(result.credentialStore ? { credentialStore: result.credentialStore } : {}),
             accessExpiresAt: new Date(result.accessExpiresAt).toISOString(),
             ...(result.grantExpiresAt === undefined ? {} : { grantExpiresAt: new Date(result.grantExpiresAt).toISOString() })
@@ -435,6 +453,7 @@ export async function login(options: LoginOptions, dependencies: LoginDependenci
                 loopback = await startLoopbackLogin({
                     timeoutMs: Math.max(1, options.timeoutSeconds ?? DEFAULT_WAIT_SECONDS) * 1000,
                     renewable,
+                    requestedPermissions: permissionKeys,
                     onCredential: async credential => {
                         saved = await persist(toIssued(credential));
                     }
@@ -590,7 +609,9 @@ function toIssued(credential: UserCredential | DeviceCredential): IssuedCredenti
         renewalToken: credential.renewalToken,
         tenantName: credential.tenantName,
         accountEmail: credential.accountEmail,
-        grantExpiresAt: credential.grantExpiresAt
+        grantExpiresAt: credential.grantExpiresAt,
+        permissionKeys: credential.permissionKeys,
+        deniedPermissionKeys: credential.deniedPermissionKeys
     };
 }
 

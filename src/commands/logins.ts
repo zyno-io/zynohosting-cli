@@ -37,6 +37,10 @@ export interface LoginSummary {
     /** The login a command uses when no tenant is named. */
     active: boolean;
     renewable: boolean;
+    /** What the login may do; absent when it was saved before permissions were recorded. */
+    permissionKeys?: string[];
+    /** Requested at sign-in but not granted. */
+    deniedPermissionKeys?: string[];
     credentialStore?: 'system' | 'file';
     accessExpiresAt?: string;
     grantExpiresAt?: string;
@@ -59,6 +63,8 @@ function summarize(entry: LoginEntry, active: boolean, now: number): LoginSummar
         tenantName: entryName(entry),
         active,
         renewable: Boolean(login.renewalKey),
+        ...(login.permissionKeys ? { permissionKeys: login.permissionKeys } : {}),
+        ...(login.deniedPermissionKeys ? { deniedPermissionKeys: login.deniedPermissionKeys } : {}),
         ...(login.renewalKey ? { credentialStore: login.renewalStore ?? ('system' as const) } : {}),
         ...(login.expiresAt === undefined ? {} : { accessExpiresAt: new Date(login.expiresAt).toISOString() }),
         ...(login.grantExpiresAt === undefined ? {} : { grantExpiresAt: new Date(login.grantExpiresAt).toISOString() }),
@@ -111,10 +117,13 @@ export async function listLogins(options: LoginsOptions = {}, dependencies: Logi
         login.tenantName,
         login.accountEmail ?? login.accountId ?? '',
         login.loginId,
+        login.permissionKeys
+            ? `${login.permissionKeys.length}${login.deniedPermissionKeys?.length ? ` (${login.deniedPermissionKeys.length} not granted)` : ''}`
+            : '',
         login.expired ? 'expired' : (login.accessExpiresAt?.slice(0, 16).replace('T', ' ') ?? ''),
         login.grantExpiresAt?.slice(0, 10) ?? (login.kind === 'login' && login.renewable ? 'no limit recorded' : '')
     ]);
-    const header = ['', 'TENANT', 'ACCOUNT', 'LOGIN ID', 'ACCESS ENDS (UTC)', 'RENEWS UNTIL'];
+    const header = ['', 'TENANT', 'ACCOUNT', 'LOGIN ID', 'PERMISSIONS', 'ACCESS ENDS (UTC)', 'RENEWS UNTIL'];
     const widths = header.map((title, column) => Math.max(title.length, ...rows.map(row => row[column]!.length)));
     const line = (cells: string[]) =>
         cells

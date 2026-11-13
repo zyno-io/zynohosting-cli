@@ -177,6 +177,8 @@ test('the device sign-in through MCP returns the link and code, never the device
         assert.equal(status.tenant, TENANT_ID);
         assert.equal(status.tenantName, 'Acme Co');
         assert.equal(status.account, 'owner@example.com');
+        assert.deepEqual(status.permissionKeys, ['hosting.sitesRead']);
+        assert.deepEqual(status.deniedPermissionKeys, []);
         assert.match(String(status.grantExpiresAt), /^\d{4}-/);
         const sites = await client.callTool({ name: 'list_sites', arguments: {} });
         assert.equal(sites.isError, undefined);
@@ -296,5 +298,30 @@ test('a sign-in that finishes after use_login leaves that choice alone, but its 
     } finally {
         await close();
         await hosting.close();
+    }
+});
+
+test('MCP login status reports the permissions a partial approval did not grant', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'zynohosting-mcp-partial-'));
+    const auth = await startFakeAuth([approvedPoll({}, { permissionKeys: ['hosting.sitesRead'], deniedPermissionKeys: ['hosting.deploy'] })]);
+    const { client, close } = await connect({
+        roots: await AllowedLocalRoots.create([root]),
+        version: '1.0.0',
+        apiUrl: 'http://127.0.0.1:1',
+        authApiUrl: auth.url,
+        env: { ZYNOHOSTING_CONFIG: join(root, 'config.json') }
+    });
+    try {
+        await client.callTool({ name: 'login', arguments: { flow: 'device', permissions: ['hosting.sitesRead', 'hosting.deploy'] } });
+        let status: Record<string, unknown> = {};
+        for (let attempt = 0; attempt < 100 && status.authenticated !== true; attempt++) {
+            status = (await client.callTool({ name: 'login', arguments: { action: 'status' } })).structuredContent as Record<string, unknown>;
+            await new Promise(resolve => setTimeout(resolve, 20));
+        }
+        assert.deepEqual(status.permissionKeys, ['hosting.sitesRead']);
+        assert.deepEqual(status.deniedPermissionKeys, ['hosting.deploy']);
+    } finally {
+        await close();
+        await auth.close();
     }
 });

@@ -42,6 +42,8 @@ export interface StoredLogin {
     renewalStore?: 'file';
     scopedToken?: boolean;
     permissionKeys?: string[];
+    /** Requested at sign-in but not granted by the approver. */
+    deniedPermissionKeys?: string[];
     createdAt?: number;
 }
 
@@ -117,6 +119,7 @@ function parseLogin(value: unknown, fallbackId: string): StoredLogin | undefined
         ...(value.renewalStore === 'file' ? { renewalStore: 'file' as const } : {}),
         ...(value.scopedToken === true ? { scopedToken: true } : {}),
         ...(strings(value.permissionKeys) ? { permissionKeys: strings(value.permissionKeys)! } : {}),
+        ...(strings(value.deniedPermissionKeys)?.length ? { deniedPermissionKeys: strings(value.deniedPermissionKeys)! } : {}),
         ...(number(value.createdAt) !== undefined ? { createdAt: number(value.createdAt)! } : {})
     };
 }
