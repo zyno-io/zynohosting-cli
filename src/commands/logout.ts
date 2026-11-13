@@ -2,8 +2,9 @@ import { stat } from 'node:fs/promises';
 
 import { ScopedTokenClient } from '../api/scoped-token-client.js';
 import { createFileRenewalTokenStore, tokenFilePath } from '../auth/file-renewal-token-store.js';
-import { describeEntry, hasStoredCredential, loginEntries, selectEntry, withoutEntry, type LoginEntry } from '../auth/logins.js';
+import { chooseLogin, describeEntry, hasStoredCredential, loginEntries, selectEntry, withoutEntry, type LoginEntry } from '../auth/logins.js';
 import { createRenewalTokenStore, type RenewalTokenStore } from '../auth/renewal-token-store.js';
+import { retireDisplacedLogins } from '../auth/retire.js';
 import {
     type ConfigTarget,
     configLocation,
@@ -62,12 +63,7 @@ export async function logout(options: LogoutOptions = {}, dependencies: LogoutDe
         }
     } else {
         const selectedKey = selectProfile(options, env).key;
-        const entry = selectEntry(
-            configFile.profiles[selectedKey] ?? {},
-            options.tenant ?? env.ZYNOHOSTING_TENANT,
-            describeProfileKey(selectedKey),
-            options.account ?? env.ZYNOHOSTING_ACCOUNT
-        );
+        const entry = selectEntry(configFile.profiles[selectedKey] ?? {}, chooseLogin(options, env), describeProfileKey(selectedKey));
         if (entry) targets.push({ key: selectedKey, entry });
         else if (Object.values(configFile.profiles).some(hasStoredCredential)) {
             // Other saved logins mean the user probably selected the wrong environment; saying "already logged out" would mislead.
@@ -80,6 +76,14 @@ export async function logout(options: LogoutOptions = {}, dependencies: LogoutDe
         return;
     }
 
+    for (const key of new Set(targets.map(target => target.key))) {
+        await retireDisplacedLogins(key, location, {
+            configPath: typeof location === 'string' ? location : location.path,
+            renewalTokenStore: dependencies.renewalTokenStore,
+            scopedTokenClient: dependencies.scopedTokenClient,
+            write
+        }).catch(() => {});
+    }
     let firstError: unknown;
     for (const { key, entry } of targets) {
         try {

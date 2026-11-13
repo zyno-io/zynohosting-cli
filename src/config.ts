@@ -10,6 +10,7 @@ import {
     type LoginEntry,
     type StoredConfig,
     type StoredLogin,
+    chooseLogin,
     hasStoredCredential,
     normalizeStoredConfig,
     parseStoredConfig,
@@ -393,8 +394,7 @@ async function resolveConfigWithSource(
     const stored = configFile.profiles[forced?.key ?? preselected!.key] ?? {};
     const selection = preselected ?? selectionForKey(forced!.key, stored);
     const apiUrl = selection.apiUrl;
-    const tenantQuery = forced ? forced.loginId : (overrides.tenant ?? env.ZYNOHOSTING_TENANT);
-    const accountQuery = forced ? undefined : (overrides.account ?? env.ZYNOHOSTING_ACCOUNT);
+    const choice = forced ? { tenant: forced.loginId } : chooseLogin({ tenant: overrides.tenant, account: overrides.account }, env);
     if (forced !== undefined) {
         overrides = {};
         env = isolatedEnvironment(env);
@@ -426,7 +426,7 @@ async function resolveConfigWithSource(
         );
     }
     // An injected credential makes the saved logins irrelevant, so a missing or ambiguous choice among them cannot matter.
-    const entry = injected ? undefined : selectEntry(stored, tenantQuery, describeProfileKey(selection.key), accountQuery);
+    const entry = injected ? undefined : selectEntry(stored, choice, describeProfileKey(selection.key));
     if (!injected && !entry) throw missingCredentialError(selection.key, configFile);
 
     let credential: ManagerCredential;

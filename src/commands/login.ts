@@ -15,6 +15,7 @@ import {
 } from '../auth/logins.js';
 import { resolvePermissionGrant } from '../auth/permission-grant.js';
 import { createRenewalTokenStore, type RenewalTokenStore } from '../auth/renewal-token-store.js';
+import { retireDisplacedLogins, retireLogin } from '../auth/retire.js';
 import {
     configLocation,
     describeProfileKey,
@@ -284,39 +285,23 @@ export async function login(options: LoginOptions, dependencies: LoginDependenci
             await removeLegacyConfigIfMatching(file, { logins: { [loginId]: previous } });
             await retire(previous);
         }
+        await retireDisplacedLogins(profileKey, file, {
+            configPath,
+            renewalTokenStore: dependencies.renewalTokenStore,
+            scopedTokenClient: dependencies.scopedTokenClient,
+            write
+        });
         return login;
     };
 
-    /**
-     * A login for the same account and tenant was replaced: revoke its grant (best effort, never blocking the new login), then drop
-     * its renewal token. An expired access token is renewed first, as logout does, because revoking needs a live one.
-     */
-    const retire = async (previous: StoredLogin): Promise<void> => {
-        const store = previous.renewalKey
-            ? (dependencies.renewalTokenStore ?? createRenewalTokenStore(previous.renewalStore ?? 'system', configPath))
-            : undefined;
-        const url = authApiUrl ?? pendingSaved?.authApiUrl;
-        if (previous.scopedToken && previous.accessToken && url) {
-            try {
-                const client = dependencies.scopedTokenClient?.(url) ?? new ScopedTokenClientImpl(url, 5_000);
-                let accessToken = previous.accessToken;
-                if (previous.expiresAt !== undefined && previous.expiresAt <= Date.now()) {
-                    const renewalToken = previous.renewalKey ? await store?.get(previous.renewalKey) : undefined;
-                    accessToken = renewalToken && client.renew ? (await client.renew(renewalToken)).jwt : '';
-                }
-                if (accessToken) await client.revoke(accessToken);
-            } catch {
-                // Best effort: the grant ends at its own expiry if it cannot be revoked now.
-            }
-        }
-        if (previous.renewalKey && store) {
-            try {
-                await store.delete(previous.renewalKey);
-            } catch {
-                write('Warning: the previous renewal credential could not be removed from its credential store.\n');
-            }
-        }
-    };
+    const retire = (previous: StoredLogin): Promise<void> =>
+        retireLogin(previous, {
+            authApiUrl: authApiUrl ?? pendingSaved?.authApiUrl,
+            configPath,
+            renewalTokenStore: dependencies.renewalTokenStore,
+            scopedTokenClient: dependencies.scopedTokenClient,
+            write
+        });
 
     const finish = (login: StoredLogin, flow: LoginFlow): LoginResult => {
         const result: Extract<LoginResult, { status: 'authenticated' }> = {

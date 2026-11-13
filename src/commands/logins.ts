@@ -1,4 +1,7 @@
-import { describeEntry, entryName, findEntry, loginEntries, selectEntry, type LoginEntry, type StoredConfig } from '../auth/logins.js';
+import type { RenewalTokenStore } from '../auth/renewal-token-store.js';
+
+import { chooseLogin, describeEntry, entryName, findEntry, loginEntries, selectEntry, type LoginEntry, type StoredConfig } from '../auth/logins.js';
+import { retireDisplacedLogins, type RetireDependencies } from '../auth/retire.js';
 import {
     configLocation,
     describeProfileKey,
@@ -23,6 +26,8 @@ export interface LoginsDependencies {
     configFile?: string;
     write?: (message: string) => void;
     now?: () => number;
+    renewalTokenStore?: RenewalTokenStore;
+    scopedTokenClient?: RetireDependencies['scopedTokenClient'];
 }
 
 /** One saved credential as listed to people and agents. Times are ISO strings. */
@@ -149,6 +154,11 @@ export async function useLogin(query: string, options: LoginsOptions = {}, depen
         location
     );
     const entry = chosen!;
+    await retireDisplacedLogins(key, location, {
+        configPath: typeof location === 'string' ? location : location.path,
+        renewalTokenStore: dependencies.renewalTokenStore,
+        scopedTokenClient: dependencies.scopedTokenClient
+    });
     const summary = summarize(entry, true, now);
     if (options.json) write(`${JSON.stringify({ profile: label, active: summary })}\n`);
     else
@@ -165,12 +175,7 @@ export async function whoami(
     if (options.all) return listLogins(options, dependencies);
     const { env, location, key, write, now } = context(options, dependencies);
     const file = await loadConfigFile(location);
-    const entry = selectEntry(
-        file.profiles[key] ?? {},
-        options.tenant ?? env.ZYNOHOSTING_TENANT,
-        describeProfileKey(key),
-        options.account ?? env.ZYNOHOSTING_ACCOUNT
-    );
+    const entry = selectEntry(file.profiles[key] ?? {}, chooseLogin(options, env), describeProfileKey(key));
     if (!entry) throw missingCredentialError(key, file);
     const summary = summarize(entry, true, now);
     if (options.json) write(`${JSON.stringify({ profile: describeProfileKey(key), login: summary })}\n`);

@@ -721,7 +721,7 @@ test('two accounts in one tenant coexist; a tenant that matches both is login_am
     // A full login id needs no account, and ZYNOHOSTING_ACCOUNT narrows like the flag.
     assert.equal((await resolveConfig({ environment: 'alpha', tenant: `${BOB}:${ACME}` }, env)).login?.accountId, BOB);
     assert.equal(
-        token(await resolveConfig({ environment: 'alpha', tenant: 'Acme Co' }, { ...env, ZYNOHOSTING_ACCOUNT: 'alice@example.com' })),
+        token(await resolveConfig({ environment: 'alpha' }, { ...env, ZYNOHOSTING_TENANT: 'Acme Co', ZYNOHOSTING_ACCOUNT: 'alice@example.com' })),
         jwtFor(ALICE)
     );
     await assert.rejects(
@@ -884,4 +884,114 @@ test('logins lists what each login was granted and what it was not', async () =>
     const table: string[] = [];
     await listLogins({ environment: 'alpha' }, { env, write: message => table.push(message) });
     assert.match(table.join(''), /1 \(1 not granted\)/);
+});
+
+test('tenant and account come from the same source: flag pair, else an --account flag alone, else the environment pair', async () => {
+    const { file, env } = await setup();
+    await twoAccounts(file);
+    const id = async (choice: Parameters<typeof resolveConfig>[0], extraEnv: NodeJS.ProcessEnv = {}) =>
+        (await resolveConfig({ environment: 'alpha', ...choice }, { ...env, ...extraEnv })).login?.id;
+    // A flag tenant is never mixed with the environment's account.
+    assert.equal(await id({ tenant: `${BOB}:${ACME}` }, { ZYNOHOSTING_ACCOUNT: 'alice@example.com' }), `${BOB}:${ACME}`);
+    assert.equal(
+        await id({ tenant: 'Acme Co', account: 'bob@example.com' }, { ZYNOHOSTING_ACCOUNT: 'alice@example.com', ZYNOHOSTING_TENANT: 'Globex' }),
+        `${BOB}:${ACME}`
+    );
+    // An --account flag alone names no tenant and overrides the environment's account (and tenant).
+    assert.equal(
+        await id({ account: 'bob@example.com' }, { ZYNOHOSTING_ACCOUNT: 'alice@example.com', ZYNOHOSTING_TENANT: 'Globex' }),
+        `${BOB}:${ACME}`
+    );
+    // With no flags, the environment pair is used together.
+    assert.equal(await id({}, { ZYNOHOSTING_TENANT: 'Acme Co', ZYNOHOSTING_ACCOUNT: 'bob@example.com' }), `${BOB}:${ACME}`);
+    // A full login id with an explicit account that contradicts it is an error.
+    await assert.rejects(
+        id({ tenant: `${BOB}:${ACME}`, account: 'alice@example.com' }),
+        (error: unknown) => error instanceof CliError && error.code === 'login_not_found' && /does not belong/.test(error.message)
+    );
+    assert.equal(await id({ tenant: `${BOB}:${ACME}`, account: BOB }), `${BOB}:${ACME}`);
+});
+
+test('an account alone uses the active login when it belongs to that account, else narrows; an API-key default does not block it', async () => {
+    const { file, env } = await setup();
+    await twoAccounts(file); // Alice is signed in to Acme and Globex; the default is alice:Globex
+    const id = async (account: string, profileEnv: NodeJS.ProcessEnv = env) =>
+        (await resolveConfig({ environment: 'alpha' }, { ...profileEnv, ZYNOHOSTING_ACCOUNT: account })).login?.id;
+    assert.equal(await id('alice@example.com'), `${ALICE}:${GLOBEX}`);
+    assert.equal(await id(ALICE), `${ALICE}:${GLOBEX}`);
+    // Bob has one login, so he is found although the default belongs to Alice.
+    assert.equal(await id('bob@example.com'), `${BOB}:${ACME}`);
+    // Make Bob's login the default: Alice now has two logins and none is the default, so the account is ambiguous.
+    await useLogin(`${BOB}:${ACME}`, { environment: 'alpha' }, { env, write: () => {} });
+    await assert.rejects(
+        id('alice@example.com'),
+        (error: unknown) =>
+            error instanceof CliError &&
+            error.code === 'login_ambiguous' &&
+            error.message.includes(`${ALICE}:${ACME}`) &&
+            error.message.includes(`${ALICE}:${GLOBEX}`)
+    );
+    assert.equal(await id('bob@example.com'), `${BOB}:${ACME}`);
+    // A default that is an API key does not make the account lookup fail.
+    const config = (await loadConfigFile(file)).profiles.alpha!;
+    await updateProfile('alpha', { ...config, apiKey: 'key-1', activeLogin: 'api-key' }, file);
+    assert.equal(await id('bob@example.com'), `${BOB}:${ACME}`);
+    await assert.rejects(id('carol@example.com'), (error: unknown) => error instanceof CliError && error.code === 'login_not_found');
+});
+
+test('two stored entries that become the same account and tenant keep the newer one and retire the other', async () => {
+    const { file, env } = await setup();
+    const KEY_NEW = '33333333-3333-4333-8333-333333333333';
+    const store = new MemoryStore(
+        new Map([
+            [KEY_ACME, 'zrt_older'],
+            [KEY_NEW, 'zrt_newer']
+        ])
+    );
+    const older = savedLogin(ACME, 'Acme Co', {
+        accessToken: jwtFor(ALICE, 'old'),
+        renewalKey: KEY_ACME,
+        createdAt: 1_000,
+        expiresAt: Date.now() - 1000
+    });
+    const newer = savedLogin(ACME, 'Acme Co', { accessToken: jwtFor(ALICE, 'new'), renewalKey: KEY_NEW, createdAt: 2_000 });
+    await writeFile(
+        file,
+        JSON.stringify({
+            version: 3,
+            profiles: { alpha: { apiUrl: API_URL, authApiUrl: AUTH_URL, logins: { 'legacy-key': older, [ACME]: newer }, activeLogin: ACME } }
+        })
+    );
+
+    const config = await loadConfigFile(file);
+    assert.deepEqual(Object.keys(config.profiles.alpha?.logins ?? {}), [`${ALICE}:${ACME}`]);
+    assert.equal(config.profiles.alpha?.logins?.[`${ALICE}:${ACME}`]?.accessToken, jwtFor(ALICE, 'new'));
+    // Nothing is dropped silently: the loser is kept aside until it is retired.
+    assert.equal(config.profiles.alpha?.retiredLogins?.[0]?.accessToken, jwtFor(ALICE, 'old'));
+
+    const calls: string[] = [];
+    await useLogin(
+        `${ALICE}:${ACME}`,
+        { environment: 'alpha' },
+        {
+            env,
+            write: () => {},
+            renewalTokenStore: store,
+            scopedTokenClient: () => ({
+                async renew(token: string) {
+                    calls.push(`renew ${token}`);
+                    return { jwt: 'renewed.jwt.signature', expiresAt: Date.now() + 3_600_000, renewalToken: 'zrt_rotated' };
+                },
+                async revoke(accessToken: string) {
+                    calls.push(`revoke ${accessToken}`);
+                }
+            })
+        }
+    );
+    assert.deepEqual(calls, ['renew zrt_older', 'revoke renewed.jwt.signature']);
+    assert.equal(store.values.has(KEY_ACME), false);
+    assert.equal(store.values.get(KEY_NEW), 'zrt_newer');
+    const after = (await loadConfigFile(file)).profiles.alpha!;
+    assert.equal(after.retiredLogins, undefined);
+    assert.equal(after.logins?.[`${ALICE}:${ACME}`]?.accessToken, jwtFor(ALICE, 'new'));
 });
