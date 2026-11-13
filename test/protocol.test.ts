@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { parseAutomationSite, parseCapabilities, parseDeploymentSession, parseFinalPlan } from '../src/protocol.js';
+import { parseAutomationSite, parseCapabilities, parseDeploymentSession, parseFinalPlan, parseSiteMutationAccepted } from '../src/protocol.js';
 
 test('parses a valid manager session and rejects unsafe remote URLs', () => {
     const session = parseDeploymentSession({
@@ -100,4 +100,24 @@ test('parses capabilities and validates candidate indices', () => {
             'plan'
         )
     );
+});
+
+test('parses notFoundHandling only when present and rejects unknown values', () => {
+    const base = { id: '11111111-1111-4111-8111-111111111111', fqdn: 'example.com', status: 'active', phpVersion: null };
+    assert.equal('notFoundHandling' in parseAutomationSite(base), false);
+    assert.equal(parseAutomationSite({ ...base, notFoundHandling: 'single-page-application' }).notFoundHandling, 'single-page-application');
+    assert.equal(parseAutomationSite({ ...base, notFoundHandling: '404-page' }).notFoundHandling, '404-page');
+    // The general parser is lenient so a future mode cannot break list/deploy/promote.
+    assert.equal(parseAutomationSite({ ...base, notFoundHandling: 'future-mode' }).notFoundHandling, 'future-mode');
+    assert.throws(() => parseAutomationSite({ ...base, notFoundHandling: null }), /notFoundHandling/);
+});
+
+test('parses the accepted-operation shape shared by promote and site updates', () => {
+    const operationId = '33333333-3333-4333-8333-333333333333';
+    const accepted = parseSiteMutationAccepted({
+        result: { id: '11111111-1111-4111-8111-111111111111', fqdn: 'example.com', status: 'active', phpVersion: null, notFoundHandling: '404-page' },
+        operation: { id: operationId, status: 'queued', statusUrl: `/reconciliations/${operationId}`, lastError: null }
+    });
+    assert.equal(accepted.operation.id, operationId);
+    assert.equal(accepted.result.notFoundHandling, '404-page');
 });

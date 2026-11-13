@@ -6,6 +6,7 @@
 - inspect, download, upload, and delete individual files;
 - plan and apply complete deployments to production or an isolated preview slot;
 - promote current preview content to production;
+- set a static site's missing-page handling (`sites set --not-found single-page-application`);
 - download a complete deployable snapshot or, with the extra permission, all user content;
 - discover, create, inspect, edit, embed, and configure published ZynoForms (JSON in, JSON out);
 - teach coding agents to drive the CLI through one [skill file](./skills/zynohosting/SKILL.md);
@@ -264,6 +265,7 @@ The MCP tools are:
 - `apply_deploy`
 - `plan_promote`
 - `apply_promote`
+- `set_not_found_handling`
 - `plan_download`
 - `apply_download`
 
@@ -275,19 +277,19 @@ The MCP can start without a saved login. The agent calls `login`, which picks th
 
 The tenant credential is limited by explicit Hosting and Forms permissions:
 
-| Permission                  | Capability                                                |
-| --------------------------- | --------------------------------------------------------- |
-| `hosting.sitesRead`         | List and inspect sites                                    |
-| `hosting.filesRead`         | List files and download individual files                  |
-| `hosting.filesWrite`        | Create and replace individual files                       |
-| `hosting.filesDelete`       | Delete individual files                                   |
-| `hosting.deploy`            | Deploy production/preview content and promote preview     |
-| `hosting.download`          | Download the deployable snapshot                          |
-| `hosting.downloadSensitive` | Include protected and user-generated content              |
-| `hosting.analyticsRead`     | Read hosting analytics                                    |
-| `hosting.analyticsManage`   | Change analytics configuration                            |
-| `forms.create`              | Create and immediately publish a basic form               |
-| `forms.edit`                | Edit a form, its Cap protection, and allowed CORS origins |
+| Permission                  | Capability                                                                           |
+| --------------------------- | ------------------------------------------------------------------------------------ |
+| `hosting.sitesRead`         | List and inspect sites                                                               |
+| `hosting.filesRead`         | List files and download individual files                                             |
+| `hosting.filesWrite`        | Create and replace individual files                                                  |
+| `hosting.filesDelete`       | Delete individual files                                                              |
+| `hosting.deploy`            | Deploy production/preview content, promote preview, and change missing-page handling |
+| `hosting.download`          | Download the deployable snapshot                                                     |
+| `hosting.downloadSensitive` | Include protected and user-generated content                                         |
+| `hosting.analyticsRead`     | Read hosting analytics                                                               |
+| `hosting.analyticsManage`   | Change analytics configuration                                                       |
+| `forms.create`              | Create and immediately publish a basic form                                          |
+| `forms.edit`                | Edit a form, its Cap protection, and allowed CORS origins                            |
 
 The form discovery and integration tools use the same tenant credential against the ZynoSuite API. Adding origins from a hosting-site reference also requires `hosting.sitesRead`.
 

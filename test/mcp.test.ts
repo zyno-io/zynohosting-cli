@@ -207,6 +207,7 @@ test('serves site metadata and downloads files only inside allowed roots', async
             'plan_download',
             'plan_promote',
             'put_file',
+            'set_not_found_handling',
             'update_form',
             'update_form_bot_protection',
             'update_form_origins',

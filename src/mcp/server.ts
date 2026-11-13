@@ -8,16 +8,17 @@ import { FormsClient } from '../api/forms-client.js';
 import { ManagerClient } from '../api/manager-client.js';
 import { resolveDistribution } from '../api/user-agent.js';
 import { startCredentialRefreshLoop } from '../auth/credential-refresh.js';
-import { applyPreparedDeployment, prepareDeployment, PreparedDeployment } from '../commands/deploy-site.js';
+import { applyPreparedDeployment, normalizeSiteRef, prepareDeployment, PreparedDeployment } from '../commands/deploy-site.js';
 import { applyDownload, prepareDownload, PreparedDownload } from '../commands/download-site.js';
 import { createFileClient, purgeSiteCacheAfterMutation, writeResponseAtomically } from '../commands/files.js';
 import { login, LOGIN_LIFETIMES, LoginDependencies, type LoginPrompt, type LoginResult } from '../commands/login.js';
 import { savedLogins, useLogin } from '../commands/logins.js';
 import { applyPreparedPromotion, preparePromotion, PreparedPromotion, promotionSummary } from '../commands/promote-site.js';
+import { applyPreparedSiteSettings, prepareSiteSettings } from '../commands/site-settings.js';
 import { ConfigOverrides, type HostingEnvironment, ResolvedConfig, resolveConfig } from '../config.js';
 import { CliError, errorMessage, HttpError } from '../errors.js';
 import { DELEGABLE_PERMISSION_KEYS, permissionCapabilityLines } from '../permissions.js';
-import { PREVIEW_RESOURCE_NOTICE } from '../protocol.js';
+import { NOT_FOUND_HANDLING_MODES, PREVIEW_RESOURCE_NOTICE } from '../protocol.js';
 import { registerFormsMcp } from './forms.js';
 import { AllowedLocalRoots } from './local-paths.js';
 import { UpdatePolicy } from './update-check.js';
@@ -39,7 +40,7 @@ const SERVER_INSTRUCTIONS = [
     'Never infer a deployment domain from a repository, site content, organization name, or a similar available site. Before any site mutation, use an explicitly stated project domain or ask the user which domain they intend. Verify that domain with list_sites or get_site. If it is unavailable in the current login context, do not substitute another site; explain that access is unavailable and offer the login tool so the user can switch context. Use plan_deploy and present its operations and target before apply_deploy. Production is the default; target preview updates only preview. Use plan_promote and present both URLs before apply_promote; promotion renames the current preview into production and resets preview to empty. Preview has no separate database and shares the main site’s database and storage quota. Only set force to true when the user explicitly requests bypassing the wp-config.php guard; never retry a blocked promotion with force automatically. Read the preview address from get_site deployments.preview.url and never construct it; the vanity hostname serves production. File tools and downloads act only on production. Promotion replaces production with exactly what preview holds, and deployments never send wp-config.php, wp-content/uploads, or other excluded content to preview, so for WordPress or any site whose production holds content outside the build, recommend deploying to production instead of promoting. After a promotion preview is empty; do not promote again until preview has been redeployed.',
     'Saved logins: when list_logins shows more than one login, ask the user which tenant (organization) to work in before any site or form action, and pass that tenant name or id in the tool\u2019s tenant input; use_login changes the default for later calls. After a sign-in finishes, tell the user which account and tenant it signed in to and ask them to confirm it is theirs.',
     'When connecting a page to a form, read the existing page first and preserve its markup, layout, and styling rather than replacing it with a generic form. Allow that page’s exact origin, and follow the response contract and the jsonScript or capScript returned with the form. Read an existing form with describe_form before update_form and edit it in place rather than creating a second form. If ZynoForms cannot represent a field, validation rule, choice, or bot protection exactly, explain the limitation and ask the user how to proceed instead of dropping it.',
-    'When the user wants to build a new site: ZynoHosting serves static files, plus PHP on sites with PHP turned on (get_site phpVersion is null when it is off, and .php files then return 404). It runs no Node.js or other server process, so server-side rendering and API routes are unavailable. If you can run commands, recommend Astro with its default static output and no server adapter, build it, and deploy the dist folder rather than the project root. If you cannot run a build, write plain HTML, CSS, and JavaScript files. Use PHP only for real server-side code, and ZynoForms rather than PHP for forms. Static sites have no single-page-app fallback, so pre-render every route. Everything deployed is publicly readable, so never deploy .env files or secrets. These tools cannot create sites: deploy only to an existing site the user names, and if they have none, tell them to ask ZynoHosting support to set one up.'
+    'When the user wants to build a new site: ZynoHosting serves static files, plus PHP on sites with PHP turned on (get_site phpVersion is null when it is off, and .php files then return 404). It runs no Node.js or other server process, so server-side rendering and API routes are unavailable. If you can run commands, recommend Astro with its default static output and no server adapter, build it, and deploy the dist folder rather than the project root. If you cannot run a build, write plain HTML, CSS, and JavaScript files. Use PHP only for real server-side code, and ZynoForms rather than PHP for forms. A static site returns 404 for unknown paths unless get_site notFoundHandling is single-page-application, which serves /index.html for unknown paths unless they end in a listed asset extension. Prefer pre-rendering every route; if a client-side router needs the fallback, ask the user, then call set_not_found_handling; it applies to production and preview and is unavailable with PHP. Everything deployed is publicly readable, so never deploy .env files or secrets. These tools cannot create sites: deploy only to an existing site the user names, and if they have none, tell them to ask ZynoHosting support to set one up.'
 ].join(' ');
 
 export async function createHostingMcpServer(options: McpServerOptions): Promise<McpServer> {
@@ -143,7 +144,7 @@ export async function createHostingMcpServer(options: McpServerOptions): Promise
                 'Start, check, or cancel the sign-in flow for ZynoHosting. Starting returns what the user needs in this tool result: either a one-time browser URL (flow "browser", also opened in a browser on the computer running this server) or a link and a short code (flow "device") that the user opens on any device. Use this before authenticated tools when no login is saved, when the requested domain is unavailable in the current login context, or to add a login for another tenant. A sign-in cannot replace API-key or token credentials injected into this MCP process; change those credentials and restart instead.',
                 'The flow is chosen automatically: the browser flow where a browser can open on this computer, the link-and-code flow over SSH or on a machine with no display. Pass flow "device" or "browser" only to override that. For the device flow, give the user the link and the code verbatim, tell them to check that the code matches, pick how long the access lasts and approve it, then call this tool with action "status" until it reports authenticated. Never open the link or approve it yourself, and never ask the user to send you the code from a link someone else gave them.',
                 `Request only these permissions — no others exist, and one invalid key rejects the whole request instead of granting the rest:\n${permissionCapabilityLines()}`,
-                'Include hosting.sitesRead in every hosting request. Ask for the narrowest complete set for the stated task: editing individual files needs hosting.filesRead and hosting.filesWrite (add hosting.filesDelete only to remove files); a full deploy needs hosting.deploy; a backup needs hosting.download, plus hosting.downloadSensitive only when user-generated content is wanted. A token cannot be widened later, so a missing permission means revoking and signing in again.',
+                'Include hosting.sitesRead in every hosting request. Ask for the narrowest complete set for the stated task: editing individual files needs hosting.filesRead and hosting.filesWrite (add hosting.filesDelete only to remove files); a full deploy, promotion, or not-found handling change needs hosting.deploy; a backup needs hosting.download, plus hosting.downloadSensitive only when user-generated content is wanted. A token cannot be widened later, so a missing permission means revoking and signing in again.',
                 'Each tenant has one saved login: signing in again to the same tenant replaces it, and signing in to another tenant adds a login and makes it the default (see list_logins and use_login). lifetime is only a suggestion for how long the access lasts; the user chooses when approving, and anything above 1h needs renewable.',
                 'One sign-in runs at a time. Starting with the same permissions, name, renewable flag, flow, and lifetime returns that same in-flight prompt with "reused": true; starting with a different request cancels the in-flight sign-in and returns a new one, so the user must use the newest link. Use action "cancel" to abandon a sign-in the user is not going to finish.'
             ].join('\n\n'),
@@ -476,6 +477,26 @@ export async function createHostingMcpServer(options: McpServerOptions): Promise
             const promoted = await applyPreparedPromotion(plan);
             promotions.delete(plan_id);
             return result(promoted);
+        }
+    );
+
+    server.registerTool(
+        'set_not_found_handling',
+        {
+            title: 'Set how a site handles missing pages',
+            description:
+                'Set a site\'s not-found handling. "single-page-application" serves /index.html (status 200) for unknown paths unless they end in a listed asset extension (.js, .css, images, fonts, .json, .txt, ...), which still return 404, so client-side routers can handle deep links. "404-page" (default) returns 404 for every unknown path. Applies immediately to both production and preview and purges the CDN cache; it changes live traffic, so ask the user first. Static sites only: fails if the site runs PHP. Prefer pre-rendering every route; use this only when a client-side router needs it. Idempotent; waits for serving reconciliation. Requires hosting.deploy.',
+            inputSchema: {
+                site: z.string().min(1),
+                mode: z.enum(NOT_FOUND_HANDLING_MODES)
+            },
+            annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false }
+        },
+        async ({ site, mode }) => {
+            const { config, manager } = await authentication.clients();
+            await authorizedSite(manager, normalizeSiteRef(site));
+            const plan = await prepareSiteSettings(site, mode, options, config);
+            return result(await applyPreparedSiteSettings(plan));
         }
     );
 

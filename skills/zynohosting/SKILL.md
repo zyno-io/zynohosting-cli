@@ -1,6 +1,6 @@
 ---
 name: zynohosting
-description: Publish, update, inspect, back up, and preview websites hosted on ZynoHosting, and create, edit, and embed ZynoForms, using the `zynohosting` CLI. Use when the user wants to build a new website to host on ZynoHosting, deploy or publish a site to ZynoHosting, deploy to a preview site, promote preview to production (go live), check which sites they can access, edit, upload, or delete individual hosted files, download a hosted site, sign in to ZynoHosting, or add, change, or connect a ZynoForms form.
+description: Publish, update, inspect, back up, and preview websites hosted on ZynoHosting, and create, edit, and embed ZynoForms, using the `zynohosting` CLI. Use when the user wants to build a new website to host on ZynoHosting, deploy or publish a site to ZynoHosting, deploy to a preview site, promote preview to production (go live), change how a site handles missing pages (single-page-app fallback), check which sites they can access, edit, upload, or delete individual hosted files, download a hosted site, sign in to ZynoHosting, or add, change, or connect a ZynoForms form.
 ---
 
 # ZynoHosting CLI
@@ -18,7 +18,7 @@ npx -y @zyno-io/zynohosting <command> --help   # authoritative options for the i
 
 The examples below write `zynohosting`. Substitute the `npx` form if needed.
 
-There is no TTY in an agent shell, so the CLI never prompts you. `deploy` and `promote` need `--dry-run` or `--yes`, and `download` and `files rm` need `--yes`. Without them they exit with `confirmation_required`. `files put` has no confirmation and no dry run: it uploads the moment you run it.
+There is no TTY in an agent shell, so the CLI never prompts you. `deploy`, `promote`, and `sites set` need `--dry-run` or `--yes`, and `download` and `files rm` need `--yes`. Without them they exit with `confirmation_required`. `files put` has no confirmation and no dry run: it uploads the moment you run it.
 
 ## Rules
 
@@ -36,16 +36,16 @@ Logins are saved per environment; production is the default. For alpha or dev, p
 
 Request the narrowest complete permission set for the task. `hosting.sitesRead` is always needed. Add `--renewable` so the 60-minute token renews itself.
 
-| Task                                         | Add these permissions                                                   |
-| -------------------------------------------- | ----------------------------------------------------------------------- |
-| Look at sites only                           | none                                                                    |
-| Deploy, deploy to preview, or promote        | `hosting.deploy`                                                        |
-| Read individual files                        | `hosting.filesRead`                                                     |
-| Upload or replace individual files           | `hosting.filesRead`, `hosting.filesWrite`                               |
-| Delete individual files                      | `hosting.filesDelete` as well                                           |
-| Create forms                                 | `forms.create`                                                          |
-| Edit forms, their origins, or bot protection | `forms.edit`                                                            |
-| Back up the site                             | `hosting.download` (`hosting.downloadSensitive` for uploads and config) |
+| Task                                                                | Add these permissions                                                   |
+| ------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| Look at sites only                                                  | none                                                                    |
+| Deploy, deploy to preview, promote, or change missing-page handling | `hosting.deploy`                                                        |
+| Read individual files                                               | `hosting.filesRead`                                                     |
+| Upload or replace individual files                                  | `hosting.filesRead`, `hosting.filesWrite`                               |
+| Delete individual files                                             | `hosting.filesDelete` as well                                           |
+| Create forms                                                        | `forms.create`                                                          |
+| Edit forms, their origins, or bot protection                        | `forms.edit`                                                            |
+| Back up the site                                                    | `hosting.download` (`hosting.downloadSensitive` for uploads and config) |
 
 ### Sign in with a link and code (use this unless you are on the user's own computer with a browser)
 
@@ -120,7 +120,7 @@ ZynoHosting serves static files, plus PHP 7.4–8.5 on sites that have PHP turne
 - **Without a build tool,** write plain HTML, CSS, and JavaScript files and deploy that folder.
 - **Use PHP only for real server-side code.** Contact and signup forms don't need it; use [ZynoForms](#zynoforms).
 - **Check the site type.** `sites get <domain>` shows `PHP: static` (JSON `phpVersion: null`) when PHP is off. Such a site answers 404 for every `.php` file. The user can turn PHP on in the ZynoHosting portal under the site's **Settings → Runtime**.
-- **Routing.** A static site serves `/path`, then `/path/index.html`, then `/404.html`. There is no single-page-app fallback, so a client-side router's deep links 404 on reload. Pre-render every route, as Astro does. A PHP site sends unknown paths to `/index.php`, so a front controller works. nginx serves the site, so `.htaccess` files are ignored.
+- **Routing.** A static site serves `/path`, then `/path/index.html`, then `/404.html` with status 404, so a client-side router's deep links 404 on reload. Prefer pre-rendering every route, as Astro does. If a client-side router really needs a fallback, ask the user first, then run `zynohosting sites set <domain> --not-found single-page-application --dry-run` and, once they approve, the same with `--yes`. Static sites only (it is rejected on PHP). It takes effect on production and preview immediately, and serves `/index.html` with status 200 for any unknown path unless it ends in a listed asset extension (`.js`, `.css`, images, fonts, `.json`, `.txt`, ...); a missing `/app.js` still 404s. `sites get` shows the setting only on static sites. `sites get <domain>` shows `Not found:` (JSON `notFoundHandling`); `--not-found 404-page` turns it off. A PHP site sends unknown paths to `/index.php`, so a front controller works. nginx serves the site, so `.htaccess` files are ignored.
 - **Everything deployed is public.** The deployed folder is the web root, and anything in it that isn't PHP can be downloaded. Never deploy `.env` files, credentials, or private source.
 - **The CLI cannot create sites.** Build and check the site locally first (`npm run preview` for Astro). Deploy only to an existing site the user names. If they don't have one yet, tell them to ask ZynoHosting support to set up a site for their domain.
 
@@ -183,16 +183,16 @@ The destination must be new or empty. `--sensitive` also includes `wp-config.php
 
 ## Machine-readable output
 
-Add `--json` to any command. `deploy` and `promote` emit one JSON event per line: `progress`, `plan` or `promotion_plan`, then `dry_run_complete`, `result`, or `promotion_result`. Errors go to stderr as `{"type":"error","code":...}`.
+Add `--json` to any command. `deploy`, `promote`, and `sites set` emit one JSON event per line: `progress`, `plan` or `promotion_plan` or `site_settings_plan`, then `dry_run_complete`, `result`, `promotion_result`, or `site_settings_result`. Errors go to stderr as `{"type":"error","code":...}`.
 
-| Exit | Meaning                                                                                                                      |
-| ---- | ---------------------------------------------------------------------------------------------------------------------------- |
-| 2    | Bad input, not signed in (`missing_config`), or missing `--yes`/`--dry-run`                                                  |
-| 3    | Login expired or missing permission                                                                                          |
-| 4    | Remote failure, ETag precondition failed, or promotion refused (production changed, WordPress guard, site still reconciling) |
-| 6    | Plan or session expired, or a precondition no longer holds: re-plan                                                          |
-| 7    | Node could not apply, or promotion failed/still pending                                                                      |
-| 8    | Change applied but cache invalidation failed: don't retry                                                                    |
+| Exit | Meaning                                                                                                                                                |
+| ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 2    | Bad input, not signed in (`missing_config`), or missing `--yes`/`--dry-run`                                                                            |
+| 3    | Login expired or missing permission                                                                                                                    |
+| 4    | Remote failure, ETag precondition failed, or promotion refused (production changed, WordPress guard, site still reconciling)                           |
+| 6    | Plan or session expired, or a precondition no longer holds: re-plan                                                                                    |
+| 7    | Node could not apply, or promotion or a site-settings change failed/still pending (`reconciliation_failed`/`_pending`: re-run `sites set`, it resumes) |
+| 8    | Change applied but cache invalidation failed: don't retry                                                                                              |
 
 ## ZynoForms
 

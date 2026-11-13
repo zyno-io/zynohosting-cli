@@ -81,7 +81,7 @@ test('list_logins, use_login and a per-call tenant choose between saved logins',
         // Every tool but the sign-in ones takes an optional tenant; list_logins takes nothing; use_login requires it.
         const schemaOf = (name: string) =>
             tools.find(tool => tool.name === name)!.inputSchema as { properties?: Record<string, unknown>; required?: string[] };
-        for (const name of ['list_sites', 'get_site', 'plan_deploy', 'list_forms', 'create_basic_form']) {
+        for (const name of ['list_sites', 'get_site', 'set_not_found_handling', 'plan_deploy', 'list_forms', 'create_basic_form']) {
             assert(schemaOf(name).properties && 'tenant' in schemaOf(name).properties!, `${name} should accept tenant`);
             assert('account' in schemaOf(name).properties!, `${name} should accept account`);
             assert(!(schemaOf(name).required ?? []).includes('tenant'), `${name} tenant must be optional`);

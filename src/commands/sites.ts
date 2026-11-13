@@ -23,6 +23,11 @@ export async function getSite(siteRef: string, options: SiteCommandOptions): Pro
     else {
         process.stdout.write(`${site.fqdn}\n`);
         process.stdout.write(`ID: ${site.id}\nStatus: ${site.status}\nPHP: ${site.phpVersion ?? 'static'}\n`);
+        if (site.notFoundHandling && site.phpVersion === null) {
+            process.stdout.write(
+                `Not found: ${site.notFoundHandling === 'single-page-application' ? 'single-page app' : site.notFoundHandling === '404-page' ? '404 page' : site.notFoundHandling}\n`
+            );
+        }
         if (site.deployments) {
             process.stdout.write(
                 `Production: ${site.deployments.production.url ?? 'unavailable'}\nPreview: ${site.deployments.preview.url ?? 'unavailable'}\n`
