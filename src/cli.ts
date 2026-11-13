@@ -34,7 +34,11 @@ export function createProgram(): Command {
         .option('--auth-api-url <url>', 'ZynoAuth API URL')
         .addOption(environmentOption())
         .option('--api-key <key>', 'tenant API key (prefer ZYNOHOSTING_API_KEY)')
-        .option('--tenant <name|id>', 'use this saved login for this command only (or set ZYNOHOSTING_TENANT)')
+        .option(
+            '--tenant <name|id>',
+            'use this saved login (a login id, tenant id, or tenant name) for this command only (or set ZYNOHOSTING_TENANT)'
+        )
+        .option('--account <email|id>', 'narrow --tenant when several accounts are signed in to one tenant (or set ZYNOHOSTING_ACCOUNT)')
         .option('--json', 'emit machine-readable JSON');
 
     program
@@ -119,6 +123,7 @@ export function createProgram(): Command {
         .description('revoke the active saved login (or the one named by --tenant) and remove its local credentials')
         .option('--all', 'log out of every login in every saved environment')
         .option('--tenant <name|id>', 'log out of this saved login instead of the active one')
+        .option('--account <email|id>', 'narrow --tenant to one account')
         .option('--api-url <url>', 'Hosting Manager API URL')
         .option('--suite-api-url <url>', 'ZynoSuite API URL')
         .option('--auth-api-url <url>', 'ZynoAuth API URL')
@@ -128,6 +133,7 @@ export function createProgram(): Command {
             await logout({
                 ...(commandOptions.all ? { all: true } : {}),
                 ...(context.tenant ? { tenant: context.tenant } : {}),
+                ...(context.account ? { account: context.account } : {}),
                 ...(context.apiUrl ? { apiUrl: context.apiUrl } : {}),
                 ...(context.suiteApiUrl ? { suiteApiUrl: context.suiteApiUrl } : {}),
                 ...(context.authApiUrl ? { authApiUrl: context.authApiUrl } : {}),
@@ -411,6 +417,7 @@ function commandContext(
         apiKey?: string;
         environment?: HostingEnvironment;
         tenant?: string;
+        account?: string;
         json?: boolean;
     }
 ): {
@@ -420,6 +427,7 @@ function commandContext(
     apiKey?: string;
     environment?: HostingEnvironment;
     tenant?: string;
+    account?: string;
     json: boolean;
 } {
     const global = program.opts<{
@@ -429,6 +437,7 @@ function commandContext(
         apiKey?: string;
         environment?: HostingEnvironment;
         tenant?: string;
+        account?: string;
         json?: boolean;
     }>();
     return {
@@ -438,6 +447,7 @@ function commandContext(
         ...((commandOptions.apiKey ?? global.apiKey) ? { apiKey: commandOptions.apiKey ?? global.apiKey } : {}),
         ...((commandOptions.environment ?? global.environment) ? { environment: commandOptions.environment ?? global.environment } : {}),
         ...((commandOptions.tenant ?? global.tenant) ? { tenant: commandOptions.tenant ?? global.tenant } : {}),
+        ...((commandOptions.account ?? global.account) ? { account: commandOptions.account ?? global.account } : {}),
         json: commandOptions.json ?? global.json ?? false
     };
 }

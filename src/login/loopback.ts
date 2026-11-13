@@ -19,6 +19,7 @@ export interface UserCredential {
     tenantId: string;
     expiresAt: number;
     renewalToken?: string;
+    accountId?: string;
     tenantName?: string;
     accountEmail?: string;
     /** Epoch milliseconds; the end of the lifetime the approver chose. */
@@ -167,13 +168,15 @@ async function handleCallback(
     }
     if (renewalToken !== undefined && !isRenewalToken(renewalToken)) return rejectRequest(response, 400, 'Invalid renewal credential');
     // Optional fields from newer portals: each may appear at most once and must be well formed.
-    for (const key of ['tenantName', 'accountEmail', 'grantExpiresAt']) {
+    for (const key of ['accountId', 'tenantName', 'accountEmail', 'grantExpiresAt']) {
         if (form.getAll(key).length > 1) return rejectRequest(response, 400, 'Invalid login response');
     }
+    const accountId = form.get('accountId') ?? undefined;
     const tenantName = form.get('tenantName') ?? undefined;
     const accountEmail = form.get('accountEmail') ?? undefined;
     const grantExpiresAtValue = form.get('grantExpiresAt');
     const grantExpiresAt = grantExpiresAtValue === null ? undefined : Number(grantExpiresAtValue);
+    if (accountId !== undefined && !/^[A-Za-z0-9_-]{1,100}$/.test(accountId)) return rejectRequest(response, 400, 'Invalid account ID');
     if (tenantName !== undefined && !isDisplayText(tenantName, 255)) return rejectRequest(response, 400, 'Invalid tenant name');
     if (accountEmail !== undefined && !isDisplayText(accountEmail, 320)) return rejectRequest(response, 400, 'Invalid account email');
     if (
@@ -189,6 +192,7 @@ async function handleCallback(
         tenantId,
         expiresAt,
         ...(renewalToken === undefined ? {} : { renewalToken }),
+        ...(accountId === undefined ? {} : { accountId }),
         ...(tenantName === undefined ? {} : { tenantName }),
         ...(accountEmail === undefined ? {} : { accountEmail }),
         ...(grantExpiresAt === undefined ? {} : { grantExpiresAt })

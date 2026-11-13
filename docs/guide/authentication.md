@@ -81,7 +81,7 @@ With `--json`, stdout holds one JSON event per line and human text goes to stder
 ```json
 {"type":"login_started","flow":"device","reason":"no_display","verificationUri":"https://zyno.app/cli/device","verificationUriComplete":"https://zyno.app/cli/device?code=ABCD-EFGH","userCode":"ABCD-EFGH","expiresAt":"2026-11-12T18:10:00.000Z","interval":5}
 {"type":"login_pending","resume":"zynohosting login --resume"}
-{"type":"result","status":"authenticated","flow":"device","profile":"production","tenantId":"…","tenantName":"Acme Co","account":"owner@example.com","renewable":true,"credentialStore":"file","accessExpiresAt":"2026-11-12T19:00:00.000Z","grantExpiresAt":"2026-11-19T18:00:00.000Z"}
+{"type":"result","status":"authenticated","flow":"device","profile":"production","loginId":"<accountId>:<tenantId>","accountId":"…","tenantId":"…","tenantName":"Acme Co","account":"owner@example.com","renewable":true,"credentialStore":"file","accessExpiresAt":"2026-11-12T19:00:00.000Z","grantExpiresAt":"2026-11-19T18:00:00.000Z"}
 ```
 
 The device code, the access token and the renewal token are never printed. The browser flow prints a `login_started` event with `"flow":"browser"` and the one-time `url`.
@@ -132,32 +132,33 @@ Never copy a renewal token anywhere yourself: not into MCP config, environment v
 
 ## Multiple logins
 
-A person can belong to several organizations (tenants). The CLI keeps **one login per tenant** in each environment, so you can switch without signing in again.
+A person can belong to several organizations (tenants). A login is one **account in one tenant**, and each has its own token and can be removed on its own. The CLI keeps every login in each environment, so you can switch without signing in again. Two people (or two of your accounts) can be signed in to the same tenant side by side.
 
 ```bash
-zynohosting logins                       # list them: tenant, id, account, which one is used by default, when it ends
+zynohosting logins                       # list them: tenant, account, login id, which one is used by default, when it ends
 zynohosting logins --json
-zynohosting logins use "Acme Co"         # make one the default (a tenant name or id)
+zynohosting logins use "Acme Co"         # make one the default (a login id, tenant id, or tenant name)
 zynohosting sites list --tenant "Acme Co"   # use one for this command only
-ZYNOHOSTING_TENANT="Acme Co" zynohosting sites list
+zynohosting sites list --tenant "Acme Co" --account bob@example.com   # when two accounts are in that tenant
+ZYNOHOSTING_TENANT="Acme Co" ZYNOHOSTING_ACCOUNT=bob@example.com zynohosting sites list
 zynohosting whoami                       # the login a command uses now
 ```
 
-Signing in again to the same tenant replaces its login (the old grant is revoked on a best-effort basis). Signing in to another tenant adds a login and makes it the default.
+Each login has an id, `<accountId>:<tenantId>`. Signing in again as the same account to the same tenant replaces that login (the old grant is revoked on a best-effort basis). Signing in as another account, or to another tenant, adds a login and makes it the default.
 
-The login a command uses is chosen in this order: `--tenant`, then `ZYNOHOSTING_TENANT`, then the default login, then the only login. A tenant name matches case-insensitively when it identifies exactly one login, and a tenant ID matches exactly. If there are several logins and none is the default, the command fails with `login_selection_required` and lists them. An unknown name is `login_not_found`, and one that matches several is `login_ambiguous`. `--tenant` never changes the default.
+The login a command uses is chosen in this order: `--tenant` (with `--account`), then `ZYNOHOSTING_TENANT` (with `ZYNOHOSTING_ACCOUNT`), then the default login, then the only login. `--tenant` takes a login id, a tenant id, or a tenant name (case-insensitive). `--account` takes an account email or id and narrows the match. If there are several logins and none is the default, the command fails with `login_selection_required` and lists them. An unknown name is `login_not_found`. A tenant that matches several logins, because several accounts are signed in to it, is `login_ambiguous`: the error lists each login id with its account email and tenant name, and you pass `--account` or the full login id. `--tenant` never changes the default.
 
-An expired login stays in the list, marked expired, until you log out of it or sign in to that tenant again. Using it fails with `grant_expired`.
+An expired login stays in the list, marked expired, until you log out of it or sign in again as that account to that tenant. Using it fails with `grant_expired`.
 
 ## Logout and revocation
 
 ```bash
 zynohosting logout                    # the default login of the selected environment
-zynohosting logout --tenant "Acme Co"  # a different one
+zynohosting logout --tenant "Acme Co" --account bob@example.com   # a different one
 zynohosting logout --all              # every login in every environment
 ```
 
-`logout` removes one login: the one `--tenant` or `ZYNOHOSTING_TENANT` names, else the default one, chosen the same way as for any command (see [Saved configuration](#saved-configuration)). Other logins in the profile are kept. `--all` logs out of every saved login in every environment, revoking each in turn using its own stored URLs, and cancels any pending sign-in. If the selected environment has no login but others do, plain `logout` fails and lists them rather than reporting success.
+`logout` removes one login: the one `--tenant` (and `--account`) or `ZYNOHOSTING_TENANT` names, else the default one, chosen the same way as for any command (see [Saved configuration](#saved-configuration)). Other logins in the profile are kept. `--all` logs out of every saved login in every environment, revoking each in turn using its own stored URLs, and cancels any pending sign-in. If the selected environment has no login but others do, plain `logout` fails and lists them rather than reporting success.
 
 For a saved scoped token, logout calls `POST /identity/scoped-tokens/revoke` with the scoped access token. That revokes only its own grant and clears the server-side renewal token. Local config and credential-store entries are removed only after revocation succeeds or the access/renewal credential is already unusable. Tenant API keys are only removed locally. After a logout, token-file entries that no saved login uses and that are more than an hour old are removed too.
 
@@ -201,7 +202,7 @@ The default path is:
 
 Set `ZYNOHOSTING_CONFIG` to use a different file. On POSIX systems, the CLI creates the directory with mode `0700` and the file with mode `0600`.
 
-The file holds one profile per environment, keyed `production`, `alpha`, or `dev`, or `url:<Hosting API URL>` for a custom API URL. Each profile holds one login per tenant (see [Multiple logins](#multiple-logins)). Logging in to alpha leaves the production logins alone, and there is no "current" environment: a command with no environment or URL selected always uses `production`. The Hosting API URL comes from `--api-url`, then `--environment`, then `ZYNOHOSTING_API_URL`, then `ZYNOHOSTING_ENVIRONMENT`, and the saved profile is the one for that URL (an `--api-url` equal to alpha's URL uses the `alpha` login). If the selected environment has no login but others do, the command fails with `missing_config` and names them, for example `Not signed in to production. Saved logins: alpha. Pass --environment alpha, or run `zynohosting login`.` Files saved by earlier versions are read as one login for their tenant and converted the next time they are saved; see the [configuration reference](../reference/configuration#saved-configuration-schema).
+The file holds one profile per environment, keyed `production`, `alpha`, or `dev`, or `url:<Hosting API URL>` for a custom API URL. Each profile holds one login per account and tenant (see [Multiple logins](#multiple-logins)). Logging in to alpha leaves the production logins alone, and there is no "current" environment: a command with no environment or URL selected always uses `production`. The Hosting API URL comes from `--api-url`, then `--environment`, then `ZYNOHOSTING_API_URL`, then `ZYNOHOSTING_ENVIRONMENT`, and the saved profile is the one for that URL (an `--api-url` equal to alpha's URL uses the `alpha` login). If the selected environment has no login but others do, the command fails with `missing_config` and names them, for example `Not signed in to production. Saved logins: alpha. Pass --environment alpha, or run `zynohosting login`.` Files saved by earlier versions are read as one login for their tenant and converted the next time they are saved; see the [configuration reference](../reference/configuration#saved-configuration-schema).
 
 ## Environments
 

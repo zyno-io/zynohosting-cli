@@ -31,6 +31,8 @@ export interface LogoutOptions {
     environment?: HostingEnvironment;
     /** Tenant name or id of the login to remove, instead of the active one. */
     tenant?: string;
+    /** Account email or id that narrows `tenant`. */
+    account?: string;
     /** Log out of every login in every saved profile. */
     all?: boolean;
 }
@@ -60,7 +62,12 @@ export async function logout(options: LogoutOptions = {}, dependencies: LogoutDe
         }
     } else {
         const selectedKey = selectProfile(options, env).key;
-        const entry = selectEntry(configFile.profiles[selectedKey] ?? {}, options.tenant ?? env.ZYNOHOSTING_TENANT, describeProfileKey(selectedKey));
+        const entry = selectEntry(
+            configFile.profiles[selectedKey] ?? {},
+            options.tenant ?? env.ZYNOHOSTING_TENANT,
+            describeProfileKey(selectedKey),
+            options.account ?? env.ZYNOHOSTING_ACCOUNT
+        );
         if (entry) targets.push({ key: selectedKey, entry });
         else if (Object.values(configFile.profiles).some(hasStoredCredential)) {
             // Other saved logins mean the user probably selected the wrong environment; saying "already logged out" would mislead.

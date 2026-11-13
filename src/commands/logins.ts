@@ -14,6 +14,7 @@ export interface LoginsOptions {
     apiUrl?: string;
     environment?: HostingEnvironment;
     tenant?: string;
+    account?: string;
     json?: boolean;
 }
 
@@ -26,12 +27,13 @@ export interface LoginsDependencies {
 
 /** One saved credential as listed to people and agents. Times are ISO strings. */
 export interface LoginSummary {
-    /** What to pass to `--tenant` or `logins use`: the tenant id (or `api-key`). */
-    id: string;
+    /** What to pass to `--tenant` or `logins use` to pick exactly this login: `<accountId>:<tenantId>` (or `api-key`). */
+    loginId: string;
     kind: 'login' | 'api-key';
+    accountId?: string;
+    accountEmail?: string;
     tenantId?: string;
     tenantName: string;
-    account?: string;
     /** The login a command uses when no tenant is named. */
     active: boolean;
     renewable: boolean;
@@ -43,17 +45,18 @@ export interface LoginSummary {
 }
 
 function summarize(entry: LoginEntry, active: boolean, now: number): LoginSummary {
-    if (entry.kind === 'api-key') return { id: entry.id, kind: 'api-key', tenantName: 'API key', active, renewable: false, expired: false };
+    if (entry.kind === 'api-key') return { loginId: entry.id, kind: 'api-key', tenantName: 'API key', active, renewable: false, expired: false };
     const login = entry.login!;
     const expired =
         (login.grantExpiresAt !== undefined && login.grantExpiresAt <= now) ||
         (!login.renewalKey && login.expiresAt !== undefined && login.expiresAt <= now);
     return {
-        id: entry.id,
+        loginId: entry.id,
         kind: 'login',
+        ...(login.accountId ? { accountId: login.accountId } : {}),
+        ...(login.accountEmail ? { accountEmail: login.accountEmail } : {}),
         tenantId: login.tenantId,
         tenantName: entryName(entry),
-        ...(login.accountEmail ? { account: login.accountEmail } : {}),
         active,
         renewable: Boolean(login.renewalKey),
         ...(login.renewalKey ? { credentialStore: login.renewalStore ?? ('system' as const) } : {}),
@@ -106,12 +109,12 @@ export async function listLogins(options: LoginsOptions = {}, dependencies: Logi
     const rows = logins.map(login => [
         login.active ? '*' : '',
         login.tenantName,
-        login.id,
-        login.account ?? '',
+        login.accountEmail ?? login.accountId ?? '',
+        login.loginId,
         login.expired ? 'expired' : (login.accessExpiresAt?.slice(0, 16).replace('T', ' ') ?? ''),
         login.grantExpiresAt?.slice(0, 10) ?? (login.kind === 'login' && login.renewable ? 'no limit recorded' : '')
     ]);
-    const header = ['', 'TENANT', 'ID', 'ACCOUNT', 'ACCESS ENDS (UTC)', 'RENEWS UNTIL'];
+    const header = ['', 'TENANT', 'ACCOUNT', 'LOGIN ID', 'ACCESS ENDS (UTC)', 'RENEWS UNTIL'];
     const widths = header.map((title, column) => Math.max(title.length, ...rows.map(row => row[column]!.length)));
     const line = (cells: string[]) =>
         cells
@@ -131,7 +134,7 @@ export async function useLogin(query: string, options: LoginsOptions = {}, depen
         current => {
             const entries = loginEntries(current);
             if (entries.length === 0) throw new CliError(`No saved logins for ${label}. Run \`zynohosting login\`.`, 2, 'missing_config');
-            chosen = findEntry(entries, query, label);
+            chosen = findEntry(entries, query, label, options.account);
             return { ...current, activeLogin: chosen.id };
         },
         location
@@ -153,12 +156,17 @@ export async function whoami(
     if (options.all) return listLogins(options, dependencies);
     const { env, location, key, write, now } = context(options, dependencies);
     const file = await loadConfigFile(location);
-    const entry = selectEntry(file.profiles[key] ?? {}, options.tenant ?? env.ZYNOHOSTING_TENANT, describeProfileKey(key));
+    const entry = selectEntry(
+        file.profiles[key] ?? {},
+        options.tenant ?? env.ZYNOHOSTING_TENANT,
+        describeProfileKey(key),
+        options.account ?? env.ZYNOHOSTING_ACCOUNT
+    );
     if (!entry) throw missingCredentialError(key, file);
     const summary = summarize(entry, true, now);
     if (options.json) write(`${JSON.stringify({ profile: describeProfileKey(key), login: summary })}\n`);
     else {
-        const who = summary.account ? `${summary.account} (${summary.tenantName})` : summary.tenantName;
+        const who = summary.accountEmail ? `${summary.accountEmail} (${summary.tenantName})` : summary.tenantName;
         write(`Signed in to ${describeProfileKey(key)} as ${who}${summary.expired ? ' (expired)' : ''}.\n`);
     }
     return summary;

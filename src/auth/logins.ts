@@ -7,9 +7,28 @@ export type RenewalStoreKind = 'system' | 'file';
 export const API_KEY_LOGIN_ID = 'api-key';
 /** The id given to a login migrated from a saved credential that never recorded its tenant. */
 export const LEGACY_LOGIN_ID = 'unknown';
+/** The account part of a login id when the account could not be determined. */
+export const UNKNOWN_ACCOUNT = 'unknown';
+
+/** A login is one account in one tenant, keyed `<accountId>:<tenantId>`. */
+export function loginIdFor(accountId: string, tenantId: string): string {
+    return `${accountId}:${tenantId}`;
+}
+
+/** The `sub` claim of a JWT (the account id for a scoped token), or undefined if it cannot be read. Never verified. */
+export function jwtSubject(jwt: string): string | undefined {
+    try {
+        const payload = JSON.parse(Buffer.from(jwt.split('.')[1] ?? '', 'base64url').toString('utf8')) as { sub?: unknown };
+        return typeof payload.sub === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(payload.sub) ? payload.sub : undefined;
+    } catch {
+        return undefined;
+    }
+}
 
 /** One saved sign-in to one tenant. A profile holds one per tenant, keyed by tenant id. */
 export interface StoredLogin {
+    /** The account that approved the login. With `tenantId` it forms the login id. */
+    accountId?: string;
     tenantId: string;
     tenantName?: string;
     accountEmail?: string;
@@ -87,6 +106,7 @@ function parseLogin(value: unknown, fallbackId: string): StoredLogin | undefined
     if (!accessToken) return undefined;
     const tenantId = text(value.tenantId, 200) ?? fallbackId;
     return {
+        ...(text(value.accountId, 100) ? { accountId: text(value.accountId, 100)! } : {}),
         tenantId,
         ...(text(value.tenantName, 255) ? { tenantName: text(value.tenantName, 255)! } : {}),
         ...(text(value.accountEmail, 320) ? { accountEmail: text(value.accountEmail, 320)! } : {}),
@@ -173,19 +193,35 @@ export function parseStoredConfig(object: Record<string, unknown>): StoredConfig
  */
 export function normalizeStoredConfig(config: StoredConfig): StoredConfig {
     const { accessToken, tenantId, expiresAt, renewalKey, scopedToken, ...rest } = config;
-    if (!accessToken) return rest;
-    const id = tenantId ?? LEGACY_LOGIN_ID;
-    const logins = { ...rest.logins };
-    if (!(id in logins)) {
-        logins[id] = {
-            tenantId: id,
-            accessToken,
-            ...(expiresAt === undefined ? {} : { expiresAt }),
-            ...(renewalKey === undefined ? {} : { renewalKey }),
-            ...(scopedToken ? { scopedToken: true } : {})
-        };
+    let logins: Record<string, StoredLogin> = { ...rest.logins };
+    let activeLogin = rest.activeLogin;
+    if (accessToken) {
+        const id = tenantId ?? LEGACY_LOGIN_ID;
+        // Keyed by tenant for now; the re-keying below gives it its account.
+        if (!(id in logins)) {
+            logins[id] = {
+                tenantId: id,
+                accessToken,
+                ...(expiresAt === undefined ? {} : { expiresAt }),
+                ...(renewalKey === undefined ? {} : { renewalKey }),
+                ...(scopedToken ? { scopedToken: true } : {})
+            };
+        }
+        activeLogin ??= id;
     }
-    return { ...rest, logins, activeLogin: rest.activeLogin ?? id };
+    // Logins saved before accounts were part of the key (keyed by tenant id) move to `<accountId>:<tenantId>`. The
+    // account comes from the login, else the access token's `sub`, else the login is kept as `unknown:<tenantId>`.
+    const rekeyed: Record<string, StoredLogin> = {};
+    const renamed = new Map<string, string>();
+    for (const [key, login] of Object.entries(logins)) {
+        const accountId = login.accountId ?? jwtSubject(login.accessToken) ?? UNKNOWN_ACCOUNT;
+        const id = loginIdFor(accountId, login.tenantId);
+        renamed.set(key, id);
+        rekeyed[id] = { ...login, ...(accountId === UNKNOWN_ACCOUNT ? {} : { accountId }) };
+    }
+    logins = rekeyed;
+    if (activeLogin !== undefined && activeLogin !== API_KEY_LOGIN_ID) activeLogin = renamed.get(activeLogin) ?? activeLogin;
+    return { ...rest, ...(Object.keys(logins).length ? { logins } : {}), ...(activeLogin === undefined ? {} : { activeLogin }) };
 }
 
 export function hasStoredCredential(config: StoredConfig): boolean {
@@ -206,51 +242,69 @@ export function loginEntries(config: StoredConfig): LoginEntry[] {
 }
 
 export function entryName(entry: LoginEntry): string {
-    return entry.kind === 'api-key' ? 'API key' : (entry.login?.tenantName ?? entry.id);
+    return entry.kind === 'api-key' ? 'API key' : (entry.login?.tenantName ?? entry.login?.tenantId ?? entry.id);
 }
 
+/** `Tenant (account email) [login id]`, enough to tell apart two accounts in one tenant. */
 export function describeEntry(entry: LoginEntry): string {
     if (entry.kind === 'api-key') return 'API key';
-    return entry.login?.tenantName ? `${entry.login.tenantName} (${entry.id})` : entry.id;
+    const who = entry.login?.accountEmail ? ` (${entry.login.accountEmail})` : '';
+    return `${entryName(entry)}${who} [${entry.id}]`;
 }
 
-/** Matches an exact id first, then a case-insensitive tenant name that identifies exactly one entry. */
-export function findEntry(entries: LoginEntry[], query: string, profileLabel: string): LoginEntry {
-    const wanted = query.trim();
-    const byId = entries.find(entry => entry.id === wanted);
-    if (byId) return byId;
-    const lower = wanted.toLowerCase();
-    const byName = entries.filter(entry => entry.kind === 'login' && entryName(entry).toLowerCase() === lower);
-    if (byName.length === 1) return byName[0]!;
-    if (byName.length > 1) {
+function accountMatches(entry: LoginEntry, account: string): boolean {
+    const wanted = account.trim().toLowerCase();
+    return entry.kind === 'login' && (entry.login?.accountId?.toLowerCase() === wanted || entry.login?.accountEmail?.toLowerCase() === wanted);
+}
+
+/**
+ * Finds one login. `query` is a login id, a tenant id, or a tenant name (case-insensitive); `account` (an email or account
+ * id) narrows the match. Several matches are `login_ambiguous`, listing each login id with its account and tenant.
+ */
+export function findEntry(entries: LoginEntry[], query: string | undefined, profileLabel: string, account?: string): LoginEntry {
+    const wanted = query?.trim() ?? '';
+    let candidates: LoginEntry[];
+    if (!wanted) candidates = entries.filter(entry => entry.kind === 'login');
+    else {
+        const byId = entries.find(entry => entry.id === wanted);
+        const byTenantId = entries.filter(entry => entry.kind === 'login' && entry.login?.tenantId === wanted);
+        const lower = wanted.toLowerCase();
+        const byName = entries.filter(entry => entry.kind === 'login' && entryName(entry).toLowerCase() === lower);
+        candidates = byId ? [byId] : byTenantId.length ? byTenantId : byName;
+    }
+    if (account?.trim()) candidates = candidates.filter(entry => accountMatches(entry, account));
+    if (candidates.length === 1) return candidates[0]!;
+    const asked = [wanted && `"${wanted}"`, account?.trim() && `account "${account.trim()}"`].filter(Boolean).join(' with ');
+    if (candidates.length > 1) {
         throw new CliError(
-            `More than one saved login for ${profileLabel} is named "${wanted}": ${byName.map(describeEntry).join(', ')}. Use the tenant ID instead.`,
+            `More than one saved login for ${profileLabel} matches ${asked}: ${candidates.map(describeEntry).join('; ')}. Pass --account <email or account id>, or use a full login id.`,
             2,
             'login_ambiguous'
         );
     }
     throw new CliError(
         entries.length
-            ? `No saved login for ${profileLabel} matches "${wanted}". Saved logins: ${entries.map(describeEntry).join(', ')}.`
-            : `No saved login for ${profileLabel} matches "${wanted}".`,
+            ? `No saved login for ${profileLabel} matches ${asked}. Saved logins: ${entries.map(describeEntry).join('; ')}.`
+            : `No saved login for ${profileLabel} matches ${asked}.`,
         2,
         'login_not_found'
     );
 }
 
 /**
- * The login a command uses: an explicit tenant (--tenant, then ZYNOHOSTING_TENANT), the active login, then the only one.
- * Returns undefined when nothing is saved and throws `login_selection_required` when several exist and none is chosen.
+ * The login a command uses: an explicit tenant and/or account (--tenant/--account, then the ZYNOHOSTING_ variables), the
+ * active login, then the only one. Returns undefined when nothing is saved and throws `login_selection_required` when
+ * several exist and none is chosen.
  */
-export function selectEntry(config: StoredConfig, query: string | undefined, profileLabel: string): LoginEntry | undefined {
+export function selectEntry(config: StoredConfig, query: string | undefined, profileLabel: string, account?: string): LoginEntry | undefined {
     const entries = loginEntries(config);
-    if (query?.trim()) return findEntry(entries, query, profileLabel);
+    if (query?.trim() || account?.trim()) return findEntry(entries, query, profileLabel, account);
     if (entries.length === 0) return undefined;
     const active = config.activeLogin ? entries.find(entry => entry.id === config.activeLogin) : undefined;
     if (active) return active;
     if (entries.length === 1) return entries[0]!;
     throw new CliError(
-        `More than one login is saved for ${profileLabel}: ${entries.map(describeEntry).join(', ')}. Pass --tenant <name or id> (or set ZYNOHOSTING_TENANT), or run \`zynohosting logins use <tenant>\` to choose one.`,
+        `More than one login is saved for ${profileLabel}: ${entries.map(describeEntry).join('; ')}. Pass --tenant <name or id> (and --account <email> if a tenant has several accounts), set ZYNOHOSTING_TENANT, or run \`zynohosting logins use <tenant>\` to choose one.`,
         2,
         'login_selection_required'
     );

@@ -52,7 +52,7 @@ Trailing slashes are normalized away.
 
 ## Saved configuration schema
 
-The file is JSON, version 3, with one profile per environment. A profile holds one login per tenant, keyed by tenant id, and the id of the active one:
+The file is JSON, version 3, with one profile per environment. A profile holds one login per account and tenant, keyed `<accountId>:<tenantId>`, and the id of the active one:
 
 ```json
 {
@@ -63,7 +63,8 @@ The file is JSON, version 3, with one profile per environment. A profile holds o
             "suiteApiUrl": "https://suite.api.zyno.app",
             "authApiUrl": "https://auth.api.zyno.app",
             "logins": {
-                "00000000-0000-0000-0000-0000000000a1": {
+                "aaaaaaaa-0000-4000-8000-00000000000a:00000000-0000-0000-0000-0000000000a1": {
+                    "accountId": "aaaaaaaa-0000-4000-8000-00000000000a",
                     "tenantId": "00000000-0000-0000-0000-0000000000a1",
                     "tenantName": "Acme Co",
                     "accountEmail": "owner@example.com",
@@ -76,7 +77,17 @@ The file is JSON, version 3, with one profile per environment. A profile holds o
                     "permissionKeys": ["hosting.sitesRead", "hosting.deploy"],
                     "createdAt": 1784242800000
                 },
-                "00000000-0000-0000-0000-0000000000b2": {
+                "bbbbbbbb-0000-4000-8000-00000000000b:00000000-0000-0000-0000-0000000000a1": {
+                    "accountId": "bbbbbbbb-0000-4000-8000-00000000000b",
+                    "tenantId": "00000000-0000-0000-0000-0000000000a1",
+                    "tenantName": "Acme Co",
+                    "accountEmail": "bob@example.com",
+                    "accessToken": "...",
+                    "expiresAt": 1784246400000,
+                    "scopedToken": true
+                },
+                "aaaaaaaa-0000-4000-8000-00000000000a:00000000-0000-0000-0000-0000000000b2": {
+                    "accountId": "aaaaaaaa-0000-4000-8000-00000000000a",
                     "tenantId": "00000000-0000-0000-0000-0000000000b2",
                     "tenantName": "Globex",
                     "accessToken": "...",
@@ -84,7 +95,7 @@ The file is JSON, version 3, with one profile per environment. A profile holds o
                     "scopedToken": true
                 }
             },
-            "activeLogin": "00000000-0000-0000-0000-0000000000a1"
+            "activeLogin": "aaaaaaaa-0000-4000-8000-00000000000a:00000000-0000-0000-0000-0000000000a1"
         },
         "alpha": {
             "apiUrl": "https://hosting.api-alpha.zyno.dev",
@@ -118,9 +129,9 @@ If the selected profile has no credential but others do, the command fails with 
 
 ### Migration
 
-The file's `version` is 3 because older builds that know only version 2 would read the new profile shape as having no login and rewrite it. A build that knows only version 2 refuses a version 3 file with an `invalid_config` error ("unsupported config version 3") and leaves it untouched, so no login is lost. This CLI reads version 2 files, migrates them, and writes version 3 on the next save. Released builds up to 0.5.0 read only the flat `hosting-cli.json` at the default location and are unaffected by the new file there. The exception is an explicit `ZYNOHOSTING_CONFIG`: this build rewrites a flat file there as version 3, and 0.5.0 reads a version 3 file as empty and would overwrite it. Do not point 0.5.0 and newer builds at the same `ZYNOHOSTING_CONFIG` file.
+The file's `version` is 3 because older builds that know only version 2 would read the new profile shape as having no login and rewrite it. A build that knows only version 2 refuses a version 3 file with an `invalid_config` error ("unsupported config version 3") and leaves it untouched, so no login is lost. Logins saved before accounts were part of the key (keyed by tenant id, in version 2 files and in version 3 files from earlier builds of this branch) are re-keyed on read: the account comes from the stored `accountId`, else from the `sub` claim of the access token, which is the account id for a scoped token. A login whose account cannot be read stays usable under `unknown:<tenantId>`. This CLI reads version 2 files, migrates them, and writes version 3 on the next save. Released builds up to 0.5.0 read only the flat `hosting-cli.json` at the default location and are unaffected by the new file there. The exception is an explicit `ZYNOHOSTING_CONFIG`: this build rewrites a flat file there as version 3, and 0.5.0 reads a version 3 file as empty and would overwrite it. Do not point 0.5.0 and newer builds at the same `ZYNOHOSTING_CONFIG` file.
 
-A profile saved by an earlier version holds one credential directly (`accessToken`, `tenantId`, `expiresAt`, `renewalKey`, `scopedToken`). It is read as a single login keyed by its tenant id (`unknown` if the tenant was never recorded) and made active, and it is written in the format above the next time anything is saved. The tenant name is filled in the next time the login renews. The same applies to the flat `hosting-cli.json`. A build that knows only version 2 refuses the new file with an error rather than reading it as empty.
+A profile saved by an earlier version holds one credential directly (`accessToken`, `tenantId`, `expiresAt`, `renewalKey`, `scopedToken`). It is read as a single login, re-keyed as described above (`unknown` stands in for a tenant or account that was never recorded) and made active, and it is written in the format above the next time anything is saved. The tenant name is filled in the next time the login renews. The same applies to the flat `hosting-cli.json`. A build that knows only version 2 refuses the new file with an error rather than reading it as empty.
 
 A file without a `version` that has top-level fields (`apiUrl`, `apiKey`, ...) is read as a single profile, keyed from its stored `apiUrl` (production when absent). A legacy login to alpha is therefore found with `--environment alpha`, not by a command without options. The v2 file is created the next time anything is saved (for an explicit `ZYNOHOSTING_CONFIG` holding a flat object, that file is rewritten in place); the legacy credential is never dropped.
 

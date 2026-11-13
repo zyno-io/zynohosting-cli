@@ -2,7 +2,7 @@
 
 All tools return JSON as structured content and as a text content block. Argument names use snake case. There are 22 tools.
 
-Every tool except `login`, `list_logins` and `use_login` also accepts an optional `tenant` (a tenant name or id from `list_logins`). It picks which saved login to use for that one call and never changes the default. Omit it to use the default login. The tool schemas show it, so it is not repeated in the tables below.
+Every tool except `login`, `list_logins` and `use_login` also accepts an optional `tenant` (a login id, tenant id, or tenant name from `list_logins`) and an optional `account` (an email or account id). They pick which saved login to use for that one call and never change the default. A tenant with several accounts signed in needs `account` (or the full login id), otherwise the call fails with `login_ambiguous`. Omit it to use the default login. The tool schemas show it, so it is not repeated in the tables below.
 
 ## Site discovery
 
@@ -70,11 +70,11 @@ Each tenant has one saved login. Signing in again to the same tenant replaces it
 
 ### `list_logins`
 
-Lists the saved logins for this environment, one per tenant: `id`, `tenantName`, `account`, `active` (the default), `renewable`, `accessExpiresAt`, `grantExpiresAt`, and `expired`. It takes no input and changes nothing. When there is more than one login, ask the user which organization to work in before acting, then pass its name or id as `tenant`.
+Lists the saved logins for this environment, one per account and tenant: `loginId`, `accountId`, `accountEmail`, `tenantId`, `tenantName`, `active` (the default), `renewable`, `accessExpiresAt`, `grantExpiresAt`, and `expired`. It takes no input and changes nothing. When there is more than one login, ask the user which organization to work in before acting, then pass its name or id as `tenant`.
 
 ### `use_login`
 
-Makes a saved login the default for later calls, without signing in again. Input: `tenant` (required), a tenant name or id. It clears pending deploy, promote and download plans, because the context changes. It fails with `fixed_credential_source` when the MCP process was given an API key or token. To use another login for one call only, pass `tenant` on that tool instead.
+Makes a saved login the default for later calls, without signing in again. Input: `tenant` (required: a login id, tenant id, or tenant name) and optional `account` to narrow it. It clears pending deploy, promote and download plans, because the context changes. It fails with `fixed_credential_source` when the MCP process was given an API key or token. To use another login for one call only, pass `tenant` on that tool instead.
 
 ### `list_sites`
 

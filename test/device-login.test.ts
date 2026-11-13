@@ -71,12 +71,12 @@ test('a device sign-in waits through pending and slow_down, then saves the appro
         // After slow_down the client really waits the longer interval before polling again.
         assert(polls[2]!.at - polls[1]!.at >= 200, `waited ${polls[2]!.at - polls[1]!.at}ms`);
 
-        const saved = (await loadStoredConfig(context.file, 'alpha')).logins?.[TENANT_ID];
+        const saved = (await loadStoredConfig(context.file, 'alpha')).logins?.[`unknown:${TENANT_ID}`];
         assert.equal(saved?.accessToken, JWT);
         assert.equal(saved?.tenantName, 'Acme Co');
         assert.equal(saved?.accountEmail, 'owner@example.com');
         assert.equal(typeof saved?.grantExpiresAt, 'number');
-        assert.equal((await loadStoredConfig(context.file, 'alpha')).activeLogin, TENANT_ID);
+        assert.equal((await loadStoredConfig(context.file, 'alpha')).activeLogin, `unknown:${TENANT_ID}`);
 
         const start = context.auth.requests.find(request => request.path.endsWith('/device/start'))!;
         assert.deepEqual(Object.keys(start.body).sort(), ['description', 'permissionKeys', 'renewable']);
@@ -114,7 +114,7 @@ test('a renewable device sign-in with the file store keeps the token out of the 
         assert.equal(start.body.requestedLifetimeSecs, 604_800);
         assert.equal(start.body.renewable, true);
 
-        const saved = (await loadStoredConfig(context.file, 'alpha')).logins?.[TENANT_ID];
+        const saved = (await loadStoredConfig(context.file, 'alpha')).logins?.[`unknown:${TENANT_ID}`];
         assert.equal(saved?.renewalStore, 'file');
         assert.match(saved?.renewalKey ?? '', /^[0-9a-f-]{36}$/);
         assert.doesNotMatch(await readFile(context.file, 'utf8'), /zrt_/);
@@ -139,7 +139,7 @@ test('ZYNOHOSTING_CREDENTIAL_STORE=file applies to renewable logins and is ignor
             { ...context.options, timeoutSeconds: 20 },
             { ...context.dependencies, env: { ...context.dependencies.env, ZYNOHOSTING_CREDENTIAL_STORE: 'file' } }
         );
-        assert.equal((await loadStoredConfig(context.file, 'alpha')).logins?.[TENANT_ID]?.renewalKey, undefined);
+        assert.equal((await loadStoredConfig(context.file, 'alpha')).logins?.[`unknown:${TENANT_ID}`]?.renewalKey, undefined);
         await assert.rejects(stat(join(context.root, 'config.renewal-tokens.json')));
     } finally {
         await context.auth.close();
@@ -306,7 +306,7 @@ test('--no-wait saves the pending sign-in and --resume completes it', async () =
         assert.equal(resumed.status, 'authenticated');
         const config = await loadStoredConfig(context.file, 'alpha');
         assert.equal(config.pendingDeviceLogin, undefined);
-        assert.equal(config.logins?.[TENANT_ID]?.accessToken, JWT);
+        assert.equal(config.logins?.[`unknown:${TENANT_ID}`]?.accessToken, JWT);
         assert.equal(store.values.size, 1);
         // The renewal request the resumed sign-in checked against the saved request: renewable and the same permissions.
         assertNoSecrets(visible(context));
@@ -394,7 +394,7 @@ test('an older server that omits tenant and lifetime details is accepted', async
         assert(result.status === 'authenticated');
         assert.equal(result.tenantName, 'Acme Co');
         assert.equal(result.grantExpiresAt, undefined);
-        const saved = (await loadStoredConfig(context.file, 'alpha')).logins?.[TENANT_ID];
+        const saved = (await loadStoredConfig(context.file, 'alpha')).logins?.[`unknown:${TENANT_ID}`];
         assert.equal(saved?.grantExpiresAt, undefined);
         assert.equal(saved?.accountEmail, undefined);
     } finally {

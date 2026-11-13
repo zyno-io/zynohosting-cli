@@ -82,22 +82,30 @@ export async function createHostingMcpServer(options: McpServerOptions): Promise
             .min(1)
             .max(255)
             .optional()
-            .describe('Saved login (tenant name or id from list_logins) to use for this call only. Omit to use the default login.');
+            .describe(
+                'Saved login to use for this call only: a login id, tenant id, or tenant name from list_logins. Omit to use the default login.'
+            );
+        const accountField = z
+            .string()
+            .min(1)
+            .max(320)
+            .optional()
+            .describe('Account email or id that narrows tenant when several accounts are signed in to the same tenant.');
         const extended =
             schema === undefined
-                ? { tenant: tenantField }
+                ? { tenant: tenantField, account: accountField }
                 : schema instanceof z.ZodObject
-                  ? schema.extend({ tenant: tenantField })
-                  : { ...(schema as Record<string, z.ZodType>), tenant: tenantField };
+                  ? schema.extend({ tenant: tenantField, account: accountField })
+                  : { ...(schema as Record<string, z.ZodType>), tenant: tenantField, account: accountField };
         return registerWithTenant(
             name,
             { ...config, inputSchema: extended } as never,
             ((...args: unknown[]) => {
                 // A tool that had no input is now called with (input, extra) but its handler still expects (extra).
-                const [input, extra] = args as [{ tenant?: string }, unknown];
-                const { tenant, ...rest } = input ?? {};
+                const [input, extra] = args as [{ tenant?: string; account?: string }, unknown];
+                const { tenant, account, ...rest } = input ?? {};
                 const forward = schema === undefined ? [extra] : [rest, extra];
-                return authentication.tenant.run(tenant, () => (handler as (...forwarded: unknown[]) => unknown)(...forward));
+                return authentication.tenant.run({ tenant, account }, () => (handler as (...forwarded: unknown[]) => unknown)(...forward));
             }) as never
         );
     }) as typeof server.registerTool;
@@ -222,10 +230,13 @@ export async function createHostingMcpServer(options: McpServerOptions): Promise
             title: 'Choose the default ZynoHosting login',
             description:
                 'Make a saved login the default for later calls, without signing in again. Pass the tenant name or id from list_logins. To use a different login for one call only, pass tenant on that tool instead. Pending deployment, promotion, and download plans are cleared because the context changes.',
-            inputSchema: { tenant: z.string().min(1).max(255).describe('Tenant name or id from list_logins.') },
+            inputSchema: {
+                tenant: z.string().min(1).max(255).describe('Login id, tenant id, or tenant name from list_logins.'),
+                account: z.string().min(1).max(320).optional().describe('Account email or id, when several accounts are signed in to that tenant.')
+            },
             annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false }
         },
-        async ({ tenant }) => result(await authentication.useLogin(tenant))
+        async ({ tenant, account }) => result(await authentication.useLogin(tenant, account))
     );
 
     registerFormsMcp(server, () => authentication.clients());
@@ -542,12 +553,18 @@ interface PendingMcpLogin {
     abort: AbortController;
 }
 
+/** Which saved login one call names. */
+interface LoginChoice {
+    tenant?: string | undefined;
+    account?: string | undefined;
+}
+
 /** Clients are cached per saved login: '' is the default login, any other key is a tenant named for one call. */
 const DEFAULT_LOGIN = '';
 
 class McpAuthentication {
-    /** Carries the `tenant` input of the tool call being handled. */
-    readonly tenant = new AsyncLocalStorage<string | undefined>();
+    /** Carries the `tenant` and `account` inputs of the tool call being handled. */
+    readonly tenant = new AsyncLocalStorage<LoginChoice>();
     private readonly current = new Map<string, AuthenticatedMcpClients>();
     private readonly pending = new Map<string, Promise<AuthenticatedMcpClients>>();
     private readonly stopRefresh = new Map<string, () => void>();
@@ -564,13 +581,15 @@ class McpAuthentication {
         private readonly onLoginComplete: () => void
     ) {}
 
-    async clients(tenant: string | undefined = this.tenant.getStore()): Promise<AuthenticatedMcpClients> {
-        const key = tenant?.trim() || DEFAULT_LOGIN;
+    async clients(choice: LoginChoice | undefined = this.tenant.getStore()): Promise<AuthenticatedMcpClients> {
+        const tenant = choice?.tenant?.trim() || undefined;
+        const account = choice?.account?.trim() || undefined;
+        const key = tenant || account ? `${tenant ?? ''}\u0000${account ?? ''}` : DEFAULT_LOGIN;
         const cached = this.current.get(key);
         if (cached) return cached;
         let loading = this.pending.get(key);
         if (!loading) {
-            const started: Promise<AuthenticatedMcpClients> = this.load(key).finally(() => {
+            const started: Promise<AuthenticatedMcpClients> = this.load(key, { tenant, account }).finally(() => {
                 if (this.pending.get(key) === started) this.pending.delete(key);
             });
             loading = started;
@@ -593,11 +612,11 @@ class McpAuthentication {
         };
     }
 
-    async useLogin(tenant: string): Promise<Record<string, unknown>> {
+    async useLogin(tenant: string, account?: string): Promise<Record<string, unknown>> {
         this.requireSwitchableCredentialSource();
         this.lastSignIn = undefined;
         const env = this.options.env ?? process.env;
-        const active = await useLogin(tenant, this.selectors(), { env, write: () => {} });
+        const active = await useLogin(tenant, { ...this.selectors(), ...(account ? { account } : {}) }, { env, write: () => {} });
         this.resetClients();
         this.onLoginComplete();
         return { active, message: 'This is now the default login. Any pending deployment, promotion, or download plans were cleared.' };
@@ -738,6 +757,8 @@ class McpAuthentication {
                 authenticated: true,
                 status: 'authenticated',
                 expiresAt: done.accessExpiresAt,
+                loginId: done.loginId,
+                ...(done.accountId ? { accountId: done.accountId } : {}),
                 tenant: done.tenantId,
                 ...(done.tenantName ? { tenantName: done.tenantName } : {}),
                 ...(done.account ? { account: done.account } : {}),
@@ -749,7 +770,7 @@ class McpAuthentication {
         const current = this.current.get(DEFAULT_LOGIN);
         if (current) return authenticatedLoginStatus(current.config);
         try {
-            return authenticatedLoginStatus((await this.clients(DEFAULT_LOGIN)).config);
+            return authenticatedLoginStatus((await this.clients({})).config);
         } catch (error) {
             if (error instanceof CliError && error.code === 'missing_config') {
                 return { authenticated: false, status: 'not_started', message: 'No saved ZynoHosting login. Call login with action "start".' };
@@ -784,17 +805,20 @@ class McpAuthentication {
         return completed;
     }
 
-    private async load(key: string): Promise<AuthenticatedMcpClients> {
+    private async load(key: string, choice: LoginChoice): Promise<AuthenticatedMcpClients> {
         const generation = this.generation;
-        const config = await this.resolve(key === DEFAULT_LOGIN ? undefined : key);
+        const config = await this.resolve(choice);
         // The default login changed while this resolved, so what it read may be the old one: use it for this call only.
         if (generation !== this.generation) return this.build(config);
         return this.setCurrent(key, config);
     }
 
-    private async resolve(tenant?: string): Promise<ResolvedConfig> {
+    private async resolve(choice: LoginChoice = {}): Promise<ResolvedConfig> {
         try {
-            return await resolveConfig({ ...this.options, ...(tenant ? { tenant } : {}) }, this.options.env ?? process.env);
+            return await resolveConfig(
+                { ...this.options, ...(choice.tenant ? { tenant: choice.tenant } : {}), ...(choice.account ? { account: choice.account } : {}) },
+                this.options.env ?? process.env
+            );
         } catch (error) {
             if (error instanceof CliError && error.code === 'missing_config') {
                 throw new CliError('ZynoHosting is not signed in. Call the login MCP tool to start the sign-in flow.', error.exitCode, error.code);
@@ -865,7 +889,14 @@ function authenticatedLoginStatus(config: ResolvedConfig): Record<string, unknow
         authenticated: true,
         status: 'authenticated',
         expiresAt: config.credential.type === 'bearer' ? (config.credential.expiresAt ?? null) : null,
-        ...(login?.kind === 'login' ? { tenant: login.id, ...(login.tenantName ? { tenantName: login.tenantName } : {}) } : {}),
+        ...(login?.kind === 'login'
+            ? {
+                  loginId: login.id,
+                  ...(login.accountId ? { accountId: login.accountId } : {}),
+                  tenant: login.tenantId ?? login.id,
+                  ...(login.tenantName ? { tenantName: login.tenantName } : {})
+              }
+            : {}),
         ...(login?.accountEmail ? { account: login.accountEmail } : {}),
         ...(login?.grantExpiresAt === undefined ? {} : { grantExpiresAt: new Date(login.grantExpiresAt).toISOString() }),
         message:

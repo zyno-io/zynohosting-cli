@@ -4,7 +4,15 @@ import { hostname } from 'node:os';
 import type { DeviceCredential, DeviceStart, ScopedTokenClient } from '../api/scoped-token-client.js';
 
 import { ScopedTokenClient as ScopedTokenClientImpl } from '../api/scoped-token-client.js';
-import { API_KEY_LOGIN_ID, type PendingDeviceLogin, type StoredConfig, type StoredLogin } from '../auth/logins.js';
+import {
+    API_KEY_LOGIN_ID,
+    jwtSubject,
+    loginIdFor,
+    type PendingDeviceLogin,
+    type StoredConfig,
+    type StoredLogin,
+    UNKNOWN_ACCOUNT
+} from '../auth/logins.js';
 import { createRenewalTokenStore, type RenewalTokenStore } from '../auth/renewal-token-store.js';
 import {
     configLocation,
@@ -92,6 +100,8 @@ export type LoginResult =
           status: 'authenticated';
           flow: LoginFlow;
           profile: string;
+          loginId: string;
+          accountId?: string;
           tenantId: string;
           tenantName?: string;
           account?: string;
@@ -117,6 +127,7 @@ export interface LoginDependencies {
 
 interface IssuedCredential {
     accessToken: string;
+    accountId?: string | undefined;
     tenantId: string;
     expiresAt: number;
     renewalToken?: string | undefined;
@@ -215,7 +226,11 @@ export async function login(options: LoginOptions, dependencies: LoginDependenci
     /** Stores the credential and makes it the active login for its tenant. Shared by the browser and device flows. */
     const persist = async (credential: IssuedCredential, approvedBy?: { email?: string | undefined; tenantName?: string | undefined }) => {
         const renewalKey = credential.renewalToken ? randomUUID() : undefined;
+        // The account comes from the server's credential, else from the token's `sub` (the account id for a scoped token).
+        const accountId = credential.accountId ?? jwtSubject(credential.accessToken);
+        const loginId = loginIdFor(accountId ?? UNKNOWN_ACCOUNT, credential.tenantId);
         const login: StoredLogin = {
+            ...(accountId ? { accountId } : {}),
             tenantId: credential.tenantId,
             ...((credential.tenantName ?? approvedBy?.tenantName) ? { tenantName: (credential.tenantName ?? approvedBy?.tenantName)! } : {}),
             ...((credential.accountEmail ?? approvedBy?.email) ? { accountEmail: (credential.accountEmail ?? approvedBy?.email)! } : {}),
@@ -233,9 +248,9 @@ export async function login(options: LoginOptions, dependencies: LoginDependenci
             await mutateProfile(
                 profileKey,
                 current => {
-                    previous = current.logins?.[credential.tenantId];
+                    previous = current.logins?.[loginId];
                     const { pendingDeviceLogin: _pending, ...rest } = urlFields(current);
-                    return { ...rest, logins: { ...current.logins, [credential.tenantId]: login }, activeLogin: credential.tenantId };
+                    return { ...rest, logins: { ...current.logins, [loginId]: login }, activeLogin: loginId };
                 },
                 file
             );
@@ -245,14 +260,14 @@ export async function login(options: LoginOptions, dependencies: LoginDependenci
             throw error;
         }
         if (previous) {
-            await removeLegacyConfigIfMatching(file, { logins: { [credential.tenantId]: previous } });
+            await removeLegacyConfigIfMatching(file, { logins: { [loginId]: previous } });
             await retire(previous);
         }
         return login;
     };
 
     /**
-     * A login for the same tenant was replaced: revoke its grant (best effort, never blocking the new login), then drop
+     * A login for the same account and tenant was replaced: revoke its grant (best effort, never blocking the new login), then drop
      * its renewal token. An expired access token is renewed first, as logout does, because revoking needs a live one.
      */
     const retire = async (previous: StoredLogin): Promise<void> => {
@@ -287,6 +302,8 @@ export async function login(options: LoginOptions, dependencies: LoginDependenci
             status: 'authenticated',
             flow,
             profile: profileKey,
+            loginId: loginIdFor(login.accountId ?? UNKNOWN_ACCOUNT, login.tenantId),
+            ...(login.accountId ? { accountId: login.accountId } : {}),
             tenantId: login.tenantId,
             ...(login.tenantName ? { tenantName: login.tenantName } : {}),
             ...(login.accountEmail ? { account: login.accountEmail } : {}),
@@ -307,6 +324,8 @@ export async function login(options: LoginOptions, dependencies: LoginDependenci
             status: 'authenticated',
             flow,
             profile: describeProfileKey(profileKey),
+            loginId: result.loginId,
+            ...(result.accountId ? { accountId: result.accountId } : {}),
             tenantId: result.tenantId,
             ...(result.tenantName ? { tenantName: result.tenantName } : {}),
             ...(result.account ? { account: result.account } : {}),
@@ -565,6 +584,7 @@ function toIssued(credential: UserCredential | DeviceCredential): IssuedCredenti
     const token = 'jwt' in credential ? credential.jwt : credential.accessToken;
     return {
         accessToken: token,
+        accountId: credential.accountId,
         tenantId: credential.tenantId,
         expiresAt: credential.expiresAt,
         renewalToken: credential.renewalToken,

@@ -81,7 +81,7 @@ A renewable login keeps its renewal token in the system credential store. A clou
 
 ### Several logins
 
-A person can belong to several organizations (tenants). The CLI keeps one login for each. Before you change anything, run `zynohosting logins --json`. If there is more than one login, ask the user which organization they mean, then pass `--tenant "<name or id>"` on every command, for example `zynohosting sites list --tenant "Acme Co"`. Do not rely on the default login, and do not run `logins use` unless the user asks to change the default. Signing in again to the same organization replaces its login; signing in to another one adds a login. `zynohosting logout --tenant "<name or id>"` removes one login.
+A person can belong to several organizations (tenants). A login is one account in one organization, and the CLI keeps each one. Before you change anything, run `zynohosting logins --json`. If there is more than one login, ask the user which organization they mean, then pass `--tenant "<name or id>"` on every command, for example `zynohosting sites list --tenant "Acme Co"`. If two accounts are signed in to that organization the command fails with `login_ambiguous` and lists them; ask the user which account, then add `--account <email>`. Do not rely on the default login, and do not run `logins use` unless the user asks to change the default. Signing in again as the same account to the same organization replaces that login; signing in as another account or to another organization adds a login. `zynohosting logout --tenant "<name or id>" [--account <email>]` removes one login.
 
 ### Sign-in errors
 
@@ -96,7 +96,7 @@ A person can belong to several organizations (tenants). The CLI keeps one login 
 | `grant_expired`                                                  | The approved time ran out. Sign in again and ask the user for a longer time.                   |
 | `credential_store_unavailable`, `credential_store_insecure`      | See the credential storage section above. Never loosen file permissions yourself.              |
 | `invalid_lifetime`                                               | Use 1h, 1d, 7d or 30d, and `--renewable` for anything above 1h.                                |
-| `login_selection_required`, `login_not_found`, `login_ambiguous` | Ask the user which organization, then pass `--tenant`.                                         |
+| `login_selection_required`, `login_not_found`, `login_ambiguous` | Ask the user which organization (and account), then pass `--tenant` and `--account`.           |
 
 A token cannot gain permissions later. On `login_expired`, a permission error (exit 3), or a need for more scope, run `zynohosting logout` and then `login` with the complete set. `zynohosting login --help` lists every valid permission. Invented keys are rejected.
 

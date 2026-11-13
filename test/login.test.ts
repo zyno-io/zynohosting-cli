@@ -75,11 +75,11 @@ test('browser login accepts a one-shot SPA form POST and saves Bearer credential
     assert.equal(stored.apiUrl, API_URL);
     assert.equal(stored.suiteApiUrl, SUITE_API_URL);
     assert.equal(stored.authApiUrl, AUTH_API_URL);
-    const saved = stored.logins?.[TENANT_ID];
+    const saved = stored.logins?.[`unknown:${TENANT_ID}`];
     assert.equal(saved?.accessToken, JWT);
     assert.equal(saved?.tenantId, TENANT_ID);
     assert.equal(typeof saved?.expiresAt, 'number');
-    assert.equal(stored.activeLogin, TENANT_ID);
+    assert.equal(stored.activeLogin, `unknown:${TENANT_ID}`);
     assert.equal(stored.apiKey, undefined);
     assert.equal(saved?.scopedToken, true);
     assert.match(output.join(''), /login complete/i);
@@ -193,7 +193,7 @@ test('renewable browser login requests exact scopes and stores only a credential
     );
 
     const stored = await loadStoredConfig(file, 'alpha');
-    const saved = stored.logins?.[TENANT_ID];
+    const saved = stored.logins?.[`unknown:${TENANT_ID}`];
     assert.equal(saved?.scopedToken, true);
     assert.match(saved?.renewalKey ?? '', /^[0-9a-f-]{36}$/);
     assert.equal(store.values.get(saved!.renewalKey!), renewalToken);
@@ -339,9 +339,15 @@ test('loopback accepts the tenant, account and grant end the portal adds, and re
         assert.equal((await post({ grantExpiresAt: 'soon' })).status, 400);
         assert.equal((await post({ tenantName: 'Bad\u0007Name' })).status, 400);
         assert.equal((await post({ accountEmail: 'x'.repeat(400) })).status, 400);
+        assert.equal((await post({ accountId: 'bad id!' })).status, 400);
         const grantExpiresAt = Date.now() + 30 * 86_400_000;
-        assert.equal((await post({ tenantName: 'Acme Co', accountEmail: 'owner@example.com', grantExpiresAt: String(grantExpiresAt) })).status, 200);
+        assert.equal(
+            (await post({ accountId: 'acct-1', tenantName: 'Acme Co', accountEmail: 'owner@example.com', grantExpiresAt: String(grantExpiresAt) }))
+                .status,
+            200
+        );
         const credential = await loopback.result;
+        assert.equal(credential.accountId, 'acct-1');
         assert.equal(credential.tenantName, 'Acme Co');
         assert.equal(credential.accountEmail, 'owner@example.com');
         assert.equal(credential.grantExpiresAt, grantExpiresAt);
@@ -496,7 +502,7 @@ test('saved browser credentials resolve for deployments and expire locally', asy
         suiteApiUrl: SUITE_API_URL,
         authApiUrl: AUTH_API_URL,
         credential: { type: 'bearer', accessToken: JWT, tenantId: TENANT_ID, expiresAt: EXPIRATION },
-        login: { id: TENANT_ID, kind: 'login' }
+        login: { id: `unknown:${TENANT_ID}`, kind: 'login', tenantId: TENANT_ID }
     });
 
     await updateProfile('alpha', { apiUrl: API_URL, accessToken: JWT, tenantId: TENANT_ID, expiresAt: Date.now() - 1 }, file);
@@ -558,8 +564,8 @@ test('an expiring renewable login rotates once across concurrent config resoluti
     assert.equal(second.credential.type === 'bearer' && second.credential.accessToken, 'new.header.signature');
     assert.equal(renewals, 1);
     assert.equal(store.values.get(renewalKey), 'zrt_new');
-    assert.equal((await loadStoredConfig(file, 'alpha')).logins?.[TENANT_ID]?.accessToken, 'new.header.signature');
-    assert.equal((await loadStoredConfig(file, 'alpha')).logins?.[TENANT_ID]?.expiresAt, newExpiration);
+    assert.equal((await loadStoredConfig(file, 'alpha')).logins?.[`unknown:${TENANT_ID}`]?.accessToken, 'new.header.signature');
+    assert.equal((await loadStoredConfig(file, 'alpha')).logins?.[`unknown:${TENANT_ID}`]?.expiresAt, newExpiration);
 });
 
 test('an explicit SPA login URL works with a custom Hosting API hostname', () => {

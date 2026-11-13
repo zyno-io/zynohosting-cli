@@ -83,6 +83,7 @@ test('list_logins, use_login and a per-call tenant choose between saved logins',
             tools.find(tool => tool.name === name)!.inputSchema as { properties?: Record<string, unknown>; required?: string[] };
         for (const name of ['list_sites', 'get_site', 'plan_deploy', 'list_forms', 'create_basic_form']) {
             assert(schemaOf(name).properties && 'tenant' in schemaOf(name).properties!, `${name} should accept tenant`);
+            assert('account' in schemaOf(name).properties!, `${name} should accept account`);
             assert(!(schemaOf(name).required ?? []).includes('tenant'), `${name} tenant must be optional`);
         }
         assert.equal(schemaOf('login').properties && 'tenant' in schemaOf('login').properties!, false);
@@ -91,13 +92,13 @@ test('list_logins, use_login and a per-call tenant choose between saved logins',
 
         const listed = (await client.callTool({ name: 'list_logins', arguments: {} })).structuredContent as {
             profile: string;
-            logins: { id: string; tenantName: string; active: boolean }[];
+            logins: { loginId: string; tenantName: string; active: boolean }[];
         };
         assert.deepEqual(
-            listed.logins.map(item => [item.id, item.tenantName, item.active]),
+            listed.logins.map(item => [item.loginId, item.tenantName, item.active]),
             [
-                [ACME, 'Acme', true],
-                [GLOBEX, 'Globex', false]
+                [`unknown:${ACME}`, 'Acme', true],
+                [`unknown:${GLOBEX}`, 'Globex', false]
             ]
         );
         assert(!JSON.stringify(listed).includes('jwt.signature'));
@@ -120,7 +121,7 @@ test('list_logins, use_login and a per-call tenant choose between saved logins',
         assert.equal(status.tenant, GLOBEX);
         assert.equal(status.tenantName, 'Globex');
         assert.equal(status.account, 'owner@example.com');
-        assert.match(await readFile(file, 'utf8'), new RegExp(`"activeLogin": "${GLOBEX}"`));
+        assert.match(await readFile(file, 'utf8'), new RegExp(`"activeLogin": "unknown:${GLOBEX}"`));
     } finally {
         await close();
         await hosting.close();

@@ -270,7 +270,9 @@ test('refresh updates only its profile and keeps a profile written while it was 
     assert.equal(resolved.credential.type === 'bearer' && resolved.credential.accessToken, 'new.jwt.signature');
 
     const raw = await rawFile(file);
-    const renewed = (raw.profiles?.alpha?.logins as Record<string, Record<string, unknown>> | undefined)?.['00000000-0000-0000-0000-000000000024'];
+    const renewed = (raw.profiles?.alpha?.logins as Record<string, Record<string, unknown>> | undefined)?.[
+        'unknown:00000000-0000-0000-0000-000000000024'
+    ];
     assert.equal(renewed?.accessToken, 'new.jwt.signature');
     assert.equal(renewed?.expiresAt, expiresAt);
     assert.equal(renewed?.renewalKey, RENEWAL_KEY);
@@ -459,8 +461,8 @@ test('refresh migrates a legacy login into the v2 file without touching the lega
         })
     });
     const migrated = (await rawFile(profiles)).profiles?.production;
-    assert.equal((migrated?.logins as Record<string, Record<string, unknown>>).unknown?.accessToken, 'new.jwt.signature');
-    assert.equal(migrated?.activeLogin, 'unknown');
+    assert.equal((migrated?.logins as Record<string, Record<string, unknown>>)['unknown:unknown']?.accessToken, 'new.jwt.signature');
+    assert.equal(migrated?.activeLogin, 'unknown:unknown');
     assert.equal(migrated?.accessToken, undefined);
     assert.equal(await readFile(legacy, 'utf8'), legacyText);
 });

@@ -40,14 +40,19 @@ export type HostingEnvironment = 'production' | 'alpha' | 'dev';
 
 export interface ConfigOverrides extends Omit<StoredConfig, 'logins' | 'activeLogin' | 'pendingDeviceLogin'> {
     environment?: HostingEnvironment;
-    /** Tenant name or id of the saved login to use for this call only, instead of the active one. */
+    /** Login id, tenant id, or tenant name of the saved login to use for this call only, instead of the active one. */
     tenant?: string;
+    /** Account email or id that narrows `tenant` when several accounts are signed in to the same tenant. */
+    account?: string;
 }
 
 /** The saved login a resolved credential came from. */
 export interface ResolvedLogin {
+    /** The login id: `<accountId>:<tenantId>`, or `api-key`. */
     id: string;
     kind: 'login' | 'api-key';
+    accountId?: string;
+    tenantId?: string;
     tenantName?: string;
     accountEmail?: string;
     grantExpiresAt?: number;
@@ -385,6 +390,7 @@ async function resolveConfigWithSource(
     const selection = preselected ?? selectionForKey(forced!.key, stored);
     const apiUrl = selection.apiUrl;
     const tenantQuery = forced ? forced.loginId : (overrides.tenant ?? env.ZYNOHOSTING_TENANT);
+    const accountQuery = forced ? undefined : (overrides.account ?? env.ZYNOHOSTING_ACCOUNT);
     if (forced !== undefined) {
         overrides = {};
         env = isolatedEnvironment(env);
@@ -404,15 +410,19 @@ async function resolveConfigWithSource(
               'environment'
           );
     const injected = overrideCredential ?? environmentCredential;
-    if (injected && !forced && (overrides.tenant?.trim() || env.ZYNOHOSTING_TENANT?.trim())) {
+    if (
+        injected &&
+        !forced &&
+        (overrides.tenant?.trim() || env.ZYNOHOSTING_TENANT?.trim() || overrides.account?.trim() || env.ZYNOHOSTING_ACCOUNT?.trim())
+    ) {
         throw new CliError(
-            'A tenant was chosen (--tenant, the MCP tenant input, or ZYNOHOSTING_TENANT), but this process uses an API key or access token from its options or environment, which is tied to one tenant and cannot switch. Remove the tenant choice, or remove the injected credential to use a saved login.',
+            'A tenant or account was chosen (--tenant, --account, the MCP inputs, or ZYNOHOSTING_TENANT / ZYNOHOSTING_ACCOUNT), but this process uses an API key or access token from its options or environment, which is tied to one tenant and cannot switch. Remove the tenant choice, or remove the injected credential to use a saved login.',
             2,
             'fixed_credential_source'
         );
     }
     // An injected credential makes the saved logins irrelevant, so a missing or ambiguous choice among them cannot matter.
-    const entry = injected ? undefined : selectEntry(stored, tenantQuery, describeProfileKey(selection.key));
+    const entry = injected ? undefined : selectEntry(stored, tenantQuery, describeProfileKey(selection.key), accountQuery);
     if (!injected && !entry) throw missingCredentialError(selection.key, configFile);
 
     let credential: ManagerCredential;
@@ -427,6 +437,8 @@ async function resolveConfigWithSource(
         login = {
             id: entry!.id,
             kind: 'login',
+            ...(saved.accountId ? { accountId: saved.accountId } : {}),
+            tenantId: saved.tenantId,
             ...(saved.tenantName ? { tenantName: saved.tenantName } : {}),
             ...(saved.accountEmail ? { accountEmail: saved.accountEmail } : {}),
             ...(saved.grantExpiresAt === undefined ? {} : { grantExpiresAt: saved.grantExpiresAt })

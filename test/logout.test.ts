@@ -69,7 +69,7 @@ test('logout preserves credentials when self-revocation cannot reach ZynoAuth', 
         apiUrl: API_URL,
         authApiUrl: AUTH_API_URL,
         logins: {
-            [TENANT_ID]: {
+            [`unknown:${TENANT_ID}`]: {
                 tenantId: TENANT_ID,
                 accessToken: 'old.jwt.signature',
                 expiresAt: Date.now() + 60 * 60 * 1000,
@@ -77,7 +77,7 @@ test('logout preserves credentials when self-revocation cannot reach ZynoAuth', 
                 scopedToken: true as const
             }
         },
-        activeLogin: TENANT_ID
+        activeLogin: `unknown:${TENANT_ID}`
     };
     await updateProfile('alpha', saved, file);
 

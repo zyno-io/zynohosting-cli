@@ -47,6 +47,11 @@ const renewedCredentialSchema = z.object({
 function identityFields() {
     return {
         grantExpiresAt: isoMilliseconds.optional().catch(undefined),
+        accountId: z
+            .string()
+            .regex(/^[A-Za-z0-9_-]{1,100}$/)
+            .optional()
+            .catch(undefined),
         tenantName: displayText(255).optional().catch(undefined),
         accountEmail: displayText(320).optional().catch(undefined)
     };
@@ -57,6 +62,7 @@ export interface RenewedScopedCredential {
     expiresAt: number;
     renewalToken: string;
     grantExpiresAt?: number | undefined;
+    accountId?: string | undefined;
     tenantName?: string | undefined;
     accountEmail?: string | undefined;
 }
@@ -68,6 +74,7 @@ export interface DeviceCredential {
     tenantId: string;
     renewalToken?: string | undefined;
     grantExpiresAt?: number | undefined;
+    accountId?: string | undefined;
     tenantName?: string | undefined;
     accountEmail?: string | undefined;
 }
