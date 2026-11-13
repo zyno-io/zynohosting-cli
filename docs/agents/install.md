@@ -10,7 +10,7 @@ If you have your own cloud computer (Grok Bot, ChatGPT dots), work on that compu
 
 ## Install the skill
 
-1. Identify which agent you are, then run exactly one of these from the project root:
+1. Identify which agent you are. Then check the target file before you download anything: if `.claude/skills/zynohosting/SKILL.md` (Claude Code) or `.agents/skills/zynohosting/SKILL.md` (Codex, Muse Code) already exists, read its frontmatter. If it has `name: zynohosting`, carry on, because overwriting it is how the skill is updated. If it is a different file, stop and ask the user. Then run exactly one of these from the project root:
 
     ```bash
     # Claude Code (terminal, IDE extensions, or the desktop app's Code tab)
@@ -22,19 +22,18 @@ If you have your own cloud computer (Grok Bot, ChatGPT dots), work on that compu
 
     Another agent that supports Agent Skills: put the same file at `zynohosting/SKILL.md` in its skills directory. An agent without skill support can read the file directly whenever ZynoHosting comes up.
 
-2. If the file already exists and its frontmatter has `name: zynohosting`, overwrite it. That is how the skill is updated. If a different file is at that path, stop and ask the user.
-3. Write only your own agent's path. One agent, one file.
-4. To make it available in every project, the user can ask for `~/.claude/skills/zynohosting/SKILL.md` or `~/.agents/skills/zynohosting/SKILL.md` instead. Default to the project.
-5. Check the CLI runs:
+2. Write only your own agent's path. One agent, one file.
+3. To make it available in every project, the user can ask for `~/.claude/skills/zynohosting/SKILL.md` or `~/.agents/skills/zynohosting/SKILL.md` instead. Default to the project.
+4. Check the CLI runs:
 
     ```bash
     npx -y @zyno-io/zynohosting --version
     ```
 
-    A failure that mentions the Node version or an unsupported engine means Node.js 24 is missing. On your own cloud computer, install it yourself (for example with `nvm install 24`, or from https://nodejs.org/). On the user's computer, ask them to install it from https://nodejs.org/.
+    The CLI checks its own Node.js version at startup and stops with `unsupported_node` (exit 1) when it is older than 24; a warning from npm about an engine mismatch means the same thing. Install Node.js 24 first. On your own cloud computer, install it yourself (for example with `nvm install 24`, or from https://nodejs.org/). On the user's computer, ask them to install it from https://nodejs.org/.
 
-6. Read the skill file you just wrote, and follow it for the rest of this session. You do not need a restart. New sessions load it automatically when ZynoHosting comes up.
-7. Tell the user it is set up. The skill file holds no credentials and is safe to commit. Sign-in happens later, the first time a task needs it: the skill gives them a link and a short code to approve on any device, and tells you how to wait for it.
+5. Read the skill file you just wrote, and follow it for the rest of this session. You do not need a restart. New sessions load it automatically when ZynoHosting comes up.
+6. Tell the user it is set up. The skill file holds no credentials and is safe to commit. Sign-in happens later, the first time a task needs it. On a computer with a browser it opens the browser. On a cloud computer the skill gives the user a link and a short code to approve on any device, and tells you how to wait for it.
 
 ## Agents without a shell
 

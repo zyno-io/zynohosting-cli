@@ -23,16 +23,18 @@ There is no TTY in an agent shell, so the CLI never prompts you. `deploy`, `prom
 ## Rules
 
 1. **Never guess the site.** Use only a domain the user stated or the project explicitly names. Don't infer one from the repository, the site content, the company name, or a similar entry in `sites list`. If none is stated, ask.
-2. **Never substitute another site.** If `sites get <domain>` fails, say that this login cannot reach it. Offer to sign in again, since they may need another account or organization.
+2. **Never substitute another site.** If `sites get <domain>` fails, say that this login cannot reach it. Before suggesting a new sign-in, check the other saved logins (`zynohosting logins --json`) and try one with `--tenant`. Only if none reaches it, offer to sign in again, since they may need another account or organization.
 3. **Plan, show, wait, apply.** Run the `--dry-run` first and show the user the target slot, URL, and the create/replace/delete counts. Run with `--yes` only after they approve. Get approval before `files put` and `files rm` too, since they have no dry run. Re-run the dry run if anything changed in between. The `--yes` run plans again and applies at once.
 4. **Never add `--force`, `--allow-empty`, or `--sensitive` on your own.** Each needs the user's explicit request for that specific effect.
 5. **Exit code 8 means the change already happened.** Do not retry as if it failed.
+
+Exit codes: `0` success; `1` unexpected failure (including an unsupported Node version); `2` invalid input, unsafe path, configuration, or missing confirmation; `3` authentication or authorization (expired login, missing permission); `4` remote API failure or failed precondition; `5` an invalid or unsafe response from the service; `6` unknown or expired plan; `7` the node agent could not apply a deployment; `8` applied, but cache invalidation could not be queued.
 
 ## Sign in
 
 `login` picks how the user signs in. On a computer with a browser it opens the browser and waits up to 300 seconds. Over SSH, or on a machine with no display (including your own cloud computer), it uses a **link and a short code** that the user opens on any device. `--device` forces the link and code; `--no-device` forces the browser.
 
-Logins are saved per environment; production is the default. For alpha or dev, pass `--environment alpha` on `login` and on every later command. `logout` affects only the selected environment (`--all` for every one).
+Logins are saved per environment; production is the default. For alpha or dev, pass `--environment alpha` on `login` and on every later command. Plain `logout` removes only the default login of the selected environment; to sign out completely, run `zynohosting logout --all`.
 
 Request the narrowest complete permission set for the task. `hosting.sitesRead` is always needed. Add `--renewable` so the 60-minute token renews itself.
 
@@ -54,14 +56,15 @@ This works in every agent shell, including ones that show a command's output onl
 1. Start it. It prints JSON and exits at once:
 
     ```bash
-    zynohosting login --device --no-wait --json --name "<agent> — <project>" --renewable       --permission hosting.sitesRead --permission hosting.deploy
+    zynohosting login --device --no-wait --json --name "<agent> — <project>" --renewable \
+      --permission hosting.sitesRead --permission hosting.deploy
     ```
 
     Read `verificationUriComplete` (or `verificationUri`) and `userCode` from the `login_started` line. Never print or ask for anything else from it.
 
 2. Give the user the link and the code exactly as printed. Tell them to open the link on any device, check that the code on the page matches, choose how long the access lasts, tick the confirmation box, and approve. Tell them to approve only a code you just asked for, and never one someone else sent them.
 
-3. Wait for them. Run this as a long-running command with a timeout above 600 seconds:
+3. Wait for them. Run this as a long-running command with a timeout above 300 seconds (it waits up to 300 seconds by itself; if your shell has a shorter limit, add `--timeout <seconds>` below it, and run the command again on `login_pending`):
 
     ```bash
     zynohosting login --resume --json
@@ -75,7 +78,7 @@ After sign-in, check `permissionKeys` and `deniedPermissionKeys` in the `result`
 
 `--lifetime 1h|1d|7d|30d` only suggests how long the access lasts; the user decides on the approval page. Anything above `1h` needs `--renewable`.
 
-On a computer where a browser can open and the user is present, `zynohosting login --name "<agent> — <project>" --renewable --permission hosting.sitesRead` opens the page directly. Run it as a long-running command with a timeout above 300 seconds. If the user says nothing opened, stop it and use the link-and-code steps above.
+On a computer where a browser can open and the user is present, `zynohosting login --name "<agent> — <project>" --renewable --permission hosting.sitesRead --permission <the others the task needs>` opens the page directly. Run it as a long-running command with a timeout above 300 seconds. If the user says nothing opened, stop it and use the link-and-code steps above.
 
 ### Credential storage on your own cloud computer
 
@@ -87,18 +90,19 @@ A person can belong to several organizations (tenants). A login is one account i
 
 ### Sign-in errors
 
-| Code                                                             | What to do                                                                                     |
-| ---------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `login_denied`                                                   | The user denied it. Ask whether to try again.                                                  |
-| `device_code_expired`                                            | The code ran out or was already used. Start again from step 1.                                 |
-| `device_credential_lost`                                         | The connection dropped as it was approved. Start again from step 1.                            |
-| `device_flow_unavailable`                                        | This server does not offer link-and-code sign-in. Use the browser flow on a computer with one. |
-| `login_pending`                                                  | Not approved yet. Run `login --resume --json` again.                                           |
-| `no_pending_login`                                               | Nothing to resume. Start from step 1.                                                          |
-| `grant_expired`                                                  | The approved time ran out. Sign in again and ask the user for a longer time.                   |
-| `credential_store_unavailable`, `credential_store_insecure`      | See the credential storage section above. Never loosen file permissions yourself.              |
-| `invalid_lifetime`                                               | Use 1h, 1d, 7d or 30d, and `--renewable` for anything above 1h.                                |
-| `login_selection_required`, `login_not_found`, `login_ambiguous` | Ask the user which organization (and account), then pass `--tenant` and `--account`.           |
+| Code                                                             | What to do                                                                                                                                                                                             |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `login_denied`                                                   | The user denied it. Ask whether to try again.                                                                                                                                                          |
+| `device_code_expired`                                            | The code ran out or was already used. Start again from step 1.                                                                                                                                         |
+| `device_credential_lost`                                         | The connection dropped as it was approved. Start again from step 1.                                                                                                                                    |
+| `device_flow_unavailable`                                        | This server does not offer link-and-code sign-in. Use the browser flow on a computer with one.                                                                                                         |
+| `login_pending`                                                  | Not approved yet. Run `login --resume --json` again.                                                                                                                                                   |
+| `no_pending_login`                                               | Nothing to resume. Start from step 1.                                                                                                                                                                  |
+| `grant_expired`                                                  | The approved time ran out. Sign in again and ask the user for a longer time.                                                                                                                           |
+| `credential_store_unavailable`                                   | See the credential storage section above.                                                                                                                                                              |
+| `credential_store_insecure`                                      | The token file is a symlink or readable by others. On your own cloud computer only, and with the user's OK, set the file to mode 0600 and its directory to 0700, or delete the file and sign in again. |
+| `invalid_lifetime`                                               | Use 1h, 1d, 7d or 30d, and `--renewable` for anything above 1h.                                                                                                                                        |
+| `login_selection_required`, `login_not_found`, `login_ambiguous` | Ask the user which organization (and account), then pass `--tenant` and `--account`.                                                                                                                   |
 
 A token cannot gain permissions later. On `login_expired`, a permission error (exit 3), or a need for more scope, run `zynohosting logout` and then `login` with the complete set. `zynohosting login --help` lists every valid permission. Invented keys are rejected.
 

@@ -30,7 +30,7 @@ Copy this into a new chat:
 Sign in to ZynoHosting. Ask only for the permissions this task needs. If my browser can't open the sign-in page, give me a link and a code instead and wait while I approve it. Tell me which account and organization you signed in to, and confirm the sign-in worked before continuing.
 ```
 
-A sign-in page opens in your browser. Sign in as usual, read what you are allowing, and approve it. You stay signed in.
+A sign-in page opens in your browser. Sign in as usual, read what you are allowing, and approve it. You stay signed in: the extension keeps its sign-in renewed in your computer's password store, until the access time you choose on the approval page ends.
 
 ## 4. Start working
 

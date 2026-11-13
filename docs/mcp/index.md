@@ -92,7 +92,7 @@ zynohosting login \
   --renewable
 ```
 
-The MCP automatically rotates the one-time renewal credential through the operating system credential store. It schedules renewal in the background before the access token expires even if no tools are called, and it checks again before every authenticated request. The background timer does not keep the MCP process alive after its host closes the stdio session. For unattended service agents, inject `ZYNOHOSTING_API_KEY` through the client’s secret configuration instead.
+The MCP `login` tool asks for a renewable login by default, so an MCP sign-in does not end after 60 minutes (set `renewable` to `false` for a one-hour login). The renewal token needs the operating system credential store; if there is none, `login` stops with a clear `credential_store_unavailable` error before anything is approved. The MCP automatically rotates the one-time renewal credential through the operating system credential store. It schedules renewal in the background before the access token expires even if no tools are called, and it checks again before every authenticated request. The background timer does not keep the MCP process alive after its host closes the stdio session. For unattended service agents, inject `ZYNOHOSTING_API_KEY` through the client’s secret configuration instead.
 
 ::: warning
 MCP client configuration frequently lives in a user profile. Do not commit API keys or access tokens in project configuration.

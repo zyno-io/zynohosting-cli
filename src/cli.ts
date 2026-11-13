@@ -144,7 +144,7 @@ export function createProgram(): Command {
 
     const logins = program
         .command('logins')
-        .description('list the saved logins for the selected environment, one per tenant')
+        .description('list the saved logins for the selected environment, one per account and tenant')
         .option('--api-url <url>', 'Hosting Manager API URL')
         .addOption(environmentOption())
         .option('--json', 'emit JSON')

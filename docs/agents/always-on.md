@@ -47,10 +47,10 @@ Go to [What to ask your agent](./prompts).
 
 The access you approve ends when the time you chose runs out. Your agent then asks you to approve a new sign-in. You can end it sooner at any time:
 
-- Ask your agent: _Sign out of ZynoHosting._
+- Ask your agent: _Sign out of ZynoHosting everywhere._ (A plain sign-out removes only the default sign-in; the agent should use `logout --all` to remove every one.)
 - Or cancel it yourself on the **CLI logins** page of your Zyno account.
 
-If you belong to more than one organization, the agent keeps one sign-in for each. It asks which organization you mean before it changes anything. Ask _Which organizations are you signed in to?_ to see them.
+If you belong to more than one organization, the agent keeps one sign-in for each account and organization. Signing in again as the same account in the same organization replaces that sign-in; another account or organization adds one. It asks which organization you mean before it changes anything. Ask _Which organizations are you signed in to?_ to see them.
 
 The agent's sign-in is kept in a private file on its cloud computer. Anyone who can read that file, or a backup of that computer, can act with the access you approved until it ends or you sign out. Choose the shortest time that fits the job.
 

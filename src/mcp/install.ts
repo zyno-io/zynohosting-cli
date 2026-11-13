@@ -103,9 +103,10 @@ async function installCodexConfig(path: string, project: string): Promise<boolea
         '[mcp_servers.zynohosting]',
         'command = "npx"',
         `args = ["-y", "${PACKAGE_NAME}", "mcp", "--root", ${tomlString(project)}]`,
-        // Browser sign-in intentionally waits for the user to complete MFA or SSO. Codex's default MCP
-        // tool timeout is shorter than that flow, so keep this project-local override beside the server.
-        'tool_timeout_sec = 330'
+        // The slowest MCP calls are apply_promote (up to 900 seconds) and set_not_found_handling (up to 300
+        // seconds), both waiting for serving reconciliation. Codex's default MCP tool timeout is shorter, so
+        // keep this project-local override beside the server.
+        'tool_timeout_sec = 930'
     ].join('\n');
     const next = `${existing?.trimEnd() ? `${existing.trimEnd()}\n\n` : ''}${entry}\n`;
     // An inline parent table cannot be extended by a child header. Reparse the exact text we

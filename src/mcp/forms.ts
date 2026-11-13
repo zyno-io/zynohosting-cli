@@ -382,7 +382,7 @@ export const FORM_OPERATIONS: readonly FormOperation[] = [
         command: 'origins',
         title: 'Update ZynoForm CORS origins',
         description:
-            'Idempotently add or remove exact HTTP(S) origins. Site references expand to the site’s primary, alias, and vanity HTTPS hostnames.',
+            'Idempotently add or remove exact HTTP(S) origins. Site references expand to the site’s primary, alias, vanity, and preview HTTPS hostnames.',
         input: updateOriginsInputSchema,
         annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
         async run(c, input: z.infer<typeof updateOriginsInputSchema>) {
@@ -1323,7 +1323,7 @@ Use \`list_forms\` to discover published forms and \`get_form_integration\` to r
 
 \`create_basic_form\` creates and immediately publishes a one-page form. Each field has a unique \`key\`, which becomes its stable submission alias, and \`required\` defaults to true. The creator supports text, textarea, email, phone, URL, hidden URL-parameter, number, date, select, radio, checkbox, and one contact field. A hidden field accepts only \`key\` and \`label\`: the public ZynoForm reads its matching query parameter (for example, \`?campaign=spring\`) into that response. It is visitor-controlled attribution, not a secret or trusted input. Contact details label themselves and are selected with \`fields\`, such as \`["first_name", "last_name", "email", "phone_cell", "address"]\`. Use \`zip\` for ZIP-only collection; \`address\` already includes street, ZIP, city, and state. Its \`bot_protection\` defaults to \`interactive\`; choose \`invisible\` for a programmatic solve or \`disabled\` to preserve a legacy submission integration.
 
-Set explicit \`origins\`, or use \`origin_sites\` to allow HTTPS origins for a ZynoHosting site's primary, alias, and vanity hostnames. The result includes the published form's complete integration details.
+Set explicit \`origins\`, or use \`origin_sites\` to allow HTTPS origins for a ZynoHosting site's primary, alias, vanity, and preview hostnames. The result includes the published form's complete integration details.
 
 ## Inspecting and editing a form
 
@@ -1403,7 +1403,7 @@ The rendered ZynoForm and generated HTML enforce required fields in the browser.
 
 ## CORS origins
 
-Browser JavaScript that fetches a definition or submits cross-origin must use an allowed exact origin. Use \`update_form_origins\` with explicit HTTP(S) origins, or add a ZynoHosting site to allow HTTPS from its primary, alias, and vanity hostnames. Origins contain only scheme, host, and optional port—never a path.
+Browser JavaScript that fetches a definition or submits cross-origin must use an allowed exact origin. Use \`update_form_origins\` with explicit HTTP(S) origins, or add a ZynoHosting site to allow HTTPS from its primary, alias, vanity, and preview hostnames. Origins contain only scheme, host, and optional port—never a path.
 
 Allowed origins govern the ZynoSuite form endpoints only. Cap's own \`apiEndpoint\` answers any origin, so solving needs no configuration; a page that solves successfully and is then refused at submission has an origin problem, not a verification one.
 

@@ -22,7 +22,7 @@ yarn docs:build
 yarn docs:preview
 ```
 
-The production output is `docs/.vitepress/dist` and the public base path is `/` (served at `https://cli.zyno.host/`).
+The production output is `docs/.vitepress/dist` and the public base path is `/` (served at `https://cli.zyno.host/`). The docs are served at `https://cli.zyno.host/` through the GitHub Pages custom domain: set it under **Settings → Pages → Custom domain** and add a DNS CNAME from `cli.zyno.host` to `zyno-io.github.io`. The VitePress base is `/`, so the site only works when it is served from that domain, not from `zyno-io.github.io/zynohosting-cli/`. Do not add a `CNAME` file: Actions deployments ignore it.
 
 ## One-time GitHub Pages setup
 

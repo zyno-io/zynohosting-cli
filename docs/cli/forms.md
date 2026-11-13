@@ -102,4 +102,4 @@ zynohosting forms guide
 
 ## Credentials
 
-Forms commands use the same credentials and `--api-url`, `--suite-api-url`, `--environment`, and `--api-key` overrides as every other command; see [Configuration](../reference/configuration). The credential must carry the permission listed above.
+Forms commands use the same credentials and `--api-url`, `--suite-api-url`, `--environment`, `--api-key`, `--tenant`, and `--account` overrides as every other command; see [Configuration](../reference/configuration). The credential must carry the permission listed above.

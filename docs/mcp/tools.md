@@ -15,15 +15,15 @@ Starts a sign-in from the MCP process, then saves the resulting scoped credentia
 
 After the person finishes, call it with `action: "status"` until it reports `authenticated`. The status then includes `tenant`, `tenantName`, `account`, `grantExpiresAt`, `permissionKeys` (what the approver granted) and `deniedPermissionKeys` (requested but not granted, because the approver does not hold them in that tenant). If any were not granted, tell the user exactly which and what that means, and do not request them again unless asked; tell the user which account and organization it is and ask them to confirm.
 
-| Input             | Required | Default                                        | Meaning                                                                                  |
-| ----------------- | -------- | ---------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `action`          | no       | `start`                                        | `start`, `status` to check completion, or `cancel` to abandon it.                        |
-| `permissions`     | no       | `hosting.sitesRead`                            | Explicit permissions to request, from the list below.                                    |
-| `name`            | no       | host-based CLI name                            | Name shown on the authorization page.                                                    |
-| `renewable`       | no       | `false`                                        | Keep a rotating renewal credential, in the system key store.                             |
-| `flow`            | no       | `auto`                                         | `auto`, `browser` or `device`. Set it only to override the choice.                       |
-| `lifetime`        | no       | none                                           | `1h`, `1d`, `7d` or `30d`: a suggestion; the user decides. Above `1h` needs `renewable`. |
-| `timeout_seconds` | no       | 300 (browser); until the code expires (device) | Time to wait for the sign-in to complete (1–600).                                        |
+| Input             | Required | Default                                        | Meaning                                                                                                                                    |
+| ----------------- | -------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `action`          | no       | `start`                                        | `start`, `status` to check completion, or `cancel` to abandon it.                                                                          |
+| `permissions`     | no       | `hosting.sitesRead`                            | Explicit permissions to request, from the list below.                                                                                      |
+| `name`            | no       | host-based CLI name                            | Name shown on the authorization page.                                                                                                      |
+| `renewable`       | no       | `true`                                         | Keep a rotating renewal credential, in the system key store, so the login does not end after 60 minutes. Set `false` for a one-hour login. |
+| `flow`            | no       | `auto`                                         | `auto`, `browser` or `device`. Set it only to override the choice.                                                                         |
+| `lifetime`        | no       | none                                           | `1h`, `1d`, `7d` or `30d`: a suggestion; the user decides. Above `1h` needs `renewable`.                                                   |
+| `timeout_seconds` | no       | 300 (browser); until the code expires (device) | Time to wait for the sign-in to complete (1–600).                                                                                          |
 
 The renewal token can only go in the system store unless the MCP host sets `ZYNOHOSTING_CREDENTIAL_STORE=file` in its environment. The model cannot choose the file store through a tool input.
 
@@ -56,7 +56,7 @@ Request the narrowest complete set for the stated task, always including `hostin
 | Include user content  | add `hosting.downloadSensitive`                                               |
 | Build or edit a form  | `forms.create`, `forms.edit`, and `hosting.sitesRead` to add a site’s origins |
 
-A token’s scope is fixed for its lifetime; a missing permission means logging out and signing in again.
+A token’s scope is fixed for its lifetime; a missing permission means signing in again. Signing in again as the same account in the same tenant replaces and revokes the old login. There is no logout tool; a full sign-out is `zynohosting logout` in a terminal.
 
 Only one sign-in runs at a time, and the result says which one you received:
 
@@ -64,7 +64,7 @@ Only one sign-in runs at a time, and the result says which one you received:
 - `start` with any different request cancels the in-flight sign-in—closing its loopback listener or cancelling its code on the server, so the old URL or code stops working—and returns a new one with `"reused": false`. The requested scope is never silently replaced by the earlier one.
 - `cancel` ends the in-flight sign-in and reports `cancelled`; it reports `not_pending` when nothing is in flight, and the normal authenticated status when the person completed sign-in first.
 
-Each tenant has one saved login. Signing in again to the same tenant replaces it; signing in to another tenant adds one and makes it the default.
+A saved login is one account in one tenant: signing in again as the same account in the same tenant replaces that login; another account or tenant adds a login and makes it the default.
 
 `status` echoes the pending request’s `permissions` so a long-running flow can be checked against what was asked for. The tool cannot replace an API key or bearer token injected into the MCP process. Change that injected credential and restart the MCP host instead.
 
@@ -191,7 +191,7 @@ For `select`, supply string `options`. Radio options may be strings or `{ "title
 
 Its `fields` may contain `display_name`, `first_name`, `last_name`, `company`, `birthdate`, `phone_cell`, `email`, `address`, and `zip`. Use `zip` for ZIP-only collection; `address` already includes street, ZIP, city, and state.
 
-Exact `origins` are normalized and deduplicated. Each `origin_sites` reference expands through `get_site` to HTTPS origins for its current primary, alias, and vanity hostnames. The result contains the same integration package as `get_form_integration`.
+Exact `origins` are normalized and deduplicated. Each `origin_sites` reference expands through `get_site` to HTTPS origins for its current primary, alias, vanity, and preview hostnames. The result contains the same integration package as `get_form_integration`.
 
 - Mutates remote state: yes; creates and publishes
 - Idempotent: no

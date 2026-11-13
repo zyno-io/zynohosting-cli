@@ -209,7 +209,7 @@ test('cancelling a device sign-in through MCP cancels the code on the server', a
         env: { ZYNOHOSTING_CONFIG: join(root, 'config.json') }
     });
     try {
-        await client.callTool({ name: 'login', arguments: { flow: 'device' } });
+        await client.callTool({ name: 'login', arguments: { renewable: false, flow: 'device' } });
         const cancelled = (await client.callTool({ name: 'login', arguments: { action: 'cancel' } })).structuredContent as Record<string, unknown>;
         assert.equal(cancelled.status, 'cancelled');
         assert.equal(auth.count('/identity/scoped-tokens/device/cancel'), 1);
@@ -233,7 +233,7 @@ test('a server without device sign-in reports it through the login tool', async 
         env: { ZYNOHOSTING_CONFIG: join(root, 'config.json') }
     });
     try {
-        const result = await client.callTool({ name: 'login', arguments: { flow: 'device' } });
+        const result = await client.callTool({ name: 'login', arguments: { renewable: false, flow: 'device' } });
         assert.equal(result.isError, true);
         assert.match(JSON.stringify(result.content), /link and code is not available/);
     } finally {
@@ -267,7 +267,8 @@ test('a sign-in that finishes after use_login leaves that choice alone, but its 
         loginDependencies: { openUrl: async () => {}, platform: 'darwin' }
     });
     try {
-        const started = (await client.callTool({ name: 'login', arguments: { flow: 'browser', timeout_seconds: 20 } })).structuredContent as {
+        const started = (await client.callTool({ name: 'login', arguments: { renewable: false, flow: 'browser', timeout_seconds: 20 } }))
+            .structuredContent as {
             browserUrl: string;
         };
         const url = new URL(started.browserUrl);
@@ -312,7 +313,10 @@ test('MCP login status reports the permissions a partial approval did not grant'
         env: { ZYNOHOSTING_CONFIG: join(root, 'config.json') }
     });
     try {
-        await client.callTool({ name: 'login', arguments: { flow: 'device', permissions: ['hosting.sitesRead', 'hosting.deploy'] } });
+        await client.callTool({
+            name: 'login',
+            arguments: { renewable: false, flow: 'device', permissions: ['hosting.sitesRead', 'hosting.deploy'] }
+        });
         let status: Record<string, unknown> = {};
         for (let attempt = 0; attempt < 100 && status.authenticated !== true; attempt++) {
             status = (await client.callTool({ name: 'login', arguments: { action: 'status' } })).structuredContent as Record<string, unknown>;
@@ -320,6 +324,28 @@ test('MCP login status reports the permissions a partial approval did not grant'
         }
         assert.deepEqual(status.permissionKeys, ['hosting.sitesRead']);
         assert.deepEqual(status.deniedPermissionKeys, ['hosting.deploy']);
+    } finally {
+        await close();
+        await auth.close();
+    }
+});
+
+test('the MCP login asks for a renewable login unless told otherwise', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'zynohosting-mcp-renewable-'));
+    const auth = await startFakeAuth([{ status: 'pending' }]);
+    const { client, close } = await connect({
+        roots: await AllowedLocalRoots.create([root]),
+        version: '1.0.0',
+        apiUrl: 'http://127.0.0.1:1',
+        authApiUrl: auth.url,
+        env: { ZYNOHOSTING_CONFIG: join(root, 'config.json'), ZYNOHOSTING_CREDENTIAL_STORE: 'file' }
+    });
+    try {
+        await client.callTool({ name: 'login', arguments: { flow: 'device' } });
+        assert.equal(auth.requests.find(request => request.path.endsWith('/device/start'))!.body.renewable, true);
+        await client.callTool({ name: 'login', arguments: { action: 'cancel' } });
+        await client.callTool({ name: 'login', arguments: { flow: 'device', renewable: false } });
+        assert.equal(auth.requests.filter(request => request.path.endsWith('/device/start')).at(-1)!.body.renewable, false);
     } finally {
         await close();
         await auth.close();

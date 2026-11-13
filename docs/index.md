@@ -9,11 +9,11 @@ hero:
     tagline: Deploy, preview, and promote hosted sites from the CLI, create and connect ZynoForms, and teach any agent to do the same.
     actions:
         - theme: brand
-          text: Get started
-          link: /guide/getting-started
-        - theme: alt
-          text: Set up an agent
+          text: Get started with an AI agent
           link: /agents/
+        - theme: alt
+          text: Use the CLI directly
+          link: /guide/getting-started
         - theme: alt
           text: View on GitHub
           link: https://github.com/zyno-io/zynohosting-cli

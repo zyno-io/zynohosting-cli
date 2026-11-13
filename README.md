@@ -53,7 +53,7 @@ Where no browser can open (SSH, a cloud computer, no display), `login` shows a l
 
 Login creates a tenant-bound scoped CLI token. `hosting.sitesRead` is requested when no `--permission` is supplied; repeat the option to request the narrowest complete set for your workflow. Access tokens always expire after 60 minutes. `--renewable` stores the rotating renewal credential in the operating system credential store and lets long-running CLI/MCP processes refresh automatically. While MCP remains alive, it renews in the background even when no tools are being called; each request also checks freshness as a backstop. The renewal secret is never written to the JSON config file.
 
-Logins are saved per environment, so signing in to alpha never replaces the production login. Production is the default; pass `--environment alpha` (or set `ZYNOHOSTING_ENVIRONMENT`) to use another saved login. Each environment keeps one login per tenant: `zynohosting logins` lists them, `zynohosting logins use <tenant>` changes the default, and `--tenant <name|id>` (or `ZYNOHOSTING_TENANT`) picks one for a single command. Revoke the active login and remove its local credentials with `zynohosting logout`, one named login with `--tenant`, or every saved login with `zynohosting logout --all`.
+Logins are saved per environment, so signing in to alpha never replaces the production login. Production is the default; pass `--environment alpha` (or set `ZYNOHOSTING_ENVIRONMENT`) to use another saved login. Each environment keeps one login per account and tenant (signing in again as the same account in the same tenant replaces that login; another account or tenant adds one): `zynohosting logins` lists them, `zynohosting logins use <tenant>` changes the default, and `--tenant <name|id>` (or `ZYNOHOSTING_TENANT`) picks one for a single command. Revoke the active login and remove its local credentials with `zynohosting logout`, one named login with `--tenant`, or every saved login with `zynohosting logout --all`.
 
 For CI or another non-interactive environment, inject a tenant API key:
 
@@ -79,6 +79,10 @@ Relevant environment variables are:
 - `ZYNOHOSTING_ENVIRONMENT`
 - `ZYNOHOSTING_CONFIG`
 - `ZYNOHOSTING_LOGIN_URL`
+- `ZYNOHOSTING_TENANT`
+- `ZYNOHOSTING_ACCOUNT`
+- `ZYNOHOSTING_CREDENTIAL_STORE`
+- `ZYNOHOSTING_MCP_ROOTS`
 
 ## Sites
 
@@ -295,7 +299,7 @@ The form discovery and integration tools use the same tenant credential against 
 
 Tenant admins receive the normal administrative defaults. Non-admin credentials receive only the operations explicitly granted to them.
 
-That table is the complete set. `zynohosting login --help` prints it, and the MCP `login` tool enumerates it in its schema, so an invented key such as `hosting.sitesWrite` is rejected locally—naming the closest valid key—before a browser opens. CLI-token requests cannot include `msp.login`, `msp.impersonate`, `core.changePassword`, or `core.manageFingerprints`. The browser also refuses unknown permissions and permissions the current user does not possess; it never partially grants a request.
+That table is the complete set. `zynohosting login --help` prints it, and the MCP `login` tool enumerates it in its schema, so an invented key such as `hosting.sitesWrite` is rejected locally—naming the closest valid key—before a browser opens. CLI-token requests cannot include `msp.login`, `msp.impersonate`, `core.changePassword`, or `core.manageFingerprints`. The browser also refuses unknown, malformed and non-delegable permissions outright. For a valid permission the approver does not hold in the chosen tenant, the approver can grant only the ones they hold, and the rest come back as `deniedPermissionKeys`.
 
 Only one MCP sign-in runs at a time. Repeating `login` with the same request returns the same one-time URL or code (`"reused": true`); requesting different permissions cancels the in-flight sign-in and issues a new one rather than handing back the earlier scope. `action: "cancel"` abandons a sign-in and closes its loopback listener or cancels its code.
 

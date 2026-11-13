@@ -443,7 +443,7 @@ test('starts without credentials and can complete browser login through MCP', as
 
         const started = await client.callTool({
             name: 'login',
-            arguments: { flow: 'browser', permissions: ['hosting.sitesRead'], timeout_seconds: 5 }
+            arguments: { renewable: false, flow: 'browser', permissions: ['hosting.sitesRead'], timeout_seconds: 5 }
         });
         assert.equal(started.isError, undefined);
         const startedContent = started.structuredContent as { authenticated: boolean; status: string; browserUrl: string };
@@ -529,7 +529,7 @@ test('reports a failed browser context switch instead of the prior login', async
         const priorSites = await client.callTool({ name: 'list_sites', arguments: {} });
         assert.equal(priorSites.isError, undefined);
 
-        const started = await client.callTool({ name: 'login', arguments: { timeout_seconds: 5 } });
+        const started = await client.callTool({ name: 'login', arguments: { renewable: false, timeout_seconds: 5 } });
         assert.equal(started.isError, undefined);
         assert.match(JSON.stringify(started.structuredContent), /browserUrl/);
 
@@ -564,7 +564,7 @@ test('a changed permission request supersedes the in-flight browser flow and can
     await hosting.connect(serverTransport);
     await client.connect(clientTransport);
     const call = async (args: Record<string, unknown>) => {
-        const response = await client.callTool({ name: 'login', arguments: args });
+        const response = await client.callTool({ name: 'login', arguments: { renewable: false, ...args } });
         assert.equal(response.isError, undefined);
         return response.structuredContent as { status?: string; browserUrl?: string; reused?: boolean; permissions?: string[] };
     };

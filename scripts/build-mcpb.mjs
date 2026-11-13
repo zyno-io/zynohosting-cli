@@ -80,7 +80,7 @@ const REQUIRED_NODE = '>=24';
 // and the connector directory requires it. Keep in step with SERVER_TOOLS.
 const tools = [
     { name: 'login', description: 'Start or check the sign-in (browser, or a link and code to approve on any device)' },
-    { name: 'list_logins', description: 'List the saved logins, one per organization' },
+    { name: 'list_logins', description: 'List the saved logins, one per account and organization' },
     { name: 'use_login', description: 'Choose which saved login is the default' },
     { name: 'list_sites', description: 'List the sites this login can reach' },
     { name: 'get_site', description: 'Describe a single site' },

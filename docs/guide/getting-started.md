@@ -1,5 +1,9 @@
 # Getting started
 
+::: tip Not a developer?
+If you use an AI agent such as Claude, Codex, Grok Bot, or ChatGPT dots, start with [Set up an agent](../agents/) instead. This page is for using the command line directly.
+:::
+
 `@zyno-io/zynohosting` provides two executables:
 
 - `zynohosting` for people, coding agents, and CI jobs;
@@ -104,15 +108,17 @@ The agent installs a skill file that teaches it this CLI, then carries on in the
 
 These options apply to the CLI and may be placed before a command:
 
-| Option                  | Purpose                                                                 |
-| ----------------------- | ----------------------------------------------------------------------- |
-| `-V`, `--version`       | Print the installed package version.                                    |
-| `--api-url <url>`       | Override the Hosting Manager API URL.                                   |
-| `--suite-api-url <url>` | Override the ZynoSuite API URL.                                         |
-| `--auth-api-url <url>`  | Override the ZynoAuth API URL.                                          |
-| `--environment <name>`  | Select `production`, `alpha`, or `dev`.                                 |
-| `--api-key <key>`       | Supply a tenant API key. Prefer the environment variable in automation. |
-| `--json`                | Emit machine-readable output where the command supports it.             |
+| Option                  | Purpose                                                                             |
+| ----------------------- | ----------------------------------------------------------------------------------- |
+| `-V`, `--version`       | Print the installed package version.                                                |
+| `--api-url <url>`       | Override the Hosting Manager API URL.                                               |
+| `--suite-api-url <url>` | Override the ZynoSuite API URL.                                                     |
+| `--auth-api-url <url>`  | Override the ZynoAuth API URL.                                                      |
+| `--environment <name>`  | Select `production`, `alpha`, or `dev`.                                             |
+| `--api-key <key>`       | Supply a tenant API key. Prefer the environment variable in automation.             |
+| `--tenant <name\|id>`   | Use this saved login (a login id, tenant id, or tenant name) for this command only. |
+| `--account <email\|id>` | Narrow `--tenant` when several accounts are signed in to one tenant.                |
+| `--json`                | Emit machine-readable output where the command supports it.                         |
 
 ::: tip
 Run `zynohosting <command> --help` to see command-specific options for the installed release.

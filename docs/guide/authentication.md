@@ -1,5 +1,9 @@
 # Authentication
 
+::: tip Not a developer?
+If you use an AI agent, your agent handles sign-in for you. Start with [Set up an agent](../agents/).
+:::
+
 The CLI and MCP server support scoped CLI tokens and tenant API keys. Credentials authenticate to the Hosting Manager and ZynoSuite; individual site operations then use short-lived, site-bound capabilities.
 
 ## Interactive login
@@ -27,7 +31,7 @@ zynohosting login \
   --permission hosting.deploy
 ```
 
-`zynohosting login --help` lists every requestable permission with its capability; [Permissions](../reference/permissions) explains the model and gives least-privilege sets. Only those keys exist—an invented one such as `hosting.sitesWrite` is rejected locally, before a browser opens, with the closest valid key named. The authorization page likewise rejects the complete request if a permission is unknown, unavailable to the user, malformed, or non-delegable. Neither silently filters the list. `msp.login`, `msp.impersonate`, `core.changePassword`, and `core.manageFingerprints` cannot be delegated.
+`zynohosting login --help` lists every requestable permission with its capability; [Permissions](../reference/permissions) explains the model and gives least-privilege sets. Only those keys exist—an invented one such as `hosting.sitesWrite` is rejected locally, before a browser opens, with the closest valid key named. The authorization page likewise rejects the complete request if a permission is unknown, unavailable to the user, malformed, or non-delegable. Neither silently filters the list: a malformed, unknown, or non-delegable key rejects the whole request. A valid key the approver does not hold in that tenant is different: the approver can grant only the ones they hold, and the rest come back as `deniedPermissionKeys` (see [Partial approval](#partial-approval)). `msp.login`, `msp.impersonate`, `core.changePassword`, and `core.manageFingerprints` cannot be delegated.
 
 If a browser cannot be opened automatically:
 
@@ -79,9 +83,9 @@ zynohosting login --resume --json             # waits up to 300 seconds for the 
 With `--json`, stdout holds one JSON event per line and human text goes to stderr:
 
 ```json
-{"type":"login_started","flow":"device","reason":"no_display","verificationUri":"https://zyno.app/cli/device","verificationUriComplete":"https://zyno.app/cli/device?code=ABCD-EFGH","userCode":"ABCD-EFGH","expiresAt":"2026-11-12T18:10:00.000Z","interval":5}
+{"type":"login_started","flow":"device","reason":"explicit","verificationUri":"https://zyno.app/cli/device","verificationUriComplete":"https://zyno.app/cli/device?code=ABCD-EFGH","userCode":"ABCD-EFGH","expiresAt":"2026-11-12T18:10:00.000Z","interval":5}
 {"type":"login_pending","resume":"zynohosting login --resume"}
-{"type":"result","status":"authenticated","flow":"device","profile":"production","loginId":"<accountId>:<tenantId>","accountId":"…","tenantId":"…","tenantName":"Acme Co","account":"owner@example.com","renewable":true,"credentialStore":"file","accessExpiresAt":"2026-11-12T19:00:00.000Z","grantExpiresAt":"2026-11-19T18:00:00.000Z"}
+{"type":"result","status":"authenticated","flow":"device","profile":"production","loginId":"<accountId>:<tenantId>","accountId":"…","tenantId":"…","tenantName":"Acme Co","account":"owner@example.com","renewable":true,"permissionKeys":["hosting.sitesRead","hosting.deploy"],"deniedPermissionKeys":[],"credentialStore":"file","accessExpiresAt":"2026-11-12T19:00:00.000Z","grantExpiresAt":"2026-11-19T18:00:00.000Z"}
 ```
 
 The device code, the access token and the renewal token are never printed. The browser flow prints a `login_started` event with `"flow":"browser"` and the one-time `url`.
@@ -170,7 +174,7 @@ zynohosting logout --tenant "Acme Co" --account bob@example.com   # a different 
 zynohosting logout --all              # every login in every environment
 ```
 
-`logout` removes one login: the one `--tenant` (and `--account`) or `ZYNOHOSTING_TENANT` names, else the default one, chosen the same way as for any command (see [Saved configuration](#saved-configuration)). Other logins in the profile are kept. `--all` logs out of every saved login in every environment, revoking each in turn using its own stored URLs, and cancels any pending sign-in. If the selected environment has no login but others do, plain `logout` fails and lists them rather than reporting success.
+`logout` removes one login: the one `--tenant` (and `--account`) or `ZYNOHOSTING_TENANT` names, else the default one, chosen the same way as for any command (see [Multiple logins](#multiple-logins)). Other logins in the profile are kept. `--all` logs out of every saved login in every environment, revoking each in turn using its own stored URLs, and cancels any pending sign-in. If the selected environment has no login but others do, plain `logout` fails and lists them rather than reporting success.
 
 For a saved scoped token, logout calls `POST /identity/scoped-tokens/revoke` with the scoped access token. That revokes only its own grant and clears the server-side renewal token. Local config and credential-store entries are removed only after revocation succeeds or the access/renewal credential is already unusable. Tenant API keys are only removed locally. After a logout, token-file entries that no saved login uses and that are more than an hour old are removed too.
 

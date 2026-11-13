@@ -42,6 +42,7 @@ example.com
 ID: 11111111-1111-4111-8111-111111111111
 Status: active
 PHP: static
+Not found: 404 page
 Production: https://example.com
 Preview: https://example-com-preview.aspen.zynohosting.net
 Hostnames:

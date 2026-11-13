@@ -122,6 +122,8 @@ export interface LoginDependencies {
     /** Called with the link (browser) or link and code (device) as soon as they exist, before waiting. */
     onLoginPrompt?: (prompt: LoginPrompt) => void | Promise<void>;
     write?: (message: string) => void;
+    /** Receives warnings; stderr by default. */
+    warn?: (message: string) => void;
     /** Receives JSON events when `json` is set. */
     emit?: (event: Record<string, unknown>) => void;
     renewalTokenStore?: RenewalTokenStore;
@@ -152,7 +154,8 @@ export async function login(options: LoginOptions, dependencies: LoginDependenci
     const stored = await loadStoredConfig(file, profileKey, { lenientLegacy: true });
     const suiteApiUrl = resolveSuiteApiUrl(options.suiteApiUrl, stored, apiUrl, env, options.environment, hostingUrlChosenByFlag(options));
     const authApiUrl = resolveAuthApiUrl(options.authApiUrl, stored, apiUrl, env, options.environment, hostingUrlChosenByFlag(options));
-    const apiKey = options.apiKey ?? env.ZYNOHOSTING_API_KEY;
+    // Only an explicit --api-key is saved. A key that merely sits in the environment (as in CI) is never written to disk.
+    const apiKey = options.apiKey;
     const json = options.json ?? false;
     const write =
         dependencies.write ?? (json ? (message: string) => process.stderr.write(message) : (message: string) => process.stdout.write(message));
@@ -182,6 +185,13 @@ export async function login(options: LoginOptions, dependencies: LoginDependenci
         write('ZynoHosting API-key credentials saved.\n');
         emit({ type: 'result', status: 'api_key_saved', profile: profileKey });
         return { status: 'api_key_saved', profile: profileKey };
+    }
+
+    if (env.ZYNOHOSTING_API_KEY) {
+        const message =
+            'ZYNOHOSTING_API_KEY is set in the environment, so it overrides saved logins for every command, including the one you are about to sign in with. Unset it to use the saved login.';
+        (dependencies.warn ?? ((text: string) => process.stderr.write(text)))(`Warning: ${message}\n`);
+        emit({ type: 'warning', code: 'api_key_in_environment', message });
     }
 
     const resuming = options.resume === true;

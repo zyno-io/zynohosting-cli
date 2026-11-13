@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 
-import { createProgram } from './cli.js';
 import { CliError, errorMessage } from './errors.js';
 import { jsonErrorsForced } from './output.js';
+import { assertSupportedNode } from './runtime.js';
 
 try {
+    // Checked before the rest of the CLI loads, so an old Node reports a clear error instead of a syntax failure.
+    assertSupportedNode();
+    const { createProgram } = await import('./cli.js');
     await createProgram().parseAsync(process.argv);
 } catch (error) {
     const json = process.argv.includes('--json') || jsonErrorsForced();

@@ -37,11 +37,11 @@ The rest of this page covers one thing: installing the local ZynoHosting MCP ser
 | Agent       | File                   | Entry                                                                                      |
 | ----------- | ---------------------- | ------------------------------------------------------------------------------------------ |
 | Claude Code | `./.mcp.json`          | `npx -y @zyno-io/zynohosting mcp --root ${CLAUDE_PROJECT_DIR:-.}`                          |
-| Codex       | `./.codex/config.toml` | `[mcp_servers.zynohosting]` with this project’s absolute path and `tool_timeout_sec = 330` |
+| Codex       | `./.codex/config.toml` | `[mcp_servers.zynohosting]` with this project’s absolute path and `tool_timeout_sec = 930` |
 
 Neither file holds an API key or any other credential, so both are safe to commit.
 
-Codex gets the raised tool timeout because browser sign-in waits up to five minutes for the user to complete multi-factor or single sign-on, which is longer than Codex’s default MCP tool timeout.
+Codex gets the raised tool timeout because some calls wait for the service to finish: `apply_promote` can take up to 900 seconds and `set_not_found_handling` up to 300 seconds while serving reconciles, which is longer than Codex’s default MCP tool timeout. Sign-in itself returns its link or code at once and does not wait.
 
 ## Agents without a shell
 

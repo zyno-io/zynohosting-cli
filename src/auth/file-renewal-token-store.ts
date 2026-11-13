@@ -113,7 +113,7 @@ export function createFileRenewalTokenStore(configPath: string): FileRenewalToke
             const cutoff = Date.now() - minAgeMs;
             await update(file => {
                 for (const [key, entry] of Object.entries(file.tokens)) {
-                    if (!referencedKeys.has(key) && entry.updatedAt < cutoff) delete file.tokens[key];
+                    if (!referencedKeys.has(key) && entry.updatedAt <= cutoff) delete file.tokens[key];
                 }
             });
         }

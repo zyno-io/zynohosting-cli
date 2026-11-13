@@ -615,3 +615,43 @@ test('a credential with permissions that were not requested, or with none at all
         }
     }
 });
+
+test('a key in ZYNOHOSTING_API_KEY is never saved by login: the sign-in runs and a warning says the key overrides saved logins', async () => {
+    const context = await setup([approvedPoll()]);
+    try {
+        const warnings: string[] = [];
+        const result = await login(
+            { ...context.options, json: true, timeoutSeconds: 20 },
+            {
+                ...context.dependencies,
+                env: { ...context.dependencies.env, ZYNOHOSTING_API_KEY: 'ci-secret-key' },
+                warn: message => warnings.push(message)
+            }
+        );
+        assert.equal(result.status, 'authenticated');
+        const saved = await loadStoredConfig(context.file, 'alpha');
+        assert.equal(saved.apiKey, undefined);
+        assert.doesNotMatch(await readFile(context.file, 'utf8'), /ci-secret-key/);
+        assert.match(warnings.join(''), /ZYNOHOSTING_API_KEY is set in the environment, so it overrides saved logins for every command/);
+        assert(!warnings.join('').includes('ci-secret-key'));
+        const warning = context.events.find(event => event.type === 'warning')!;
+        assert.equal(warning.code, 'api_key_in_environment');
+        assert.equal(context.events[0]!.type, 'warning');
+    } finally {
+        await context.auth.close();
+    }
+});
+
+test('an explicit --api-key is still saved', async () => {
+    const context = await setup([approvedPoll()]);
+    try {
+        const result = await login(
+            { apiUrl: HOSTING_URL, apiKey: 'explicit-key' },
+            { ...context.dependencies, env: { ...context.dependencies.env, ZYNOHOSTING_API_KEY: 'other' } }
+        );
+        assert.equal(result.status, 'api_key_saved');
+        assert.equal((await loadStoredConfig(context.file, 'alpha')).apiKey, 'explicit-key');
+    } finally {
+        await context.auth.close();
+    }
+});

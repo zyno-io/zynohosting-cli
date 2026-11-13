@@ -78,4 +78,4 @@ Sign me in to ZynoHosting again so I can choose a different account or organizat
 | Your agent asks for a folder path you don't know | Mac: right-click the folder in Finder, hold **Option**, choose **Copy "folder" as Pathname**. Windows: **Shift**-right-click, **Copy as path**. |
 | An error you don't understand                    | Paste it back and ask: _Explain this in plain language and tell me what to do next._                                                            |
 
-Setup problems are covered on each agent's page: [Claude desktop app](./claude-desktop), [Claude Code](./claude-code), [Codex](./codex), [other agents](./other).
+Setup problems are covered on each agent's page: [Claude desktop app](./claude-desktop), [Claude Code](./claude-code), [Codex](./codex), [Grok Bot or ChatGPT dots](./always-on), [other agents](./other).
