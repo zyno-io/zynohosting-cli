@@ -36,3 +36,55 @@
 .vp-doc .custom-block p:last-child {
     margin-bottom: 0;
 }
+
+/* Agent chooser on /agents/ */
+.agent-picker {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 16px;
+    margin: 20px 0 24px;
+}
+
+.vp-doc a.agent-card {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 18px 20px;
+    border: 1px solid var(--vp-c-divider);
+    border-radius: 12px;
+    background: var(--vp-c-bg-soft);
+    color: var(--vp-c-text-1);
+    text-decoration: none;
+    transition:
+        border-color 0.2s,
+        background-color 0.2s;
+}
+
+.vp-doc a.agent-card:hover {
+    border-color: var(--vp-c-brand-1);
+    background: var(--vp-c-brand-soft);
+}
+
+.agent-card strong {
+    font-size: 17px;
+}
+
+.agent-card span {
+    color: var(--vp-c-text-2);
+    font-size: 14px;
+    line-height: 1.5;
+}
+
+.agent-card em {
+    margin-top: auto;
+    color: var(--vp-c-brand-1);
+    font-size: 13px;
+    font-style: normal;
+    font-weight: 600;
+}
+
+/* Copy-and-paste prompts: wrap long single-line text blocks instead of scrolling. */
+.vp-doc div[class*='language-text'] pre code {
+    white-space: pre-wrap;
+    word-break: break-word;
+}

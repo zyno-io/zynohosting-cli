@@ -1,6 +1,9 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { createServer, IncomingMessage, Server, ServerResponse } from 'node:http';
 
+import type { PermissionGrant } from '../auth/permission-grant.js';
+
+import { resolvePermissionGrant } from '../auth/permission-grant.js';
 import { CliError } from '../errors.js';
 import { renderCallbackPage } from './callback-page.js';
 
@@ -9,6 +12,8 @@ const MAX_BODY_BYTES = 16 * 1024;
 const TOKEN_MAX_LENGTH = 12 * 1024;
 const RENEWAL_TOKEN_MAX_LENGTH = 16 * 1024;
 const MAX_ACCESS_LIFETIME_MS = 2 * 60 * 60 * 1000;
+// The server caps a grant at 30 days; a day of slack covers clock differences.
+const MAX_GRANT_LIFETIME_MS = 31 * 24 * 60 * 60 * 1000;
 const TENANT_ID_PATTERN = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const CANCELLATION_ERRORS = new Set(['access_denied', 'cancelled', 'canceled', 'user_cancelled', 'user_canceled']);
 
@@ -17,6 +22,14 @@ export interface UserCredential {
     tenantId: string;
     expiresAt: number;
     renewalToken?: string;
+    accountId?: string;
+    tenantName?: string;
+    accountEmail?: string;
+    /** Epoch milliseconds; the end of the lifetime the approver chose. */
+    grantExpiresAt?: number;
+    /** Granted permissions and the requested ones that were not; absent from an older portal, meaning all were granted. */
+    permissionKeys?: string[];
+    deniedPermissionKeys?: string[];
 }
 
 export interface LoopbackLogin {
@@ -29,6 +42,8 @@ export interface LoopbackLogin {
 export async function startLoopbackLogin(options: {
     timeoutMs: number;
     renewable?: boolean;
+    /** What the sign-in asked for, so a granted subset can be checked. */
+    requestedPermissions?: string[];
     onCredential?: (credential: UserCredential) => Promise<void>;
 }): Promise<LoopbackLogin> {
     const state = randomBytes(32).toString('base64url');
@@ -46,7 +61,7 @@ export async function startLoopbackLogin(options: {
     void result.catch(() => {});
 
     const server = createServer((request, response) => {
-        void handleCallback(request, response, state, options.renewable ?? false, options.onCredential, () => {
+        void handleCallback(request, response, state, options.renewable ?? false, options.requestedPermissions, options.onCredential, () => {
             if (processing || settled) return false;
             processing = true;
             if (timer) clearTimeout(timer);
@@ -102,6 +117,7 @@ async function handleCallback(
     response: ServerResponse,
     expectedState: string,
     renewable: boolean,
+    requestedPermissions: string[] | undefined,
     onCredential: ((credential: UserCredential) => Promise<void>) | undefined,
     acceptCallback: () => boolean
 ): Promise<UserCredential | Error | undefined> {
@@ -160,9 +176,53 @@ async function handleCallback(
         return rejectRequest(response, 400, 'Invalid token expiration');
     }
     if (renewalToken !== undefined && !isRenewalToken(renewalToken)) return rejectRequest(response, 400, 'Invalid renewal credential');
+    // Optional fields from newer portals: each may appear at most once and must be well formed.
+    for (const key of ['accountId', 'tenantName', 'accountEmail', 'grantExpiresAt', 'permissionKeys', 'deniedPermissionKeys']) {
+        if (form.getAll(key).length > 1) return rejectRequest(response, 400, 'Invalid login response');
+    }
+    const keyList = (name: string): string[] | undefined => {
+        const value = form.get(name);
+        return value === null
+            ? undefined
+            : value
+                  .split(',')
+                  .map(key => key.trim())
+                  .filter(Boolean);
+    };
+    const grantedField = keyList('permissionKeys');
+    const deniedField = keyList('deniedPermissionKeys');
+    let grant: PermissionGrant | undefined;
+    if (requestedPermissions && (grantedField || deniedField)) {
+        grant = resolvePermissionGrant(requestedPermissions, grantedField, deniedField);
+        if (!grant) return rejectRequest(response, 400, 'Invalid granted permissions');
+    }
+    const accountId = form.get('accountId') ?? undefined;
+    const tenantName = form.get('tenantName') ?? undefined;
+    const accountEmail = form.get('accountEmail') ?? undefined;
+    const grantExpiresAtValue = form.get('grantExpiresAt');
+    const grantExpiresAt = grantExpiresAtValue === null ? undefined : Number(grantExpiresAtValue);
+    if (accountId !== undefined && !/^[A-Za-z0-9_-]{1,100}$/.test(accountId)) return rejectRequest(response, 400, 'Invalid account ID');
+    if (tenantName !== undefined && !isDisplayText(tenantName, 255)) return rejectRequest(response, 400, 'Invalid tenant name');
+    if (accountEmail !== undefined && !isDisplayText(accountEmail, 320)) return rejectRequest(response, 400, 'Invalid account email');
+    if (
+        grantExpiresAt !== undefined &&
+        (!Number.isSafeInteger(grantExpiresAt) || grantExpiresAt <= Date.now() || grantExpiresAt > Date.now() + MAX_GRANT_LIFETIME_MS)
+    ) {
+        return rejectRequest(response, 400, 'Invalid grant expiration');
+    }
     if (!acceptCallback()) return rejectRequest(response, 409, 'A login callback is already being processed');
 
-    const credential = { accessToken, tenantId, expiresAt, ...(renewalToken === undefined ? {} : { renewalToken }) };
+    const credential: UserCredential = {
+        accessToken,
+        tenantId,
+        expiresAt,
+        ...(renewalToken === undefined ? {} : { renewalToken }),
+        ...(accountId === undefined ? {} : { accountId }),
+        ...(grant ? { permissionKeys: grant.granted, deniedPermissionKeys: grant.denied } : {}),
+        ...(tenantName === undefined ? {} : { tenantName }),
+        ...(accountEmail === undefined ? {} : { accountEmail }),
+        ...(grantExpiresAt === undefined ? {} : { grantExpiresAt })
+    };
     try {
         await onCredential?.(credential);
     } catch (error) {
@@ -199,6 +259,10 @@ function isJwt(value: string): boolean {
 
 function isRenewalToken(value: string): boolean {
     return value.length <= RENEWAL_TOKEN_MAX_LENGTH && /^zrt_[A-Za-z0-9_-]+$/.test(value);
+}
+
+function isDisplayText(value: string, max: number): boolean {
+    return value.length > 0 && value.length <= max && !/[\u0000-\u001f\u007f-\u009f]/.test(value);
 }
 
 function hasSingleValue(form: URLSearchParams, key: string): boolean {

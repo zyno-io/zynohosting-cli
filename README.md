@@ -6,13 +6,15 @@
 - inspect, download, upload, and delete individual files;
 - plan and apply complete deployments to production or an isolated preview slot;
 - promote current preview content to production;
+- set a static site's missing-page handling (`sites set --not-found single-page-application`);
 - download a complete deployable snapshot or, with the extra permission, all user content;
-- discover, create, inspect, edit, embed, and configure published ZynoForms;
-- expose the same operations to agents through a local stdio MCP server.
+- discover, create, inspect, edit, embed, and configure published ZynoForms (JSON in, JSON out);
+- teach coding agents to drive the CLI through one [skill file](./skills/zynohosting/SKILL.md);
+- expose the same operations through a local stdio MCP server, packaged as a Claude desktop extension.
 
 The package requires Node.js 24.
 
-Full CLI and MCP documentation is available at [zyno-io.github.io/zynohosting-cli](https://zyno-io.github.io/zynohosting-cli/).
+Full CLI and MCP documentation is available at [cli.zyno.host](https://cli.zyno.host/).
 
 ## Install
 
@@ -23,8 +25,8 @@ zynohosting --help
 
 It installs two executables:
 
-- `zynohosting` — the human and CI command-line interface;
-- `zynohosting-mcp` — the local stdio MCP server.
+- `zynohosting` — the command-line interface for people, coding agents, and CI;
+- `zynohosting-mcp` — the local stdio MCP server, mainly for the Claude desktop app.
 
 You can also run commands without a global install:
 
@@ -47,9 +49,11 @@ zynohosting login \
   --renewable
 ```
 
-Browser login creates a tenant-bound scoped CLI token. `hosting.sitesRead` is requested when no `--permission` is supplied; repeat the option to request the narrowest complete set for your workflow. Access tokens always expire after 60 minutes. `--renewable` stores the rotating renewal credential in the operating system credential store and lets long-running CLI/MCP processes refresh automatically. While MCP remains alive, it renews in the background even when no tools are being called; each request also checks freshness as a backstop. The renewal secret is never written to the JSON config file.
+Where no browser can open (SSH, a cloud computer, no display), `login` shows a link and a short code instead, which the person opens and approves on any device (`--device` forces it). Agents that only show output when a command exits use `zynohosting login --device --no-wait --json`, then `zynohosting login --resume --json`. The person chooses how long the access lasts: 1 hour, 1 day, 7 days or 30 days (`--lifetime` only suggests one). A cloud computer with no system credential store can add `--credential-store file`.
 
-Revoke the saved scoped grant and remove its local credentials with `zynohosting logout`.
+Login creates a tenant-bound scoped CLI token. `hosting.sitesRead` is requested when no `--permission` is supplied; repeat the option to request the narrowest complete set for your workflow. Access tokens always expire after 60 minutes. `--renewable` stores the rotating renewal credential in the operating system credential store and lets long-running CLI/MCP processes refresh automatically. While MCP remains alive, it renews in the background even when no tools are being called; each request also checks freshness as a backstop. The renewal secret is never written to the JSON config file.
+
+Logins are saved per environment, so signing in to alpha never replaces the production login. Production is the default; pass `--environment alpha` (or set `ZYNOHOSTING_ENVIRONMENT`) to use another saved login. Each environment keeps one login per account and tenant (signing in again as the same account in the same tenant replaces that login; another account or tenant adds one): `zynohosting logins` lists them, `zynohosting logins use <tenant>` changes the default, and `--tenant <name|id>` (or `ZYNOHOSTING_TENANT`) picks one for a single command. Revoke the active login and remove its local credentials with `zynohosting logout`, one named login with `--tenant`, or every saved login with `zynohosting logout --all`.
 
 For CI or another non-interactive environment, inject a tenant API key:
 
@@ -57,7 +61,7 @@ For CI or another non-interactive environment, inject a tenant API key:
 export ZYNOHOSTING_API_KEY='...'
 ```
 
-The CLI also accepts `--environment production|alpha|dev` and `--api-url`. Credentials are resolved in this order:
+The CLI also accepts `--environment production|alpha|dev` and `--api-url`. The Hosting API URL comes from `--api-url`, `--environment`, `ZYNOHOSTING_API_URL`, `ZYNOHOSTING_ENVIRONMENT`, then `production`, and the saved login is the one for that URL. Credentials are resolved in this order:
 
 1. command options;
 2. environment variables;
@@ -75,6 +79,10 @@ Relevant environment variables are:
 - `ZYNOHOSTING_ENVIRONMENT`
 - `ZYNOHOSTING_CONFIG`
 - `ZYNOHOSTING_LOGIN_URL`
+- `ZYNOHOSTING_TENANT`
+- `ZYNOHOSTING_ACCOUNT`
+- `ZYNOHOSTING_CREDENTIAL_STORE`
+- `ZYNOHOSTING_MCP_ROOTS`
 
 ## Sites
 
@@ -148,10 +156,32 @@ preview. It waits for serving reconciliation; a background job purges the archiv
 copied. Promotion is blocked if production has `wp-config.php` and preview does not; `--force`
 explicitly bypasses only that check, and `--yes` only skips the confirmation prompt.
 
+Preview is served only at the site's `preview` hostname; the vanity hostname serves production.
+Only `deploy --preview` writes to preview; `files` and `download` always act on production.
+After a promotion preview is empty, so promoting again would publish an empty site. Because
+`wp-config.php` and `wp-content/uploads/` are never deployed, WordPress sites should deploy
+straight to production rather than promote. See
+[Preview and production](https://cli.zyno.host/guide/preview).
+
 Preview has no separate database and uses the main site’s database. It shares the main site’s
 storage quota. Database changes from preview can affect the live site. Both operations use the
 existing `hosting.deploy` permission, alongside `hosting.sitesRead` for site inspection. See
 [preview and promotion details](docs/cli/deploy.md#preview-sites-and-promotion).
+
+## ZynoForms
+
+Form commands take one JSON object and print one JSON document. Inputs and results match the MCP form tools.
+
+```bash
+zynohosting forms list
+zynohosting forms describe --input '{"form":"contact-us"}'
+zynohosting forms create --input @form.json
+zynohosting forms update --input -  < edit.json
+zynohosting forms origins --input '{"form":"contact-us","add_sites":["example.com"]}'
+zynohosting forms guide
+```
+
+Errors go to stderr as JSON. See [ZynoForms commands](https://cli.zyno.host/cli/forms).
 
 ## Complete download
 
@@ -169,19 +199,21 @@ zynohosting download example.com ./complete-copy --sensitive
 
 The destination must be new or empty. Archive bytes are extracted as the hosting node generates them; the CLI validates the transport completion, gzip stream, and tar entries before atomically installing the staged tree. Absolute paths, traversal, links, devices, and other unsupported entries are rejected.
 
+## AI agents
+
+Agents with a shell (Claude Code, Codex) use the CLI, guided by the [ZynoHosting skill](./skills/zynohosting/SKILL.md). For a non-technical user, paste this into the agent:
+
+> Set up ZynoHosting for this project. Follow https://raw.githubusercontent.com/zyno-io/zynohosting-cli/main/docs/agents/install.md
+
+The agent writes the skill to `.claude/skills/zynohosting/SKILL.md` or `.agents/skills/zynohosting/SKILL.md` and carries on in the same session: no MCP server, no restart, and nothing in the agent's context until a hosting task comes up. The skill covers sign-in, the domain policy, plan-then-apply, preview and promotion, files, downloads, and ZynoForms.
+
+The local MCP server remains for the **Claude desktop app's Chat and Cowork tabs**, which cannot run a CLI or install anything from a conversation. The user opens the signed desktop extension, [`zynohosting.mcpb`](https://github.com/zyno-io/zynohosting-cli/releases/latest/download/zynohosting.mcpb). It carries the server as a single bundled file, runs on the Node runtime inside Claude Desktop so nothing else has to be installed, and stages newer signed releases so installs do not go stale.
+
+See [CLI, skill, or MCP](https://cli.zyno.host/agents/interfaces) for the reasoning, and [Set up an agent](https://cli.zyno.host/agents/) for per-agent steps and copy-and-paste prompts.
+
 ## Local MCP server
 
-The MCP server is local stdio only. It does not open a port or provide a hosted/cloud MCP endpoint.
-
-For a non-technical user, paste this into Codex or Claude Code:
-
-> Set up ZynoHosting MCP for this project if it's not already configured. See https://raw.githubusercontent.com/zyno-io/zynohosting-cli/main/docs/mcp/agent.md for details.
-
-The agent configures only its own project file—`.mcp.json` for Claude Code or `.codex/config.toml` for Codex—without storing credentials. Restart the agent after it completes; MCP tools are not added to an already-running session. That prompt points at [install instructions written for the agent](./docs/mcp/agent.md); the matching [prompts for the user](https://zyno-io.github.io/zynohosting-cli/mcp/setup) cover signing in, publishing, and forms.
-
-Claude Code means the terminal CLI, the IDE extensions, and the Code tab of the Claude desktop app; one project file serves all three, and all three need Node.js 24 installed.
-
-The desktop app's Chat and Cowork tabs are a separate client that cannot install anything from a conversation. They use the signed desktop extension instead, which the user installs by opening [`zynohosting.mcpb`](https://github.com/zyno-io/zynohosting-cli/releases/latest/download/zynohosting.mcpb). It carries the server as a single bundled file, runs on the Node runtime inside Claude Desktop so nothing else has to be installed, and stages newer signed releases so installs do not go stale. See [Configure the local MCP server](https://zyno-io.github.io/zynohosting-cli/mcp/#set-up-the-claude-desktop-app).
+The MCP server is local stdio only. It does not open a port or provide a hosted/cloud MCP endpoint. See [Configure the local MCP server](https://cli.zyno.host/mcp/).
 
 `ZYNOHOSTING_MCP_ROOTS` is an optional local-computer allowlist for the MCP process. When it is unset, local-file tools can use any absolute path the MCP process user can access. When roots are configured, local file reads, writes, deploy sources, ignore files, and download destinations are constrained to them after canonical path resolution.
 
@@ -218,6 +250,8 @@ On macOS and Linux, multiple `ZYNOHOSTING_MCP_ROOTS` use `:` as the delimiter. W
 The MCP tools are:
 
 - `login`
+- `list_logins`
+- `use_login`
 - `list_sites`
 - `get_site`
 - `list_forms`
@@ -235,38 +269,39 @@ The MCP tools are:
 - `apply_deploy`
 - `plan_promote`
 - `apply_promote`
+- `set_not_found_handling`
 - `plan_download`
 - `apply_download`
 
 Full deploys and downloads intentionally use separate plan/apply calls. Plans are held only in the local MCP process, contain no exposed bearer token, expire with their short-lived access session, and cannot be applied after the server restarts.
 
-The MCP can start without a saved login. The agent calls `login` to open the ZynoSuite browser sign-in flow and receives the one-time URL in its tool result; after the browser callback, it calls `login` with `action: "status"` to confirm the login. It must never infer a deployment domain from the project or select a similar authorized site; it asks when the project does not state the target domain. If the stated domain is unavailable in the current login context, it must not substitute another one and should offer `login` again to switch contexts.
+The MCP can start without a saved login. The agent calls `login`, which picks the browser flow or the link-and-code flow for the computer it runs on and returns the one-time URL, or the link and code, in its tool result; after the person finishes, it calls `login` with `action: "status"` to confirm the login. Every other tool accepts an optional `tenant` to use one saved login for that call. It must never infer a deployment domain from the project or select a similar authorized site; it asks when the project does not state the target domain. If the stated domain is unavailable in the current login context, it must not substitute another one and should offer `login` again to switch contexts.
 
 ## Permissions
 
 The tenant credential is limited by explicit Hosting and Forms permissions:
 
-| Permission                  | Capability                                                |
-| --------------------------- | --------------------------------------------------------- |
-| `hosting.sitesRead`         | List and inspect sites                                    |
-| `hosting.filesRead`         | List files and download individual files                  |
-| `hosting.filesWrite`        | Create and replace individual files                       |
-| `hosting.filesDelete`       | Delete individual files                                   |
-| `hosting.deploy`            | Deploy production/preview content and promote preview     |
-| `hosting.download`          | Download the deployable snapshot                          |
-| `hosting.downloadSensitive` | Include protected and user-generated content              |
-| `hosting.analyticsRead`     | Read hosting analytics                                    |
-| `hosting.analyticsManage`   | Change analytics configuration                            |
-| `forms.create`              | Create and immediately publish a basic form               |
-| `forms.edit`                | Edit a form, its Cap protection, and allowed CORS origins |
+| Permission                  | Capability                                                                           |
+| --------------------------- | ------------------------------------------------------------------------------------ |
+| `hosting.sitesRead`         | List and inspect sites                                                               |
+| `hosting.filesRead`         | List files and download individual files                                             |
+| `hosting.filesWrite`        | Create and replace individual files                                                  |
+| `hosting.filesDelete`       | Delete individual files                                                              |
+| `hosting.deploy`            | Deploy production/preview content, promote preview, and change missing-page handling |
+| `hosting.download`          | Download the deployable snapshot                                                     |
+| `hosting.downloadSensitive` | Include protected and user-generated content                                         |
+| `hosting.analyticsRead`     | Read hosting analytics                                                               |
+| `hosting.analyticsManage`   | Change analytics configuration                                                       |
+| `forms.create`              | Create and immediately publish a basic form                                          |
+| `forms.edit`                | Edit a form, its Cap protection, and allowed CORS origins                            |
 
 The form discovery and integration tools use the same tenant credential against the ZynoSuite API. Adding origins from a hosting-site reference also requires `hosting.sitesRead`.
 
 Tenant admins receive the normal administrative defaults. Non-admin credentials receive only the operations explicitly granted to them.
 
-That table is the complete set. `zynohosting login --help` prints it, and the MCP `login` tool enumerates it in its schema, so an invented key such as `hosting.sitesWrite` is rejected locally—naming the closest valid key—before a browser opens. CLI-token requests cannot include `msp.login`, `msp.impersonate`, `core.changePassword`, or `core.manageFingerprints`. The browser also refuses unknown permissions and permissions the current user does not possess; it never partially grants a request.
+That table is the complete set. `zynohosting login --help` prints it, and the MCP `login` tool enumerates it in its schema, so an invented key such as `hosting.sitesWrite` is rejected locally—naming the closest valid key—before a browser opens. CLI-token requests cannot include `msp.login`, `msp.impersonate`, `core.changePassword`, or `core.manageFingerprints`. The browser also refuses unknown, malformed and non-delegable permissions outright. For a valid permission the approver does not hold in the chosen tenant, the approver can grant only the ones they hold, and the rest come back as `deniedPermissionKeys`.
 
-Only one MCP browser flow runs at a time. Repeating `login` with the same request returns the same one-time URL (`"reused": true`); requesting different permissions cancels the in-flight flow and issues a new URL rather than handing back the earlier scope. `action: "cancel"` abandons a flow and closes its loopback listener.
+Only one MCP sign-in runs at a time. Repeating `login` with the same request returns the same one-time URL or code (`"reused": true`); requesting different permissions cancels the in-flight sign-in and issues a new one rather than handing back the earlier scope. `action: "cancel"` abandons a sign-in and closes its loopback listener or cancels its code.
 
 ## JSON output
 
@@ -274,7 +309,7 @@ Most CLI commands accept `--json`. Deploy emits newline-delimited progress, plan
 
 ## Public API and release process
 
-The [public documentation site](https://zyno-io.github.io/zynohosting-cli/) covers CLI commands, MCP tools, configuration, permissions, and safety. The manager and node-agent contract is documented in [BACKEND_PLAN.md](./BACKEND_PLAN.md). Maintainer release setup and the tag-only mirror design are documented in [RELEASING.md](./RELEASING.md).
+The [public documentation site](https://cli.zyno.host/) covers CLI commands, MCP tools, configuration, permissions, and safety. The manager and node-agent contract is documented in [BACKEND_PLAN.md](./BACKEND_PLAN.md). Maintainer release setup and the tag-only mirror design are documented in [RELEASING.md](./RELEASING.md).
 
 ## License
 

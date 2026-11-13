@@ -1,4 +1,4 @@
-import { Command, Option } from 'commander';
+import { Command, CommanderError, Option } from 'commander';
 import { readFileSync } from 'node:fs';
 
 import type { HostingEnvironment } from './config.js';
@@ -7,12 +7,18 @@ import { configureUserAgent } from './api/user-agent.js';
 import { deploySite, DeploySiteOptions } from './commands/deploy-site.js';
 import { downloadSite, DownloadSiteOptions } from './commands/download-site.js';
 import { deleteFile, getFile, listFiles, putFile } from './commands/files.js';
+import { runFormCommand, runFormsGuide } from './commands/forms.js';
 import { login, LoginOptions } from './commands/login.js';
+import { listLogins, useLogin, whoami } from './commands/logins.js';
 import { logout, LogoutOptions } from './commands/logout.js';
 import { promoteSite, PromoteSiteOptions } from './commands/promote-site.js';
+import { setSiteSettings, SetSiteSettingsOptions } from './commands/site-settings.js';
 import { getSite, listSites } from './commands/sites.js';
+import { CliError } from './errors.js';
+import { FORM_OPERATIONS } from './mcp/forms.js';
 import { installHostingMcp, McpInstallAgent } from './mcp/install.js';
 import { startHostingMcp } from './mcp/start.js';
+import { forceJsonErrors } from './output.js';
 import { permissionCapabilityLines } from './permissions.js';
 
 const PACKAGE_VERSION = readPackageVersion();
@@ -29,11 +35,16 @@ export function createProgram(): Command {
         .option('--auth-api-url <url>', 'ZynoAuth API URL')
         .addOption(environmentOption())
         .option('--api-key <key>', 'tenant API key (prefer ZYNOHOSTING_API_KEY)')
+        .option(
+            '--tenant <name|id>',
+            'use this saved login (a login id, tenant id, or tenant name) for this command only (or set ZYNOHOSTING_TENANT)'
+        )
+        .option('--account <email|id>', 'narrow --tenant when several accounts are signed in to one tenant (or set ZYNOHOSTING_ACCOUNT)')
         .option('--json', 'emit machine-readable JSON');
 
     program
         .command('login')
-        .description('sign in through ZynoSuite or save a CI API key')
+        .description('sign in through ZynoSuite (browser, or a link and code) or save a CI API key')
         .option('--api-url <url>', 'Hosting Manager API URL')
         .option('--suite-api-url <url>', 'ZynoSuite API URL')
         .option('--auth-api-url <url>', 'ZynoAuth API URL')
@@ -42,16 +53,32 @@ export function createProgram(): Command {
         .option('--login-url <url>', 'ZynoSuite SPA login page URL')
         .option('--name <description>', 'name shown on the authorization screen')
         .option('--permission <key>', 'permission to request, repeatable (see the list below)', collect, [])
-        .option('--renewable', 'securely store a renewable credential in the system credential store')
+        .option('--renewable', 'keep a renewable credential (system credential store by default; see --credential-store)')
+        .option('--lifetime <1h|1d|7d|30d>', 'suggest how long the login lasts; the approver decides. Anything above 1h needs --renewable')
+        .option(
+            '--credential-store <system|file>',
+            'where the renewal token lives with --renewable (default: system; env ZYNOHOSTING_CREDENTIAL_STORE)'
+        )
+        .option('--device', 'sign in with a link and code you open on any device, even where a browser is available')
+        .option('--no-device', 'use the browser even where a link and code would be chosen')
+        .option('--no-wait', 'with --device: print the link and code, save the pending sign-in, and exit; finish it with --resume')
+        .option('--resume', 'continue the pending sign-in started with --no-wait')
         .option('--no-open', 'print the login URL instead of opening a browser')
-        .addOption(new Option('--timeout <seconds>', 'browser login timeout').argParser(positiveInteger).default(300))
-        .action(async (commandOptions: LoginOptions & { timeout: number; permission: string[] }) => {
+        .option('--json', 'emit machine-readable JSON events on stdout')
+        .addOption(
+            new Option(
+                '--timeout <seconds>',
+                'how long to wait for approval (browser: 300; device: until the code expires; --resume: 300)'
+            ).argParser(positiveInteger)
+        )
+        .action(async (commandOptions: LoginOptions & { timeout?: number; permission: string[]; wait?: boolean; json?: boolean }) => {
             const global = program.opts<{
                 apiUrl?: string;
                 suiteApiUrl?: string;
                 authApiUrl?: string;
                 apiKey?: string;
                 environment?: HostingEnvironment;
+                json?: boolean;
             }>();
             await login({
                 ...((commandOptions.apiUrl ?? global.apiUrl) ? { apiUrl: commandOptions.apiUrl ?? global.apiUrl } : {}),
@@ -63,28 +90,41 @@ export function createProgram(): Command {
                 ...(commandOptions.name ? { name: commandOptions.name } : {}),
                 ...(commandOptions.permission.length ? { permissionKeys: commandOptions.permission } : {}),
                 ...(commandOptions.renewable ? { renewable: true } : {}),
-                timeoutSeconds: commandOptions.timeout,
-                ...(commandOptions.open === undefined ? {} : { open: commandOptions.open })
+                ...(commandOptions.lifetime ? { lifetime: commandOptions.lifetime } : {}),
+                ...(commandOptions.credentialStore ? { credentialStore: commandOptions.credentialStore } : {}),
+                ...(commandOptions.device === undefined ? {} : { device: commandOptions.device }),
+                ...(commandOptions.wait === false ? { noWait: true } : {}),
+                ...(commandOptions.resume ? { resume: true } : {}),
+                ...(commandOptions.timeout === undefined ? {} : { timeoutSeconds: commandOptions.timeout }),
+                ...(commandOptions.open === undefined ? {} : { open: commandOptions.open }),
+                json: commandOptions.json ?? global.json ?? false,
+                handleSigint: true
             });
         })
         .addHelpText(
             'after',
             [
                 '',
-                'Permissions (the complete list; any other key is rejected before the browser opens):',
+                'Permissions (the complete list; any other key is rejected before anything is started):',
                 permissionCapabilityLines()
                     .split('\n')
                     .map(line => `  ${line}`)
                     .join('\n'),
                 '',
                 'Every hosting permission also needs hosting.sitesRead. Request the narrowest complete set:',
-                'a token cannot be widened later, so changing scope means logging out and signing in again.'
+                'a token cannot be widened later, so changing scope means logging out and signing in again.',
+                '',
+                'Where no browser can open (SSH, no display) login picks the link-and-code flow by itself.',
+                'Agents that only show output when a command exits: login --device --no-wait --json, then login --resume --json.'
             ].join('\n')
         );
 
     program
         .command('logout')
-        .description('revoke the saved scoped token and remove local credentials')
+        .description('revoke the active saved login (or the one named by --tenant) and remove its local credentials')
+        .option('--all', 'log out of every login in every saved environment')
+        .option('--tenant <name|id>', 'log out of this saved login instead of the active one')
+        .option('--account <email|id>', 'narrow --tenant to one account')
         .option('--api-url <url>', 'Hosting Manager API URL')
         .option('--suite-api-url <url>', 'ZynoSuite API URL')
         .option('--auth-api-url <url>', 'ZynoAuth API URL')
@@ -92,6 +132,9 @@ export function createProgram(): Command {
         .action(async (commandOptions: LogoutOptions) => {
             const context = commandContext(program, commandOptions);
             await logout({
+                ...(commandOptions.all ? { all: true } : {}),
+                ...(context.tenant ? { tenant: context.tenant } : {}),
+                ...(context.account ? { account: context.account } : {}),
                 ...(context.apiUrl ? { apiUrl: context.apiUrl } : {}),
                 ...(context.suiteApiUrl ? { suiteApiUrl: context.suiteApiUrl } : {}),
                 ...(context.authApiUrl ? { authApiUrl: context.authApiUrl } : {}),
@@ -99,7 +142,37 @@ export function createProgram(): Command {
             });
         });
 
-    const sites = program.command('sites').description('list and inspect authorized sites');
+    const logins = program
+        .command('logins')
+        .description('list the saved logins for the selected environment, one per account and tenant')
+        .option('--api-url <url>', 'Hosting Manager API URL')
+        .addOption(environmentOption())
+        .option('--json', 'emit JSON')
+        .action(async (commandOptions: { json?: boolean; environment?: HostingEnvironment; apiUrl?: string }) => {
+            await listLogins(commandContext(program, commandOptions));
+        });
+    logins
+        .command('use')
+        .description('make a saved login the default, without signing in again')
+        .argument('<tenant>', 'tenant name or tenant ID, as listed by `zynohosting logins`')
+        .option('--api-url <url>', 'Hosting Manager API URL')
+        .addOption(environmentOption())
+        .option('--json', 'emit JSON')
+        .action(async (tenant: string, commandOptions: { json?: boolean; environment?: HostingEnvironment; apiUrl?: string }) => {
+            await useLogin(tenant, commandContext(program, commandOptions));
+        });
+    program
+        .command('whoami')
+        .description('show which saved login commands use now (with --all, every saved login)')
+        .option('--all', 'list every saved login, like `zynohosting logins`')
+        .option('--api-url <url>', 'Hosting Manager API URL')
+        .addOption(environmentOption())
+        .option('--json', 'emit JSON')
+        .action(async (commandOptions: { all?: boolean; json?: boolean; environment?: HostingEnvironment; apiUrl?: string }) => {
+            await whoami({ ...commandContext(program, commandOptions), ...(commandOptions.all ? { all: true } : {}) });
+        });
+
+    const sites = program.command('sites').description('list, inspect, and configure authorized sites');
     sites
         .command('list')
         .description('list authorized hosting sites')
@@ -114,6 +187,20 @@ export function createProgram(): Command {
         .option('--json', 'emit JSON')
         .action(async (siteRef: string, commandOptions: { json?: boolean }) => {
             await getSite(siteRef, commandContext(program, commandOptions));
+        });
+
+    sites
+        .command('set')
+        .description('change a site setting (currently how missing pages are handled)')
+        .argument('<site>', 'site ID or hostname')
+        .option('--not-found <mode>', 'missing-page handling: 404-page or single-page-application (static sites only)')
+        .addOption(environmentOption())
+        .option('-y, --yes', 'apply without prompting after displaying the change')
+        .option('--dry-run', 'show the change without applying it')
+        .option('--json', 'emit newline-delimited JSON output')
+        .addOption(new Option('--timeout <seconds>', 'update and reconciliation timeout').argParser(positiveInteger).default(300))
+        .action(async (siteRef: string, commandOptions: SetSiteSettingsOptions & { timeout: number }) => {
+            await setSiteSettings(siteRef, { ...commandContext(program, commandOptions), ...commandOptions, timeoutSeconds: commandOptions.timeout });
         });
 
     const files = program.command('files').description('list, download, upload, and delete individual files');
@@ -288,11 +375,52 @@ export function createProgram(): Command {
             process.stdout.write(`Restart ${installAgentName(installed.agent)} before using the ZynoHosting MCP tools.\n`);
         });
 
+    const forms = jsonParseErrors(
+        program
+            .command('forms')
+            .description('discover, create, inspect, edit, and connect ZynoForms (JSON in, JSON out)')
+            .hook('preAction', () => forceJsonErrors())
+    );
+    const formsDocs = 'https://cli.zyno.host/cli/forms';
+    for (const operation of FORM_OPERATIONS) {
+        const command = jsonParseErrors(forms.command(operation.command).description(operation.title));
+        // `list` takes no arguments but still accepts `--input '{}'`, as its MCP tool accepts an empty object.
+        command.option('--input <json|@file|->', 'JSON object of arguments, @file to read a file, or - for stdin');
+        command
+            .addOption(environmentOption())
+            .addHelpText('after', `\n${operation.description}\n\nMirrors the MCP tool ${operation.tool}. Output is always JSON.\nSee ${formsDocs}\n`)
+            .action(async (commandOptions: { input?: string; environment?: HostingEnvironment }) => {
+                const { json: _json, ...context } = commandContext(program, commandOptions);
+                await runFormCommand(operation.command, {
+                    ...context,
+                    ...(commandOptions.input === undefined ? {} : { input: commandOptions.input })
+                });
+            });
+    }
+    forms
+        .command('guide')
+        .description('print the ZynoForms embedding guide (no authentication needed)')
+        .addHelpText('after', `\nMirrors the MCP resource zynoforms://guides/embedding. Output is always JSON.\nSee ${formsDocs}\n`)
+        .action(() => runFormsGuide());
+
     return program;
 }
 
 function installAgentName(agent: McpInstallAgent): string {
     return agent === 'claude' ? 'Claude Code' : 'Codex';
+}
+
+/**
+ * Forms commands promise JSON errors, but commander rejects bad options before any action hook runs and
+ * prints plain text. Route those parse errors through the JSON error path as invalid input instead.
+ */
+function jsonParseErrors(command: Command): Command {
+    return command.configureOutput({ outputError: () => {} }).exitOverride((error: CommanderError) => {
+        // Help and version output exit normally; let commander finish them.
+        if (error.code === 'commander.helpDisplayed' || error.code === 'commander.help' || error.code === 'commander.version') return;
+        forceJsonErrors();
+        throw new CliError(error.message.replace(/^error: /, ''), 2, 'invalid_input');
+    });
 }
 
 function commandContext(
@@ -303,6 +431,8 @@ function commandContext(
         authApiUrl?: string;
         apiKey?: string;
         environment?: HostingEnvironment;
+        tenant?: string;
+        account?: string;
         json?: boolean;
     }
 ): {
@@ -311,6 +441,8 @@ function commandContext(
     authApiUrl?: string;
     apiKey?: string;
     environment?: HostingEnvironment;
+    tenant?: string;
+    account?: string;
     json: boolean;
 } {
     const global = program.opts<{
@@ -319,6 +451,8 @@ function commandContext(
         authApiUrl?: string;
         apiKey?: string;
         environment?: HostingEnvironment;
+        tenant?: string;
+        account?: string;
         json?: boolean;
     }>();
     return {
@@ -327,6 +461,8 @@ function commandContext(
         ...((commandOptions.authApiUrl ?? global.authApiUrl) ? { authApiUrl: commandOptions.authApiUrl ?? global.authApiUrl } : {}),
         ...((commandOptions.apiKey ?? global.apiKey) ? { apiKey: commandOptions.apiKey ?? global.apiKey } : {}),
         ...((commandOptions.environment ?? global.environment) ? { environment: commandOptions.environment ?? global.environment } : {}),
+        ...((commandOptions.tenant ?? global.tenant) ? { tenant: commandOptions.tenant ?? global.tenant } : {}),
+        ...((commandOptions.account ?? global.account) ? { account: commandOptions.account ?? global.account } : {}),
         json: commandOptions.json ?? global.json ?? false
     };
 }

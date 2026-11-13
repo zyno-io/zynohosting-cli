@@ -63,19 +63,43 @@ Promotion errors include `preview_unavailable` for an older manager, `promotion_
 failed serving reconciliation, and `promotion_pending` when an accepted operation is still pending.
 The latter includes its operation ID and status path; inspect that operation before resubmitting.
 
+## Login output
+
+`zynohosting login --json` writes one event per line to stdout and human text to stderr. The device code, access token and renewal token never appear.
+
+| Event                                                                                                                                                                                                                          | When                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `{"type":"login_started","flow":"device","reason","verificationUri","verificationUriComplete","userCode","expiresAt","interval"}`                                                                                              | A code was issued. `reason` is `explicit`, `ssh`, `no_display` or `loopback_unavailable`.                                                                                                                                                                                                                                                                                                                                           |
+| `{"type":"login_started","flow":"browser","reason","url"}`                                                                                                                                                                     | The browser flow started.                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `{"type":"login_pending","resume":"zynohosting login --resume"}`                                                                                                                                                               | `--no-wait` saved a pending sign-in, or `--resume` timed out.                                                                                                                                                                                                                                                                                                                                                                       |
+| `{"type":"warning","code":"api_key_in_environment\|access_token_in_environment","message"}`                                                                                                                                    | `login` ran while `ZYNOHOSTING_API_KEY` or `ZYNOHOSTING_ACCESS_TOKEN` is set; that credential overrides saved logins for every command.                                                                                                                                                                                                                                                                                             |
+| `{"type":"login_resuming","userCode"}`                                                                                                                                                                                         | `--resume` began waiting.                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `{"type":"result","status":"authenticated","flow","profile","loginId","accountId","tenantId","tenantName","account","renewable","permissionKeys","deniedPermissionKeys","credentialStore","accessExpiresAt","grantExpiresAt"}` | The login was saved. `permissionKeys` is what the approver granted (a subset of what was requested) and `deniedPermissionKeys` what was not. Times are ISO strings. `accountId`, `tenantName`, `account`, `credentialStore` (only for a renewable login) and `grantExpiresAt` can be absent; every other field, including `deniedPermissionKeys` (an empty array when nothing was denied) and `accessExpiresAt`, is always present. |
+| `{"type":"result","status":"api_key_saved","profile"}`                                                                                                                                                                         | `--api-key` was saved. Only an explicit `--api-key` is saved; a `ZYNOHOSTING_API_KEY` in the environment is never written to disk.                                                                                                                                                                                                                                                                                                  |
+
+`zynohosting logins --json` prints `{"profile","logins":[{"loginId","kind","accountId","accountEmail","tenantId","tenantName","active","renewable","permissionKeys","deniedPermissionKeys","credentialStore","accessExpiresAt","grantExpiresAt","expired"}]}`, and `zynohosting whoami --json` prints `{"profile","login":{…}}`. On `logins`, `accountId`, `accountEmail`, `credentialStore` (only when renewable), `accessExpiresAt` and `grantExpiresAt` are present only when known, `permissionKeys` is absent for a login saved before permissions were recorded, and `deniedPermissionKeys` is present only when something was denied. An `API key` row has only `loginId`, `kind`, `tenantName`, `active`, `renewable` and `expired`. Tokens are never listed.
+
+## Site settings output
+
+`sites set --yes --json` emits `site_settings_plan`, progress events, then `site_settings_result`
+only after serving reconciliation succeeds. `--dry-run --json` emits the plan and `dry_run_complete`.
+Errors: `not_found_handling_requires_static` (exit 2, SPA on a PHP site), `not_found_handling_unavailable`
+(exit 5, older manager), `reconciliation_failed` and `reconciliation_pending` (exit 7; the latter
+includes the operation ID, and re-running the same command resumes waiting).
+
 ## Exit codes
 
-| Exit code | Category                                                                   |
-| --------- | -------------------------------------------------------------------------- |
-| `0`       | Success.                                                                   |
-| `1`       | Unexpected CLI or runtime failure.                                         |
-| `2`       | Invalid local input, unsafe path, configuration, or missing confirmation.  |
-| `3`       | Authentication or authorization failure, including expired login.          |
-| `4`       | Remote API failure or failed ETag/create-only precondition.                |
-| `5`       | Invalid, incompatible, or unsafe manager/agent response.                   |
-| `6`       | Unknown or expired plan/session, or a stated precondition no longer holds. |
-| `7`       | The node agent could not apply a deployment.                               |
-| `8`       | Mutation applied, but cache invalidation could not be queued.              |
+| Exit code | Category                                                                                                          |
+| --------- | ----------------------------------------------------------------------------------------------------------------- |
+| `0`       | Success.                                                                                                          |
+| `1`       | Unexpected CLI or runtime failure.                                                                                |
+| `2`       | Invalid local input, unsafe path, configuration, or missing confirmation.                                         |
+| `3`       | Authentication or authorization failure, including expired login.                                                 |
+| `4`       | Remote API failure or failed ETag/create-only precondition.                                                       |
+| `5`       | Invalid, incompatible, or unsafe manager/agent response.                                                          |
+| `6`       | Unknown or expired plan/session, or a stated precondition no longer holds.                                        |
+| `7`       | The node agent could not apply a deployment, or a promotion or site-settings reconciliation failed or is pending. |
+| `8`       | Mutation applied, but cache invalidation could not be queued.                                                     |
 
 ::: danger Exit code 8
 The remote mutation already succeeded. Do not blindly retry the deployment as though nothing changed; inspect the site and retry cache invalidation through an approved operational path.
@@ -83,21 +107,36 @@ The remote mutation already succeeded. Do not blindly retry the deployment as th
 
 ## Common error codes
 
-| Code                        | Typical resolution                                                |
-| --------------------------- | ----------------------------------------------------------------- |
-| `missing_config`            | Run `zynohosting login` or provide an API key.                    |
-| `login_expired`             | Log in again, or use `--renewable` for a long-running client.     |
-| `renewal_invalid`           | The one-time renewal token is invalid/used; log in again.         |
-| `renewal_forbidden`         | Tenant policy prohibits renewal; contact a tenant administrator.  |
-| `renewal_missing`           | The OS credential entry is unavailable; log in again.             |
-| `credential_store_failed`   | Unlock or repair the operating system credential store.           |
-| `invalid_environment`       | Use `production`, `alpha`, or `dev`.                              |
-| `confirmation_required`     | Use a terminal, `--dry-run`, or reviewed `--yes`.                 |
-| `precondition_failed`       | Refresh the file listing and review the new ETag/content.         |
-| `plan_expired`              | Create and review a new plan.                                     |
-| `unsafe_local_path`         | Choose an absolute destination inside an allowed MCP root.        |
-| `unsupported_protocol`      | Upgrade the CLI or resolve cluster version skew.                  |
-| `cache_invalidation_failed` | Treat the mutation as applied and investigate cache invalidation. |
+| Code                           | Typical resolution                                                                                                                                                         |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `missing_config`               | Run `zynohosting login` or provide an API key.                                                                                                                             |
+| `login_expired`                | Log in again, or use `--renewable` for a long-running client.                                                                                                              |
+| `renewal_invalid`              | The one-time renewal token is invalid/used; log in again.                                                                                                                  |
+| `renewal_forbidden`            | Tenant policy prohibits renewal; contact a tenant administrator.                                                                                                           |
+| `renewal_missing`              | The OS credential entry is unavailable; log in again.                                                                                                                      |
+| `credential_store_failed`      | Unlock or repair the operating system credential store.                                                                                                                    |
+| `credential_store_unavailable` | No system credential service. Use a non-renewable login, or on a computer only you use, `--credential-store file`.                                                         |
+| `credential_store_insecure`    | The token file is a symlink or readable by others; fix or delete it, then log in again.                                                                                    |
+| `invalid_credential_store`     | Use `system` or `file`, and only with `--renewable`.                                                                                                                       |
+| `invalid_lifetime`             | Use `1h`, `1d`, `7d` or `30d`; anything above `1h` needs `--renewable`.                                                                                                    |
+| `grant_expired`                | The approved lifetime ended (exit 3). Log in again.                                                                                                                        |
+| `login_denied`                 | The person denied the sign-in (exit 3).                                                                                                                                    |
+| `device_code_expired`          | The code ran out or was already used (exit 3). Log in again.                                                                                                               |
+| `device_credential_lost`       | The connection dropped while the approval was delivered (exit 3). Log in again.                                                                                            |
+| `login_pending`                | `login --resume` timed out with nobody approving (exit 3). Run it again.                                                                                                   |
+| `no_pending_login`             | `login --resume` with nothing started (exit 2). Start with `--device --no-wait`.                                                                                           |
+| `device_flow_unavailable`      | The server does not offer the link-and-code sign-in (exit 4). Use the browser flow.                                                                                        |
+| `unsupported_node`             | Node.js is older than 24 (exit 1). Install Node.js 24.                                                                                                                     |
+| `login_selection_required`     | Several logins and none is the default (exit 2). Pass `--tenant`.                                                                                                          |
+| `login_not_found`              | No saved login matches `--tenant` (exit 2). See `zynohosting logins`.                                                                                                      |
+| `login_ambiguous`              | Several logins match, for example two accounts in one tenant (exit 2). The message lists each login id with its account and tenant; pass `--account` or the full login id. |
+| `invalid_environment`          | Use `production`, `alpha`, or `dev`.                                                                                                                                       |
+| `confirmation_required`        | Use a terminal, `--dry-run`, or reviewed `--yes`.                                                                                                                          |
+| `precondition_failed`          | Refresh the file listing and review the new ETag/content.                                                                                                                  |
+| `plan_expired`                 | Create and review a new plan.                                                                                                                                              |
+| `unsafe_local_path`            | Choose an absolute destination inside an allowed MCP root.                                                                                                                 |
+| `unsupported_protocol`         | Upgrade the CLI or resolve cluster version skew.                                                                                                                           |
+| `cache_invalidation_failed`    | Treat the mutation as applied and investigate cache invalidation.                                                                                                          |
 
 ## Shell example
 

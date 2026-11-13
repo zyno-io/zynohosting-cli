@@ -137,3 +137,14 @@ function countOperations(operations: readonly DeploymentOperation[]): Record<'cr
         { create: 0, replace: 0, delete: 0 }
     );
 }
+
+let jsonErrors = false;
+
+/** Makes the top-level error handler print errors as JSON, for commands whose contract is JSON only. */
+export function forceJsonErrors(): void {
+    jsonErrors = true;
+}
+
+export function jsonErrorsForced(): boolean {
+    return jsonErrors;
+}

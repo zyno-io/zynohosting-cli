@@ -1,13 +1,26 @@
+import { stat } from 'node:fs/promises';
+
 import { ScopedTokenClient } from '../api/scoped-token-client.js';
-import { createSystemRenewalTokenStore, type RenewalTokenStore } from '../auth/renewal-token-store.js';
+import { createFileRenewalTokenStore, tokenFilePath } from '../auth/file-renewal-token-store.js';
+import { chooseLogin, describeEntry, hasStoredCredential, loginEntries, selectEntry, withoutEntry, type LoginEntry } from '../auth/logins.js';
+import { createRenewalTokenStore, type RenewalTokenStore } from '../auth/renewal-token-store.js';
+import { retireDisplacedLoginsQuietly } from '../auth/retire.js';
 import {
-    configPath,
+    type ConfigTarget,
+    configLocation,
+    describeProfileKey,
+    hostingUrlChosenByFlag,
+    isolatedEnvironment,
     type HostingEnvironment,
-    loadStoredConfig,
-    resolveApiUrl,
+    loadConfigFile,
+    missingCredentialError,
+    mutateProfile,
+    removeLegacyConfigIfMatching,
     resolveAuthApiUrl,
     resolveSavedConfig,
-    saveConfig,
+    resolveSavedProfile,
+    selectionForKey,
+    selectProfile,
     type StoredConfig
 } from '../config.js';
 import { CliError, HttpError } from '../errors.js';
@@ -17,6 +30,12 @@ export interface LogoutOptions {
     suiteApiUrl?: string;
     authApiUrl?: string;
     environment?: HostingEnvironment;
+    /** Tenant name or id of the login to remove, instead of the active one. */
+    tenant?: string;
+    /** Account email or id that narrows `tenant`. */
+    account?: string;
+    /** Log out of every login in every saved profile. */
+    all?: boolean;
 }
 
 export interface LogoutDependencies {
@@ -24,67 +43,194 @@ export interface LogoutDependencies {
     configFile?: string;
     write?: (message: string) => void;
     renewalTokenStore?: RenewalTokenStore;
-    scopedTokenClient?: (apiUrl: string) => Pick<ScopedTokenClient, 'renew' | 'revoke'>;
+    scopedTokenClient?: (apiUrl: string) => Pick<ScopedTokenClient, 'renew' | 'revoke'> & Partial<Pick<ScopedTokenClient, 'cancelDevice'>>;
 }
+
+// A token stored by a login that has not yet written its profile must survive a concurrent logout.
+const PRUNE_MIN_AGE_MS = 60 * 60 * 1000;
 
 export async function logout(options: LogoutOptions = {}, dependencies: LogoutDependencies = {}): Promise<void> {
     const baseEnv = dependencies.env ?? process.env;
-    const file = dependencies.configFile ?? configPath(baseEnv);
-    const env = { ...baseEnv, ZYNOHOSTING_CONFIG: file };
+    const location = dependencies.configFile ?? configLocation(baseEnv);
+    const env = dependencies.configFile ? { ...baseEnv, ZYNOHOSTING_CONFIG: dependencies.configFile } : baseEnv;
     const write = dependencies.write ?? (message => process.stdout.write(message));
-    const stored = await loadStoredConfig(file);
-    if (!stored.apiKey && !stored.accessToken && !stored.renewalKey) {
+    const configFile = await loadConfigFile(location);
+
+    const targets: { key: string; entry: LoginEntry }[] = [];
+    if (options.all) {
+        for (const [key, profile] of Object.entries(configFile.profiles)) {
+            for (const entry of loginEntries(profile)) targets.push({ key, entry });
+        }
+    } else {
+        const selectedKey = selectProfile(options, env).key;
+        const entry = selectEntry(configFile.profiles[selectedKey] ?? {}, chooseLogin(options, env), describeProfileKey(selectedKey));
+        if (entry) targets.push({ key: selectedKey, entry });
+        else if (Object.values(configFile.profiles).some(hasStoredCredential)) {
+            // Other saved logins mean the user probably selected the wrong environment; saying "already logged out" would mislead.
+            throw missingCredentialError(selectedKey, configFile, 'logout');
+        }
+    }
+    const pendingKeys = options.all ? Object.keys(configFile.profiles).filter(key => configFile.profiles[key]?.pendingDeviceLogin) : [];
+    if (targets.length === 0 && pendingKeys.length === 0) {
         write('ZynoHosting is already logged out.\n');
         return;
     }
 
-    const apiUrl = resolveApiUrl(options.apiUrl, stored, env, options.environment);
-    const authApiUrl = resolveAuthApiUrl(options.authApiUrl, stored, apiUrl, env, options.environment);
-    const client = authApiUrl ? (dependencies.scopedTokenClient?.(authApiUrl) ?? new ScopedTokenClient(authApiUrl)) : undefined;
-    const accessAlreadyExpired = stored.expiresAt !== undefined && stored.expiresAt <= Date.now() && !stored.renewalKey;
-    if (stored.scopedToken && stored.accessToken && !accessAlreadyExpired) {
-        if (!client || !authApiUrl) {
-            throw new CliError(
-                'The ZynoAuth API URL is required to revoke this login. Pass --auth-api-url or set ZYNO_AUTH_API_URL.',
-                2,
-                'missing_auth_api_url'
+    for (const key of new Set(targets.map(target => target.key))) {
+        await retireDisplacedLoginsQuietly(key, location, {
+            configPath: typeof location === 'string' ? location : location.path,
+            renewalTokenStore: dependencies.renewalTokenStore,
+            scopedTokenClient: dependencies.scopedTokenClient,
+            write
+        });
+    }
+    let firstError: unknown;
+    for (const { key, entry } of targets) {
+        try {
+            await logoutEntry(key, configFile.profiles[key]!, entry, location, env, options, dependencies, write, Boolean(options.all));
+            write(
+                options.all || loginEntries(configFile.profiles[key]!).length > 1
+                    ? `ZynoHosting logout complete for ${describeEntry(entry)} on ${describeProfileKey(key)}.\n`
+                    : 'ZynoHosting logout complete.\n'
+            );
+        } catch (error) {
+            if (!options.all) throw error;
+            firstError ??= error;
+            write(
+                `Could not log out of ${describeEntry(entry)} on ${describeProfileKey(key)}: ${error instanceof Error ? error.message : String(error)}\n`
             );
         }
-        try {
-            let accessToken = stored.accessToken;
-            if (stored.expiresAt !== undefined && stored.expiresAt <= Date.now()) {
-                const resolved = await resolveSavedConfig(options, env, {
-                    ...(dependencies.renewalTokenStore ? { renewalTokenStore: dependencies.renewalTokenStore } : {}),
-                    scopedTokenClient: () => client
-                });
-                if (resolved.credential.type !== 'bearer') throw new CliError('The saved login is not a scoped token.', 2, 'invalid_config');
-                accessToken = resolved.credential.accessToken;
+    }
+    for (const key of pendingKeys) await dropPendingDeviceLogin(key, configFile.profiles[key]!, location, dependencies);
+    await pruneTokenFile(location, dependencies);
+    if (firstError) throw firstError;
+}
+
+async function logoutEntry(
+    key: string,
+    stored: StoredConfig,
+    entry: LoginEntry,
+    location: ConfigTarget,
+    env: NodeJS.ProcessEnv,
+    options: LogoutOptions,
+    dependencies: LogoutDependencies,
+    write: (message: string) => void,
+    isolated: boolean
+): Promise<void> {
+    const login = entry.login;
+    const selection = selectionForKey(key, stored);
+    // With --all every profile resolves its own URLs; selection overrides only describe the single selected one.
+    const authApiUrl = isolated
+        ? resolveAuthApiUrl(undefined, stored, selection.apiUrl, isolatedEnvironment(env))
+        : resolveAuthApiUrl(options.authApiUrl, stored, selection.apiUrl, env, options.environment, hostingUrlChosenByFlag(options));
+    const configPath = typeof location === 'string' ? location : location.path;
+    const store = (): RenewalTokenStore => dependencies.renewalTokenStore ?? createRenewalTokenStore(login?.renewalStore ?? 'system', configPath);
+
+    if (login) {
+        const client = authApiUrl ? (dependencies.scopedTokenClient?.(authApiUrl) ?? new ScopedTokenClient(authApiUrl)) : undefined;
+        const accessAlreadyExpired = login.expiresAt !== undefined && login.expiresAt <= Date.now() && !login.renewalKey;
+        if (login.scopedToken && login.accessToken && !accessAlreadyExpired) {
+            if (!client || !authApiUrl) {
+                throw new CliError(
+                    isolated
+                        ? `The ZynoAuth API URL is required to revoke the ${describeProfileKey(key)} login, and --all does not accept one. Run \`zynohosting logout --api-url ${selection.apiUrl} --auth-api-url <url>\` for it.`
+                        : 'The ZynoAuth API URL is required to revoke this login. Pass --auth-api-url or set ZYNO_AUTH_API_URL.',
+                    2,
+                    'missing_auth_api_url'
+                );
             }
-            await client.revoke(accessToken);
-        } catch (error) {
-            if (!isAlreadyUnusable(error)) throw error;
+            try {
+                let accessToken = login.accessToken;
+                if (login.expiresAt !== undefined && login.expiresAt <= Date.now()) {
+                    const renewalDependencies = {
+                        ...(dependencies.renewalTokenStore ? { renewalTokenStore: dependencies.renewalTokenStore } : {}),
+                        scopedTokenClient: () => client
+                    };
+                    const resolved = isolated
+                        ? await resolveSavedProfile(key, entry.id, env, renewalDependencies)
+                        : await resolveSavedConfig({ ...options, tenant: entry.id }, env, renewalDependencies);
+                    if (resolved.credential.type !== 'bearer') throw new CliError('The saved login is not a scoped token.', 2, 'invalid_config');
+                    accessToken = resolved.credential.accessToken;
+                }
+                await client.revoke(accessToken);
+            } catch (error) {
+                if (!isAlreadyUnusable(error)) throw error;
+            }
         }
     }
 
-    const retained: StoredConfig = {
-        ...(stored.apiUrl ? { apiUrl: stored.apiUrl } : {}),
-        ...(stored.suiteApiUrl ? { suiteApiUrl: stored.suiteApiUrl } : {}),
-        ...(stored.authApiUrl ? { authApiUrl: stored.authApiUrl } : {})
-    };
-    await saveConfig(retained, file);
-    if (stored.renewalKey) {
+    // Remove the entry only if it is still the one that was revoked: a same-tenant login saved in the meantime must survive.
+    let replaced = false;
+    await mutateProfile(
+        key,
+        current => {
+            const now = loginEntries(current).find(candidate => candidate.id === entry.id);
+            const unchanged = entry.login
+                ? // A renewal during logout rotates the access token but keeps the renewal key, so the key identifies the login.
+                  now?.login !== undefined &&
+                  (entry.login.renewalKey ? now.login.renewalKey === entry.login.renewalKey : now.login.accessToken === entry.login.accessToken)
+                : now?.kind === 'api-key' && current.apiKey === stored.apiKey;
+            if (!unchanged) {
+                replaced = true;
+                return current;
+            }
+            const next = withoutEntry(current, entry);
+            // A profile that still holds a displaced login awaiting retirement is kept, so that login is never lost silently.
+            return hasStoredCredential(next) || next.pendingDeviceLogin || next.retiredLogins?.length ? next : undefined;
+        },
+        location
+    );
+    if (replaced) return;
+    await removeLegacyConfigIfMatching(location, entry.login ? { logins: { [entry.id]: entry.login } } : { apiKey: stored.apiKey! });
+    if (login?.renewalKey) {
         try {
-            await (dependencies.renewalTokenStore ?? createSystemRenewalTokenStore()).delete(stored.renewalKey);
+            await store().delete(login.renewalKey);
         } catch {
             write('Warning: the local renewal credential could not be removed, but it is no longer valid.\n');
         }
     }
-    write('ZynoHosting logout complete.\n');
+}
+
+/** Drops a started-but-never-finished device sign-in: the server is told, best effort, and the saved record is removed. */
+async function dropPendingDeviceLogin(key: string, stored: StoredConfig, location: ConfigTarget, dependencies: LogoutDependencies): Promise<void> {
+    const pending = stored.pendingDeviceLogin;
+    if (!pending) return;
+    try {
+        const client = dependencies.scopedTokenClient?.(pending.authApiUrl) ?? new ScopedTokenClient(pending.authApiUrl);
+        await client.cancelDevice?.(pending.deviceCode);
+    } catch {
+        // The code expires on its own within minutes.
+    }
+    await mutateProfile(
+        key,
+        current => {
+            const { pendingDeviceLogin: _pending, ...rest } = current;
+            return hasStoredCredential(rest) || rest.retiredLogins?.length ? rest : undefined;
+        },
+        location
+    );
+}
+
+/** Removes token-file entries that no profile references any more (for example after a crash), once they are old enough to be orphans. */
+async function pruneTokenFile(location: ConfigTarget, dependencies: LogoutDependencies): Promise<void> {
+    if (dependencies.renewalTokenStore) return;
+    const configPath = typeof location === 'string' ? location : location.path;
+    try {
+        await stat(tokenFilePath(configPath));
+        const file = await loadConfigFile(location);
+        const referenced = new Set<string>();
+        for (const profile of Object.values(file.profiles)) {
+            for (const login of Object.values(profile.logins ?? {})) if (login.renewalKey) referenced.add(login.renewalKey);
+        }
+        await createFileRenewalTokenStore(configPath).prune(referenced, PRUNE_MIN_AGE_MS);
+    } catch {
+        // Housekeeping only; a missing or unreadable token file must not fail a logout that already succeeded.
+    }
 }
 
 function isAlreadyUnusable(error: unknown): boolean {
     return (
-        (error instanceof CliError && ['login_expired', 'renewal_invalid', 'renewal_missing'].includes(error.code)) ||
+        (error instanceof CliError && ['login_expired', 'renewal_invalid', 'renewal_missing', 'grant_expired'].includes(error.code)) ||
         (error instanceof HttpError && error.status === 401)
     );
 }

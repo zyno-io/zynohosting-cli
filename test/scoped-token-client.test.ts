@@ -65,6 +65,37 @@ test('rejects malformed or implausibly long-lived renewal responses', async () =
     }
 });
 
+test('renewal accepts the tenant, account and grant end that newer servers add, and ignores malformed ones', async () => {
+    const grantEnd = new Date(Date.now() + 86_400_000).toISOString();
+    const bodies = [
+        { tenantName: 'Acme Co', accountEmail: 'owner@example.com', grantExpiresAt: grantEnd },
+        { tenantName: 42, accountEmail: null, grantExpiresAt: 'not a date' }
+    ];
+    let call = 0;
+    const server = createServer((_request, response) => {
+        response.setHeader('Content-Type', 'application/json');
+        response.end(
+            JSON.stringify({ jwt: 'new.jwt.signature', expiresAt: Date.now() + 3_600_000, renewalToken: 'zrt_replacement', ...bodies[call++] })
+        );
+    });
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    assert(address && typeof address === 'object');
+    try {
+        const client = new ScopedTokenClient(`http://127.0.0.1:${address.port}`);
+        const first = await client.renew('zrt_current');
+        assert.equal(first.tenantName, 'Acme Co');
+        assert.equal(first.accountEmail, 'owner@example.com');
+        assert.equal(first.grantExpiresAt, Date.parse(grantEnd));
+        const second = await client.renew('zrt_current');
+        assert.equal(second.tenantName, undefined);
+        assert.equal(second.accountEmail, undefined);
+        assert.equal(second.grantExpiresAt, undefined);
+    } finally {
+        await new Promise<void>((resolve, reject) => server.close(error => (error ? reject(error) : resolve())));
+    }
+});
+
 async function requestText(request: AsyncIterable<unknown>): Promise<string> {
     const chunks: Buffer[] = [];
     for await (const chunk of request) chunks.push(Buffer.from(chunk as Buffer));

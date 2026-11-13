@@ -4,27 +4,27 @@ ZynoHosting and ZynoForms automation use tenant permissions at their APIs. Hosti
 
 ## Tenant permissions
 
-| Permission                  | Capability                                                              |
-| --------------------------- | ----------------------------------------------------------------------- |
-| `hosting.sitesRead`         | List and inspect authorized sites.                                      |
-| `hosting.filesRead`         | List files and download individual files.                               |
-| `hosting.filesWrite`        | Create and replace individual files.                                    |
-| `hosting.filesDelete`       | Delete individual files.                                                |
-| `hosting.deploy`            | Deploy production/preview content and promote preview.                  |
-| `hosting.download`          | Download the deployable snapshot.                                       |
-| `hosting.downloadSensitive` | Include protected and user-generated content in a snapshot.             |
-| `hosting.analyticsRead`     | Read hosting analytics.                                                 |
-| `hosting.analyticsManage`   | Change analytics configuration.                                         |
-| `forms.create`              | Create and immediately publish a basic form.                            |
-| `forms.edit`                | Change a form’s name, fields, Cap protection, and allowed CORS origins. |
+| Permission                  | Capability                                                                            |
+| --------------------------- | ------------------------------------------------------------------------------------- |
+| `hosting.sitesRead`         | List and inspect authorized sites.                                                    |
+| `hosting.filesRead`         | List files and download individual files.                                             |
+| `hosting.filesWrite`        | Create and replace individual files.                                                  |
+| `hosting.filesDelete`       | Delete individual files.                                                              |
+| `hosting.deploy`            | Deploy production/preview content, promote preview, and change missing-page handling. |
+| `hosting.download`          | Download the deployable snapshot.                                                     |
+| `hosting.downloadSensitive` | Include protected and user-generated content in a snapshot.                           |
+| `hosting.analyticsRead`     | Read hosting analytics.                                                               |
+| `hosting.analyticsManage`   | Change analytics configuration.                                                       |
+| `forms.create`              | Create and immediately publish a basic form.                                          |
+| `forms.edit`                | Change a form’s name, fields, Cap protection, and allowed CORS origins.               |
 
 That table is the complete set of keys a CLI token can request. `zynohosting login --help` prints it and the MCP `login` tool enumerates it in its schema, so a plausible-looking invention such as `hosting.sitesWrite` fails locally—naming the closest real key—before any browser opens.
 
-Browser login can issue a token only for permissions currently resolved for that user. A tenant may disable CLI-token minting and renewal for non-admin users. The browser rejects the whole request if any key is unknown, unavailable, malformed, or non-delegable; it does not partially grant the remainder.
+Browser login can issue a token only for permissions currently resolved for that user. A tenant may disable CLI-token minting and renewal for non-admin users. The browser rejects the whole request if any key is unknown, unavailable, malformed, or non-delegable; it does not partially grant the remainder. A valid key that the approver does not hold in the chosen tenant is not an error: the approver can grant only the permissions they hold, and the ones left out come back to the CLI as `deniedPermissionKeys`. A login always gets at least one of the requested permissions.
 
 Never request `msp.login`, `msp.impersonate`, `core.changePassword`, or `core.manageFingerprints`. Those capabilities cannot be delegated to scoped CLI tokens.
 
-Listing forms, describing their structure, and reading their integration details require an authenticated tenant identity. Authoring a form — creating or editing one — also requires a user identity: the Suite stamps every form mutation with the account that made it, so a workstation-only credential is refused. Expanding form origins from a ZynoHosting site additionally requires `hosting.sitesRead` because the tool reads that site’s primary, alias, and vanity hostnames.
+Listing forms, describing their structure, and reading their integration details require an authenticated tenant identity. Authoring a form — creating or editing one — also requires a user identity: the Suite stamps every form mutation with the account that made it, so a workstation-only credential is refused. Expanding form origins from a ZynoHosting site additionally requires `hosting.sitesRead` because the tool reads that site’s primary, alias, vanity, and preview hostnames.
 
 ## Cluster capability scopes
 
@@ -64,7 +64,7 @@ Grant:
 
 Add `hosting.filesRead` only if the same workflow must inspect or download individual files.
 
-This same permission set covers `deploy --preview`, `promote`, and their MCP plan/apply tools.
+This same permission set covers `deploy --preview`, `promote`, `sites set`, and their MCP tools.
 No new permission is introduced for preview or promotion.
 
 ### Backup automation

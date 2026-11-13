@@ -1,9 +1,13 @@
 # Getting started
 
+::: tip Not a developer?
+If you use an AI agent such as Claude, Codex, Grok Bot, or ChatGPT dots, start with [Set up an agent](../agents/) instead. This page is for using the command line directly.
+:::
+
 `@zyno-io/zynohosting` provides two executables:
 
-- `zynohosting` for people and CI jobs;
-- `zynohosting-mcp` for local stdio MCP clients.
+- `zynohosting` for people, coding agents, and CI jobs;
+- `zynohosting-mcp` for local stdio MCP clients, mainly the Claude desktop app.
 
 Both clients use the same Hosting Manager API, permission model, and short-lived site capabilities.
 
@@ -71,7 +75,7 @@ Continue with [Individual files](../cli/files).
 
 ### Deploy a directory
 
-Always preview the exact synchronization plan first:
+Always inspect the exact synchronization plan first:
 
 ```bash
 zynohosting deploy example.com ./dist --dry-run
@@ -80,37 +84,41 @@ zynohosting deploy example.com ./dist
 
 Continue with [Full deployments](../cli/deploy).
 
-### Connect an agent
+### Try a change on preview, then promote it
 
-The easiest setup for Codex or Claude Code is to paste this into the agent:
-
-> Set up ZynoHosting MCP for this project if it's not already configured. See https://raw.githubusercontent.com/zyno-io/zynohosting-cli/main/docs/mcp/agent.md for details.
-
-The agent performs the installation and then asks the user to restart it. This covers Claude Code wherever it runs, including the Code tab of the Claude desktop app. The desktop app's Chat and Cowork tabs cannot install anything from a conversation; they install the signed desktop extension instead, described in [Set up the Claude desktop app](../mcp/#set-up-the-claude-desktop-app).
-
-See [Set up and use ZynoHosting in your agent](../mcp/setup) for the copy-and-paste prompts that cover signing in, publishing, and forms.
-
-Restrict local-file access to a project root when the agent should not use the MCP process user's entire accessible filesystem:
+Every site has a separate preview slot at its own hostname:
 
 ```bash
-npx -y @zyno-io/zynohosting mcp --root /absolute/path/to/project
+zynohosting deploy example.com ./dist --preview --dry-run
+zynohosting deploy example.com ./dist --preview
+zynohosting promote example.com
 ```
 
-Continue with [Configure MCP](../mcp/).
+Preview shares the live site's database, and promotion replaces production wholesale. Read [Preview and production](./preview) before you use it, especially for WordPress.
+
+### Connect an agent
+
+For Codex or Claude Code, paste this into the agent:
+
+> Set up ZynoHosting for this project. Follow https://raw.githubusercontent.com/zyno-io/zynohosting-cli/main/docs/agents/install.md
+
+The agent installs a skill file that teaches it this CLI, then carries on in the same session. The desktop app's Chat and Cowork tabs cannot run a CLI; they install the signed desktop extension instead. See [CLI, skill, or MCP](../agents/interfaces) for the reasoning and [Set up an agent](../agents/) for per-agent steps and copy-and-paste prompts.
 
 ## Global options
 
 These options apply to the CLI and may be placed before a command:
 
-| Option                  | Purpose                                                                 |
-| ----------------------- | ----------------------------------------------------------------------- |
-| `-V`, `--version`       | Print the installed package version.                                    |
-| `--api-url <url>`       | Override the Hosting Manager API URL.                                   |
-| `--suite-api-url <url>` | Override the ZynoSuite API URL.                                         |
-| `--auth-api-url <url>`  | Override the ZynoAuth API URL.                                          |
-| `--environment <name>`  | Select `production`, `alpha`, or `dev`.                                 |
-| `--api-key <key>`       | Supply a tenant API key. Prefer the environment variable in automation. |
-| `--json`                | Emit machine-readable output where the command supports it.             |
+| Option                  | Purpose                                                                             |
+| ----------------------- | ----------------------------------------------------------------------------------- |
+| `-V`, `--version`       | Print the installed package version.                                                |
+| `--api-url <url>`       | Override the Hosting Manager API URL.                                               |
+| `--suite-api-url <url>` | Override the ZynoSuite API URL.                                                     |
+| `--auth-api-url <url>`  | Override the ZynoAuth API URL.                                                      |
+| `--environment <name>`  | Select `production`, `alpha`, or `dev`.                                             |
+| `--api-key <key>`       | Supply a tenant API key. Prefer the environment variable in automation.             |
+| `--tenant <name\|id>`   | Use this saved login (a login id, tenant id, or tenant name) for this command only. |
+| `--account <email\|id>` | Narrow `--tenant` when several accounts are signed in to one tenant.                |
+| `--json`                | Emit machine-readable output where the command supports it.                         |
 
 ::: tip
 Run `zynohosting <command> --help` to see command-specific options for the installed release.
@@ -118,6 +126,7 @@ Run `zynohosting <command> --help` to see command-specific options for the insta
 
 ## Next steps
 
+- Starting from scratch? See [Building a site](./building-a-site) for what ZynoHosting can run and why Astro is the recommended starting point.
 - Learn how [credentials and environments](./authentication) are resolved.
 - Review the [safety model](../reference/safety) before granting an agent write access.
 - Check [permissions](../reference/permissions) when an operation is forbidden.

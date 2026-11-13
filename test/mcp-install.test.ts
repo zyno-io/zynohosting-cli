@@ -40,7 +40,7 @@ test('installs only the selected project-local Codex MCP configuration without s
     assert.match(codex, /^\[mcp_servers\.zynohosting\]$/m);
     assert.match(codex, /command = "npx"/);
     assert.match(codex, new RegExp(JSON.stringify(installed.project).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-    assert.match(codex, /tool_timeout_sec = 330/);
+    assert.match(codex, /tool_timeout_sec = 930/);
     assert.doesNotMatch(codex, /api.?key|access.?token/i);
 
     await assert.rejects(readFile(join(project, '.mcp.json'), 'utf8'));

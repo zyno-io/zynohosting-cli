@@ -2,13 +2,19 @@
 
 The package includes a local stdio MCP server that exposes authorized ZynoHosting operations to agents. It does not open a network port and there is no hosted/cloud MCP endpoint.
 
+::: tip Most coding agents don't need this
+Codex and Claude Code should use the [CLI with the ZynoHosting skill](../agents/interfaces) for hosting work. It costs nothing until a task needs it and requires no restart. The MCP server is for the [Claude desktop app's Chat and Cowork tabs](#set-up-the-claude-desktop-app), which cannot run a CLI.
+:::
+
 ## Set up Codex or Claude Code
+
+Do this only when the team prefers MCP tools to shell commands. Otherwise [install the skill](../agents/install).
 
 Claude Code here means every surface of that client—the terminal CLI, the IDE extensions, and the Code tab of the Claude desktop app. All three read the same project `.mcp.json`, so the instruction below is the whole setup for any of them. The desktop app's Chat and Cowork tabs are a separate client with separate configuration; see [Set up the Claude desktop app](#set-up-the-claude-desktop-app).
 
 For an end user, the easiest option is to paste this instruction into the agent:
 
-> Set up ZynoHosting MCP for this project if it's not already configured. See https://raw.githubusercontent.com/zyno-io/zynohosting-cli/main/docs/mcp/agent.md for details.
+> Set up the ZynoHosting MCP server for this project. I want the MCP server, not the CLI skill. See https://raw.githubusercontent.com/zyno-io/zynohosting-cli/main/docs/mcp/agent.md for details.
 
 The agent runs the installer for itself; the user does not need to use a terminal:
 
@@ -24,7 +30,7 @@ The installer merges a `zynohosting` server entry into only the selected agent�
 Restart Codex or Claude Code after the installer completes. The current agent session cannot discover MCP tools that were configured after it started.
 :::
 
-Copy-and-paste prompts for the whole workflow—setup, browser login, publishing, and forms—are on [Set up and use ZynoHosting in your agent](./setup), written for a non-technical user. What the agent itself does during installation is on [Install instructions for agents](./agent).
+Copy-and-paste prompts for the whole workflow—setup, browser login, publishing, preview, and forms—are on [Set up an agent](../agents/), written for a non-technical user. What the agent itself does during installation is on [MCP install instructions for agents](./agent).
 
 Deployment-domain policy and form-editing policy are not documented for agents here: the server supplies them as MCP instructions and tool descriptions on every connection, so they reach every session rather than only the one that fetched a page.
 
@@ -86,7 +92,7 @@ zynohosting login \
   --renewable
 ```
 
-The MCP automatically rotates the one-time renewal credential through the operating system credential store. It schedules renewal in the background before the access token expires even if no tools are called, and it checks again before every authenticated request. The background timer does not keep the MCP process alive after its host closes the stdio session. For unattended service agents, inject `ZYNOHOSTING_API_KEY` through the client’s secret configuration instead.
+When `renewable` is not set, the MCP `login` tool asks for a renewable login so the sign-in does not end after 60 minutes. It first checks that the operating system credential store works (macOS Keychain, Linux Secret Service, Windows Credential Locker). If there is none, it falls back to a 60-minute login and says so: the result has `renewable: false` and `renewableFallbackReason: "credential_store_unavailable"`, and the status text tells the user to set `ZYNOHOSTING_CREDENTIAL_STORE=file` in the server environment to stay signed in. Setting `renewable: true` explicitly fails instead, with a message that names `renewable: false` and `ZYNOHOSTING_CREDENTIAL_STORE=file`. A locked macOS keychain cannot be detected up front and fails when the token is stored. The MCP automatically rotates the one-time renewal credential through the operating system credential store. It schedules renewal in the background before the access token expires even if no tools are called, and it checks again before every authenticated request. The background timer does not keep the MCP process alive after its host closes the stdio session. For unattended service agents, inject `ZYNOHOSTING_API_KEY` through the client’s secret configuration instead.
 
 ::: warning
 MCP client configuration frequently lives in a user profile. Do not commit API keys or access tokens in project configuration.
@@ -166,9 +172,11 @@ After the user names a domain, the agent verifies it with `list_sites` or `get_s
 
 ## Available tools
 
-The server exposes twenty tools:
+The server exposes twenty-three tools:
 
 - `login`
+- `list_logins`
+- `use_login`
 - `list_sites`
 - `get_site`
 - `list_forms`
@@ -186,6 +194,7 @@ The server exposes twenty tools:
 - `apply_deploy`
 - `plan_promote`
 - `apply_promote`
+- `set_not_found_handling`
 - `plan_download`
 - `apply_download`
 

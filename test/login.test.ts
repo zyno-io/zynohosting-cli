@@ -7,9 +7,12 @@ import { test } from 'node:test';
 import type { RenewalTokenStore } from '../src/auth/renewal-token-store.js';
 
 import { login, resolveLoginPageUrl } from '../src/commands/login.js';
-import { loadStoredConfig, resolveApiUrl, resolveAuthApiUrl, resolveConfig, resolveSuiteApiUrl, saveConfig } from '../src/config.js';
+import { loadStoredConfig, resolveApiUrl, resolveAuthApiUrl, resolveConfig, resolveSuiteApiUrl, updateProfile } from '../src/config.js';
 import { CliError } from '../src/errors.js';
 import { startLoopbackLogin } from '../src/login/loopback.js';
+
+// The browser flow is what these tests exercise; a headless CI machine would otherwise pick the device flow.
+process.env.DISPLAY ||= ':0';
 
 const API_URL = 'https://hosting.api-alpha.zyno.dev';
 const SUITE_API_URL = 'https://suite.api-alpha.zyno.dev';
@@ -29,7 +32,7 @@ test('browser login accepts a one-shot SPA form POST and saves Bearer credential
     let callbackFailure: unknown;
 
     await login(
-        { apiUrl: API_URL, loginUrl: LOGIN_URL, timeoutSeconds: 5 },
+        { apiUrl: API_URL, loginUrl: LOGIN_URL, device: false, timeoutSeconds: 5 },
         {
             configFile: file,
             write: message => output.push(message),
@@ -68,15 +71,17 @@ test('browser login accepts a one-shot SPA form POST and saves Bearer credential
 
     if (callbackFailure) throw callbackFailure;
     assert(openedUrl);
-    const stored = await loadStoredConfig(file);
+    const stored = await loadStoredConfig(file, 'alpha');
     assert.equal(stored.apiUrl, API_URL);
     assert.equal(stored.suiteApiUrl, SUITE_API_URL);
     assert.equal(stored.authApiUrl, AUTH_API_URL);
-    assert.equal(stored.accessToken, JWT);
-    assert.equal(stored.tenantId, TENANT_ID);
-    assert.equal(typeof stored.expiresAt, 'number');
+    const saved = stored.logins?.[`unknown:${TENANT_ID}`];
+    assert.equal(saved?.accessToken, JWT);
+    assert.equal(saved?.tenantId, TENANT_ID);
+    assert.equal(typeof saved?.expiresAt, 'number');
+    assert.equal(stored.activeLogin, `unknown:${TENANT_ID}`);
     assert.equal(stored.apiKey, undefined);
-    assert.equal(stored.scopedToken, true);
+    assert.equal(saved?.scopedToken, true);
     assert.match(output.join(''), /login complete/i);
     if (process.platform !== 'win32') assert.equal((await stat(file)).mode & 0o777, 0o600);
 });
@@ -187,22 +192,23 @@ test('renewable browser login requests exact scopes and stores only a credential
         }
     );
 
-    const stored = await loadStoredConfig(file);
-    assert.equal(stored.scopedToken, true);
-    assert.match(stored.renewalKey ?? '', /^[0-9a-f-]{36}$/);
-    assert.equal(store.values.get(stored.renewalKey!), renewalToken);
+    const stored = await loadStoredConfig(file, 'alpha');
+    const saved = stored.logins?.[`unknown:${TENANT_ID}`];
+    assert.equal(saved?.scopedToken, true);
+    assert.match(saved?.renewalKey ?? '', /^[0-9a-f-]{36}$/);
+    assert.equal(store.values.get(saved!.renewalKey!), renewalToken);
     assert.doesNotMatch(await readFile(file, 'utf8'), /zrt_first-secret/);
 });
 
 test('browser reports failure and preserves config when a renewal credential cannot be stored', async () => {
     const root = await mkdtemp(join(tmpdir(), 'hosting-cli-renewable-failure-'));
     const file = join(root, 'config.json');
-    await saveConfig({ apiUrl: API_URL, apiKey: 'existing-key' }, file);
+    await updateProfile('alpha', { apiUrl: API_URL, apiKey: 'existing-key' }, file);
     let callbackStatus = 0;
 
     await assert.rejects(
         login(
-            { apiUrl: API_URL, loginUrl: LOGIN_URL, renewable: true, timeoutSeconds: 5 },
+            { apiUrl: API_URL, loginUrl: LOGIN_URL, device: false, renewable: true, timeoutSeconds: 5 },
             {
                 configFile: file,
                 write: () => {},
@@ -240,7 +246,7 @@ test('browser reports failure and preserves config when a renewal credential can
     );
 
     assert.equal(callbackStatus, 500);
-    assert.deepEqual(await loadStoredConfig(file), { apiUrl: API_URL, apiKey: 'existing-key' });
+    assert.deepEqual(await loadStoredConfig(file, 'alpha'), { apiUrl: API_URL, apiKey: 'existing-key' });
 });
 
 test('login rejects malformed and non-delegable permission requests before opening a browser', async () => {
@@ -271,13 +277,14 @@ test('an aborted browser login stops waiting and closes its loopback listener', 
 
     await assert.rejects(
         login(
-            { apiUrl: API_URL, loginUrl: LOGIN_URL, timeoutSeconds: 60, signal: abort.signal },
+            { apiUrl: API_URL, loginUrl: LOGIN_URL, device: false, timeoutSeconds: 60, signal: abort.signal },
             {
                 configFile: file,
                 write: () => {},
                 openUrl: async () => {},
-                onBrowserUrl: url => {
-                    callbackUrl = new URL(url).searchParams.get('callback') ?? '';
+                onLoginPrompt: prompt => {
+                    assert.equal(prompt.flow, 'browser');
+                    callbackUrl = new URL((prompt as { url: string }).url).searchParams.get('callback') ?? '';
                     abort.abort();
                 }
             }
@@ -316,6 +323,93 @@ test('loopback rejects repeated callback fields and unexpected renewal credentia
     } finally {
         await loopback.close();
     }
+});
+
+test('loopback accepts the tenant, account and grant end the portal adds, and rejects malformed ones', async () => {
+    const loopback = await startLoopbackLogin({ timeoutMs: 5_000 });
+    const post = (fields: Record<string, string>) =>
+        fetch(loopback.callbackUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: new URLSearchParams({ jwt: JWT, tenantId: TENANT_ID, expiresAt: String(Date.now() + 60_000), state: loopback.state, ...fields })
+        });
+    try {
+        assert.equal((await post({ grantExpiresAt: String(Date.now() - 1000) })).status, 400);
+        assert.equal((await post({ grantExpiresAt: String(Date.now() + 40 * 86_400_000) })).status, 400);
+        assert.equal((await post({ grantExpiresAt: 'soon' })).status, 400);
+        assert.equal((await post({ tenantName: 'Bad\u0007Name' })).status, 400);
+        assert.equal((await post({ accountEmail: 'x'.repeat(400) })).status, 400);
+        assert.equal((await post({ accountId: 'bad id!' })).status, 400);
+        const grantExpiresAt = Date.now() + 30 * 86_400_000;
+        assert.equal(
+            (await post({ accountId: 'acct-1', tenantName: 'Acme Co', accountEmail: 'owner@example.com', grantExpiresAt: String(grantExpiresAt) }))
+                .status,
+            200
+        );
+        const credential = await loopback.result;
+        assert.equal(credential.accountId, 'acct-1');
+        assert.equal(credential.tenantName, 'Acme Co');
+        assert.equal(credential.accountEmail, 'owner@example.com');
+        assert.equal(credential.grantExpiresAt, grantExpiresAt);
+    } finally {
+        await loopback.close();
+    }
+});
+
+test('the browser flow passes the requested lifetime to the portal and checks the credential store first', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'hosting-cli-login-lifetime-'));
+    const file = join(root, 'config.json');
+    let opened = 0;
+    await assert.rejects(
+        login(
+            { apiUrl: API_URL, loginUrl: LOGIN_URL, renewable: true, lifetime: '1d', device: false },
+            {
+                configFile: file,
+                write: () => {},
+                openUrl: async () => {
+                    opened++;
+                },
+                renewalTokenStore: {
+                    async get() {
+                        return undefined;
+                    },
+                    async set() {},
+                    async delete() {},
+                    async probe() {
+                        throw new CliError('no credential service', 3, 'credential_store_unavailable');
+                    }
+                }
+            }
+        ),
+        (error: unknown) => error instanceof CliError && error.code === 'credential_store_unavailable'
+    );
+    assert.equal(opened, 0);
+
+    let lifetime: string | null = null;
+    const abort = new AbortController();
+    await assert.rejects(
+        login(
+            { apiUrl: API_URL, loginUrl: LOGIN_URL, renewable: true, lifetime: '1d', device: false, signal: abort.signal },
+            {
+                configFile: file,
+                write: () => {},
+                openUrl: async () => {},
+                renewalTokenStore: {
+                    async get() {
+                        return undefined;
+                    },
+                    async set() {},
+                    async delete() {}
+                },
+                onLoginPrompt: prompt => {
+                    lifetime = new URL((prompt as { url: string }).url).searchParams.get('lifetime');
+                    abort.abort();
+                }
+            }
+        ),
+        /cancelled/i
+    );
+    assert.equal(lifetime, '86400');
 });
 
 test('loopback requires form encoding, enforces its body limit, and requires an opted-in renewal credential', async () => {
@@ -389,11 +483,12 @@ test('API-key login remains available for CI credentials', async () => {
     const root = await mkdtemp(join(tmpdir(), 'hosting-cli-login-key-'));
     const file = join(root, 'config.json');
     await login({ apiUrl: API_URL, apiKey: 'ci-key' }, { configFile: file, write: () => {} });
-    assert.deepEqual(await loadStoredConfig(file), {
+    assert.deepEqual(await loadStoredConfig(file, 'alpha'), {
         apiUrl: API_URL,
         suiteApiUrl: SUITE_API_URL,
         authApiUrl: AUTH_API_URL,
-        apiKey: 'ci-key'
+        apiKey: 'ci-key',
+        activeLogin: 'api-key'
     });
 });
 
@@ -401,16 +496,20 @@ test('saved browser credentials resolve for deployments and expire locally', asy
     const root = await mkdtemp(join(tmpdir(), 'hosting-cli-config-'));
     const file = join(root, 'config.json');
     const env = { ZYNOHOSTING_CONFIG: file };
-    await saveConfig({ apiUrl: API_URL, accessToken: JWT, tenantId: TENANT_ID, expiresAt: EXPIRATION }, file);
-    assert.deepEqual(await resolveConfig({}, env), {
+    await updateProfile('alpha', { apiUrl: API_URL, accessToken: JWT, tenantId: TENANT_ID, expiresAt: EXPIRATION }, file);
+    assert.deepEqual(await resolveConfig({ environment: 'alpha' }, env), {
         apiUrl: API_URL,
         suiteApiUrl: SUITE_API_URL,
         authApiUrl: AUTH_API_URL,
-        credential: { type: 'bearer', accessToken: JWT, tenantId: TENANT_ID, expiresAt: EXPIRATION }
+        credential: { type: 'bearer', accessToken: JWT, tenantId: TENANT_ID, expiresAt: EXPIRATION },
+        login: { id: `unknown:${TENANT_ID}`, kind: 'login', tenantId: TENANT_ID }
     });
 
-    await saveConfig({ apiUrl: API_URL, accessToken: JWT, tenantId: TENANT_ID, expiresAt: Date.now() - 1 }, file);
-    await assert.rejects(resolveConfig({}, env), (error: unknown) => error instanceof Error && error.message.includes('expired'));
+    await updateProfile('alpha', { apiUrl: API_URL, accessToken: JWT, tenantId: TENANT_ID, expiresAt: Date.now() - 1 }, file);
+    await assert.rejects(
+        resolveConfig({ environment: 'alpha' }, env),
+        (error: unknown) => error instanceof Error && error.message.includes('expired')
+    );
 });
 
 test('an injected scoped Bearer token does not require tenant metadata', async () => {
@@ -429,7 +528,8 @@ test('an expiring renewable login rotates once across concurrent config resoluti
     const env = { ZYNOHOSTING_CONFIG: file };
     const newExpiration = Date.now() + 60 * 60 * 1000;
     let renewals = 0;
-    await saveConfig(
+    await updateProfile(
+        'alpha',
         {
             apiUrl: API_URL,
             authApiUrl: AUTH_API_URL,
@@ -456,13 +556,16 @@ test('an expiring renewable login rotates once across concurrent config resoluti
         }
     };
 
-    const [first, second] = await Promise.all([resolveConfig({}, env, dependencies), resolveConfig({}, env, dependencies)]);
+    const [first, second] = await Promise.all([
+        resolveConfig({ environment: 'alpha' }, env, dependencies),
+        resolveConfig({ environment: 'alpha' }, env, dependencies)
+    ]);
     assert.equal(first.credential.type === 'bearer' && first.credential.accessToken, 'new.header.signature');
     assert.equal(second.credential.type === 'bearer' && second.credential.accessToken, 'new.header.signature');
     assert.equal(renewals, 1);
     assert.equal(store.values.get(renewalKey), 'zrt_new');
-    assert.equal((await loadStoredConfig(file)).accessToken, 'new.header.signature');
-    assert.equal((await loadStoredConfig(file)).expiresAt, newExpiration);
+    assert.equal((await loadStoredConfig(file, 'alpha')).logins?.[`unknown:${TENANT_ID}`]?.accessToken, 'new.header.signature');
+    assert.equal((await loadStoredConfig(file, 'alpha')).logins?.[`unknown:${TENANT_ID}`]?.expiresAt, newExpiration);
 });
 
 test('an explicit SPA login URL works with a custom Hosting API hostname', () => {
@@ -470,13 +573,13 @@ test('an explicit SPA login URL works with a custom Hosting API hostname', () =>
 });
 
 test('resolves environment API defaults while preserving explicit and saved URLs', () => {
-    assert.equal(resolveApiUrl(undefined, {}, {}), 'https://hosting.api.zyno.app');
-    assert.equal(resolveApiUrl(undefined, {}, { ZYNOHOSTING_ENVIRONMENT: 'alpha' }), API_URL);
-    assert.equal(resolveApiUrl(undefined, {}, { ZYNOHOSTING_ENVIRONMENT: 'dev' }), 'http://localhost:39840');
-    assert.equal(resolveApiUrl(undefined, { apiUrl: 'https://hosting.example.com' }, {}), 'https://hosting.example.com');
-    assert.equal(resolveApiUrl(undefined, { apiUrl: 'https://hosting.example.com' }, { ZYNOHOSTING_ENVIRONMENT: 'alpha' }), API_URL);
-    assert.equal(resolveApiUrl('https://override.example.com', {}, { ZYNOHOSTING_ENVIRONMENT: 'alpha' }), 'https://override.example.com');
-    assert.throws(() => resolveApiUrl(undefined, {}, { ZYNOHOSTING_ENVIRONMENT: 'staging' }), /Expected production, alpha, or dev/);
+    assert.equal(resolveApiUrl(undefined, {}), 'https://hosting.api.zyno.app');
+    assert.equal(resolveApiUrl(undefined, { ZYNOHOSTING_ENVIRONMENT: 'alpha' }), API_URL);
+    assert.equal(resolveApiUrl(undefined, { ZYNOHOSTING_ENVIRONMENT: 'dev' }), 'http://localhost:39840');
+    assert.equal(resolveApiUrl('https://hosting.example.com', {}), 'https://hosting.example.com');
+    assert.equal(resolveApiUrl('https://hosting.example.com', { ZYNOHOSTING_ENVIRONMENT: 'alpha' }), 'https://hosting.example.com');
+    assert.equal(resolveApiUrl('https://override.example.com', {}), 'https://override.example.com');
+    assert.throws(() => resolveApiUrl(undefined, { ZYNOHOSTING_ENVIRONMENT: 'staging' }), /Expected production, alpha, or dev/);
 });
 
 test('resolves matching Suite API defaults and honors explicit, environment, and saved overrides', () => {
@@ -557,3 +660,60 @@ class MemoryRenewalTokenStore implements RenewalTokenStore {
         this.values.delete(key);
     }
 }
+
+test('loopback accepts a granted subset, assumes everything for an older portal, and rejects strangers or an empty grant', async () => {
+    const requested = ['hosting.sitesRead', 'hosting.deploy'];
+    const attempt = async (fields: Record<string, string>) => {
+        const loopback = await startLoopbackLogin({ timeoutMs: 5_000, requestedPermissions: requested });
+        try {
+            const response = await fetch(loopback.callbackUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: new URLSearchParams({ jwt: JWT, tenantId: TENANT_ID, expiresAt: String(Date.now() + 60_000), state: loopback.state, ...fields })
+            });
+            return { status: response.status, credential: response.status === 200 ? await loopback.result : undefined };
+        } finally {
+            await loopback.close();
+        }
+    };
+    const subset = await attempt({ permissionKeys: 'hosting.sitesRead', deniedPermissionKeys: 'hosting.deploy' });
+    assert.equal(subset.status, 200);
+    assert.deepEqual(subset.credential?.permissionKeys, ['hosting.sitesRead']);
+    assert.deepEqual(subset.credential?.deniedPermissionKeys, ['hosting.deploy']);
+    const older = await attempt({});
+    assert.equal(older.status, 200);
+    assert.equal(older.credential?.permissionKeys, undefined);
+    assert.equal((await attempt({ permissionKeys: 'hosting.sitesRead,hosting.download' })).status, 400);
+    assert.equal((await attempt({ permissionKeys: '' })).status, 400);
+    assert.equal((await attempt({ permissionKeys: 'hosting.sitesRead', deniedPermissionKeys: 'hosting.download' })).status, 400);
+});
+
+test('a forbidden response names the permissions the login was not granted, without guessing which one the action needed', async () => {
+    const { createServer } = await import('node:http');
+    const { requestJson } = await import('../src/api/http.js');
+    const { authorizationHeaders } = await import('../src/api/manager-client.js');
+    const server = createServer((_request, response) => {
+        response.statusCode = 403;
+        response.setHeader('Content-Type', 'application/json');
+        response.end(JSON.stringify({ message: 'Forbidden' }));
+    });
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    assert(address && typeof address === 'object');
+    try {
+        const url = `http://127.0.0.1:${address.port}/x`;
+        const limited = await authorizationHeaders({
+            type: 'bearer',
+            accessToken: 'limited.jwt.signature',
+            deniedPermissionKeys: ['hosting.deploy']
+        });
+        await assert.rejects(
+            requestJson(url, { headers: limited }),
+            /Forbidden This login was not granted hosting\.deploy when it was approved.*sign in again as someone who has it/
+        );
+        const full = await authorizationHeaders({ type: 'bearer', accessToken: 'full.jwt.signature' });
+        await assert.rejects(requestJson(url, { headers: full }), (error: unknown) => error instanceof Error && error.message === 'Forbidden');
+    } finally {
+        await new Promise<void>(resolve => server.close(() => resolve()));
+    }
+});

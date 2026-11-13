@@ -79,7 +79,9 @@ const REQUIRED_NODE = '>=24';
 // Listing tools is optional for installation but populates the install dialog,
 // and the connector directory requires it. Keep in step with SERVER_TOOLS.
 const tools = [
-    { name: 'login', description: 'Start or check the browser sign-in flow' },
+    { name: 'login', description: 'Start or check the sign-in (browser, or a link and code to approve on any device)' },
+    { name: 'list_logins', description: 'List the saved logins, one per account and organization' },
+    { name: 'use_login', description: 'Choose which saved login is the default' },
     { name: 'list_sites', description: 'List the sites this login can reach' },
     { name: 'get_site', description: 'Describe a single site' },
     { name: 'list_forms', description: 'List ZynoForms forms' },
@@ -97,6 +99,7 @@ const tools = [
     { name: 'apply_deploy', description: 'Apply a reviewed deployment plan' },
     { name: 'plan_promote', description: 'Plan preview promotion to production for review' },
     { name: 'apply_promote', description: 'Apply a reviewed preview promotion plan' },
+    { name: 'set_not_found_handling', description: 'Set how a static site handles missing pages (404 or single-page app)' },
     { name: 'plan_download', description: 'Plan a full download for review' },
     { name: 'apply_download', description: 'Apply a reviewed download plan' }
 ];
@@ -109,13 +112,13 @@ const manifest = {
     version: pkg.version,
     description: 'Publish sites and manage ZynoForms integrations on ZynoHosting.',
     long_description:
-        'Sign in to ZynoHosting through your browser, publish a folder on this computer to one of your sites, and create or edit the forms on those pages. Deployments are planned and shown to you for approval before anything goes live.',
+        'Sign in to ZynoHosting through your browser, or with a link and code you approve on any device, publish a folder on this computer to one of your sites, and create or edit the forms on those pages. Deployments are planned and shown to you for approval before anything goes live.',
     // Shown as "Developed by" in the install dialog. Keep it matching the signing
     // certificate's common name so the stated and cryptographic identity agree.
     author: { name: 'Zyno Consulting', url: 'https://zyno.io' },
     repository: { type: 'git', url: 'https://github.com/zyno-io/zynohosting-cli.git' },
-    homepage: 'https://zyno-io.github.io/zynohosting-cli/',
-    documentation: 'https://zyno-io.github.io/zynohosting-cli/mcp/setup',
+    homepage: 'https://cli.zyno.host/',
+    documentation: 'https://cli.zyno.host/agents/',
     support: 'https://github.com/zyno-io/zynohosting-cli/issues',
     license: pkg.license,
     keywords: ['hosting', 'deployment', 'forms', 'static-site'],
@@ -131,7 +134,7 @@ const manifest = {
             // The process cannot otherwise tell it was installed as a desktop
             // extension. It reports this in its User-Agent so the API can
             // distinguish a frozen bundle from an npx run that self-updates.
-            env: { ZYNOHOSTING_DISTRIBUTION: 'mcpb' }
+            env: { ZYNOHOSTING_DISTRIBUTION: 'mcpb', ZYNOHOSTING_ENVIRONMENT: '${user_config.environment}' }
         }
     },
     user_config: {
@@ -150,6 +153,16 @@ const manifest = {
             required: false,
             multiple: true,
             default: []
+        },
+        // Saved logins are per environment and nothing is sticky, so this is the only way
+        // the desktop extension can target another one. `default` is load-bearing here too:
+        // without it the host leaves the literal ${user_config...} in the environment.
+        environment: {
+            type: 'string',
+            title: 'Environment (Zyno staff only)',
+            description: 'Leave as production unless you are testing against another Zyno environment: production, alpha, or dev.',
+            required: false,
+            default: 'production'
         }
     },
     tools,

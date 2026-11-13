@@ -99,6 +99,8 @@ export async function prepareDeployment(
             ...(options.apiUrl ? { apiUrl: options.apiUrl } : {}),
             ...(options.authApiUrl ? { authApiUrl: options.authApiUrl } : {}),
             ...(options.apiKey ? { apiKey: options.apiKey } : {}),
+            ...(options.tenant ? { tenant: options.tenant } : {}),
+            ...(options.account ? { account: options.account } : {}),
             ...(options.environment ? { environment: options.environment } : {})
         }));
 

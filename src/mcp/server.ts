@@ -1,4 +1,5 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { createReadStream } from 'node:fs';
 import { lstat } from 'node:fs/promises';
 import { z } from 'zod';
@@ -7,15 +8,18 @@ import { FormsClient } from '../api/forms-client.js';
 import { ManagerClient } from '../api/manager-client.js';
 import { resolveDistribution } from '../api/user-agent.js';
 import { startCredentialRefreshLoop } from '../auth/credential-refresh.js';
-import { applyPreparedDeployment, prepareDeployment, PreparedDeployment } from '../commands/deploy-site.js';
+import { createRenewalTokenStore } from '../auth/renewal-token-store.js';
+import { applyPreparedDeployment, normalizeSiteRef, prepareDeployment, PreparedDeployment } from '../commands/deploy-site.js';
 import { applyDownload, prepareDownload, PreparedDownload } from '../commands/download-site.js';
 import { createFileClient, purgeSiteCacheAfterMutation, writeResponseAtomically } from '../commands/files.js';
-import { login, LoginDependencies } from '../commands/login.js';
+import { login, LOGIN_LIFETIMES, LoginDependencies, type LoginPrompt, type LoginResult } from '../commands/login.js';
+import { savedLogins, useLogin } from '../commands/logins.js';
 import { applyPreparedPromotion, preparePromotion, PreparedPromotion, promotionSummary } from '../commands/promote-site.js';
-import { ConfigOverrides, ResolvedConfig, resolveConfig } from '../config.js';
+import { applyPreparedSiteSettings, prepareSiteSettings } from '../commands/site-settings.js';
+import { configLocation, ConfigOverrides, type HostingEnvironment, ResolvedConfig, resolveConfig } from '../config.js';
 import { CliError, errorMessage, HttpError } from '../errors.js';
 import { DELEGABLE_PERMISSION_KEYS, permissionCapabilityLines } from '../permissions.js';
-import { PREVIEW_RESOURCE_NOTICE } from '../protocol.js';
+import { NOT_FOUND_HANDLING_MODES, PREVIEW_RESOURCE_NOTICE } from '../protocol.js';
 import { registerFormsMcp } from './forms.js';
 import { AllowedLocalRoots } from './local-paths.js';
 import { UpdatePolicy } from './update-check.js';
@@ -24,16 +28,22 @@ export interface McpServerOptions extends ConfigOverrides {
     roots: AllowedLocalRoots;
     version: string;
     env?: NodeJS.ProcessEnv;
-    loginDependencies?: Pick<LoginDependencies, 'onBrowserUrl' | 'openUrl' | 'renewalTokenStore'>;
+    loginDependencies?: Pick<LoginDependencies, 'onLoginPrompt' | 'openUrl' | 'renewalTokenStore' | 'scopedTokenClient' | 'platform'>;
     updatePolicy?: UpdatePolicy;
 }
 
 const MAX_PENDING_PLANS = 16;
+const RENEWABLE_FALLBACK_NOTICE =
+    'This sign-in lasts 60 minutes because this computer has no credential store; set ZYNOHOSTING_CREDENTIAL_STORE=file in the server environment to stay signed in.';
+/** These manage logins themselves, so they take no per-call tenant. */
+const TENANT_EXEMPT_TOOLS = new Set(['login', 'list_logins', 'use_login']);
 // Policy that applies once this server is connected belongs here or in a tool description, not in
 // documentation the agent fetches before installing. The riskiest tools echo one line of it.
 const SERVER_INSTRUCTIONS = [
-    'Never infer a deployment domain from a repository, site content, organization name, or a similar available site. Before any site mutation, use an explicitly stated project domain or ask the user which domain they intend. Verify that domain with list_sites or get_site. If it is unavailable in the current login context, do not substitute another site; explain that access is unavailable and offer the login tool so the user can switch context. Use plan_deploy and present its operations and target before apply_deploy. Production is the default; target preview updates only preview. Use plan_promote and present both URLs before apply_promote; promotion renames the current preview into production and resets preview to empty. Preview has no separate database and shares the main site’s database and storage quota. Only set force to true when the user explicitly requests bypassing the wp-config.php guard; never retry a blocked promotion with force automatically.',
-    'When connecting a page to a form, read the existing page first and preserve its markup, layout, and styling rather than replacing it with a generic form. Allow that page’s exact origin, and follow the response contract and the jsonScript or capScript returned with the form. Read an existing form with describe_form before update_form and edit it in place rather than creating a second form. If ZynoForms cannot represent a field, validation rule, choice, or bot protection exactly, explain the limitation and ask the user how to proceed instead of dropping it.'
+    'Never infer a deployment domain from a repository, site content, organization name, or a similar available site. Before any site mutation, use an explicitly stated project domain or ask the user which domain they intend. Verify that domain with list_sites or get_site. If it is unavailable in the current login context, do not substitute another site; explain that access is unavailable and offer the login tool so the user can switch context. Use plan_deploy and present its operations and target before apply_deploy. Production is the default; target preview updates only preview. Use plan_promote and present both URLs before apply_promote; promotion renames the current preview into production and resets preview to empty. Preview has no separate database and shares the main site’s database and storage quota. Only set force to true when the user explicitly requests bypassing the wp-config.php guard; never retry a blocked promotion with force automatically. Read the preview address from get_site deployments.preview.url and never construct it; the vanity hostname serves production. File tools and downloads act only on production. Promotion replaces production with exactly what preview holds, and deployments never send wp-config.php, wp-content/uploads, or other excluded content to preview, so for WordPress or any site whose production holds content outside the build, recommend deploying to production instead of promoting. After a promotion preview is empty; do not promote again until preview has been redeployed.',
+    'Saved logins: when list_logins shows more than one login, ask the user which tenant (organization) to work in before any site or form action, and pass that tenant name or id in the tool\u2019s tenant input; use_login changes the default for later calls. After a sign-in finishes, tell the user which account and tenant it signed in to and ask them to confirm it is theirs. If deniedPermissionKeys is non-empty, tell the user which permissions were not granted and what that means (the approver does not hold them in that tenant, so anything needing them will fail); do not request them again unless the user asks. Before suggesting a new sign-in because a domain is unavailable, call list_logins and try another saved login with the tenant input.',
+    'When connecting a page to a form, read the existing page first and preserve its markup, layout, and styling rather than replacing it with a generic form. Allow that page’s exact origin, and follow the response contract and the jsonScript or capScript returned with the form. Read an existing form with describe_form before update_form and edit it in place rather than creating a second form. If ZynoForms cannot represent a field, validation rule, choice, or bot protection exactly, explain the limitation and ask the user how to proceed instead of dropping it.',
+    'When the user wants to build a new site: ZynoHosting serves static files, plus PHP on sites with PHP turned on (get_site phpVersion is null when it is off, and .php files then return 404). It runs no Node.js or other server process, so server-side rendering and API routes are unavailable. If you can run commands, recommend Astro with its default static output and no server adapter, build it, and deploy the dist folder rather than the project root. If you cannot run a build, write plain HTML, CSS, and JavaScript files. Use PHP only for real server-side code, and ZynoForms rather than PHP for forms. A static site returns 404 for unknown paths unless get_site notFoundHandling is single-page-application, which serves /index.html for unknown paths unless they end in a listed asset extension. Prefer pre-rendering every route; if a client-side router needs the fallback, ask the user, then call set_not_found_handling; it applies to production and preview and is unavailable with PHP. Everything deployed is publicly readable, so never deploy .env files or secrets. These tools cannot create sites: deploy only to an existing site the user names, and if they have none, tell them to ask ZynoHosting support to set one up.'
 ].join(' ');
 
 export async function createHostingMcpServer(options: McpServerOptions): Promise<McpServer> {
@@ -61,6 +71,48 @@ export async function createHostingMcpServer(options: McpServerOptions): Promise
         }
     );
     server.server.onclose = () => authentication.close();
+
+    // Every tool except the sign-in ones accepts an optional `tenant`: which saved login to use for that one call.
+    // It is registered here, once, so form tools and any tool added later get it, and is carried to
+    // McpAuthentication.clients() through async context instead of being threaded through every handler.
+    const registerWithTenant = server.registerTool.bind(server);
+    server.registerTool = ((name: string, config: { inputSchema?: unknown }, handler: (...args: never[]) => unknown) => {
+        const schema = config.inputSchema;
+        if (TENANT_EXEMPT_TOOLS.has(name) || (isRecord(schema) && !(schema instanceof z.ZodType) && 'tenant' in schema)) {
+            return registerWithTenant(name, config as never, handler as never);
+        }
+        const tenantField = z
+            .string()
+            .min(1)
+            .max(255)
+            .optional()
+            .describe(
+                'Saved login to use for this call only: a login id, tenant id, or tenant name from list_logins. Omit to use the default login.'
+            );
+        const accountField = z
+            .string()
+            .min(1)
+            .max(320)
+            .optional()
+            .describe('Account email or id that narrows tenant when several accounts are signed in to the same tenant.');
+        const extended =
+            schema === undefined
+                ? { tenant: tenantField, account: accountField }
+                : schema instanceof z.ZodObject
+                  ? schema.extend({ tenant: tenantField, account: accountField })
+                  : { ...(schema as Record<string, z.ZodType>), tenant: tenantField, account: accountField };
+        return registerWithTenant(
+            name,
+            { ...config, inputSchema: extended } as never,
+            ((...args: unknown[]) => {
+                // A tool that had no input is now called with (input, extra) but its handler still expects (extra).
+                const [input, extra] = args as [{ tenant?: string; account?: string }, unknown];
+                const { tenant, account, ...rest } = input ?? {};
+                const forward = schema === undefined ? [extra] : [rest, extra];
+                return authentication.tenant.run({ tenant, account }, () => (handler as (...forwarded: unknown[]) => unknown)(...forward));
+            }) as never
+        );
+    }) as typeof server.registerTool;
 
     // Only a desktop bundle can go stale: an installed .mcpb is frozen until it
     // stages a newer runtime, while npm and npx resolve the newest version on
@@ -92,10 +144,12 @@ export async function createHostingMcpServer(options: McpServerOptions): Promise
         {
             title: 'Sign in to ZynoHosting',
             description: [
-                'Start, check, or cancel the local browser sign-in flow for ZynoHosting. Starting returns the one-time URL in this tool result and attempts to open it in a browser. Use this before authenticated tools when no login is saved, or when the requested domain is unavailable in the current login context. A browser login cannot replace API-key or token credentials injected into this MCP process; change those credentials and restart instead.',
+                'Start, check, or cancel the sign-in flow for ZynoHosting. Starting returns what the user needs in this tool result: either a one-time browser URL (flow "browser", also opened in a browser on the computer running this server) or a link and a short code (flow "device") that the user opens on any device. Use this before authenticated tools when no login is saved, when the requested domain is unavailable in the current login context, or to add a login for another tenant. A sign-in cannot replace API-key or token credentials injected into this MCP process; change those credentials and restart instead.',
+                'The flow is chosen automatically: the browser flow where a browser can open on this computer, the link-and-code flow over SSH or on a machine with no display. Pass flow "device" or "browser" only to override that. For the device flow, give the user the link and the code verbatim, tell them to check that the code matches, pick how long the access lasts and approve it, then call this tool with action "status" until it reports authenticated. Never open the link or approve it yourself, and never ask the user to send you the code from a link someone else gave them.',
                 `Request only these permissions — no others exist, and one invalid key rejects the whole request instead of granting the rest:\n${permissionCapabilityLines()}`,
-                'Include hosting.sitesRead in every hosting request. Ask for the narrowest complete set for the stated task: editing individual files needs hosting.filesRead and hosting.filesWrite (add hosting.filesDelete only to remove files); a full deploy needs hosting.deploy; a backup needs hosting.download, plus hosting.downloadSensitive only when user-generated content is wanted. A token cannot be widened later, so a missing permission means revoking and signing in again.',
-                'One browser flow runs at a time. Starting with the same permissions, name, and renewable flag returns that same in-flight URL with "reused": true; starting with a different request cancels the in-flight flow and returns a new URL, so the user must use the newest link. Use action "cancel" to abandon a flow the user is not going to finish.'
+                'Include hosting.sitesRead in every hosting request. Ask for the narrowest complete set for the stated task: editing individual files needs hosting.filesRead and hosting.filesWrite (add hosting.filesDelete only to remove files); a full deploy, promotion, or not-found handling change needs hosting.deploy; a backup needs hosting.download, plus hosting.downloadSensitive only when user-generated content is wanted. A token cannot be widened later, so a missing permission means signing in again (as the same account in the same tenant, which replaces and revokes the old login; there is no logout tool, and a full sign-out is `zynohosting logout` in a terminal).',
+                'A saved login is one account in one tenant: signing in again as the same account in the same tenant replaces that login; another account or tenant adds a login and makes it the default (see list_logins and use_login). lifetime is only a suggestion for how long the access lasts; the user chooses when approving, and anything above 1h needs renewable.',
+                'One sign-in runs at a time. Starting with the same permissions, name, renewable flag, flow, and lifetime returns that same in-flight prompt with "reused": true; starting with a different request cancels the in-flight sign-in and returns a new one, so the user must use the newest link. Use action "cancel" to abandon a sign-in the user is not going to finish.'
             ].join('\n\n'),
             inputSchema: {
                 action: z.enum(['start', 'status', 'cancel']).default('start'),
@@ -106,12 +160,28 @@ export async function createHostingMcpServer(options: McpServerOptions): Promise
                     .default(['hosting.sitesRead'])
                     .describe('ZynoSuite permissions to request, from the enumerated list; the narrowest set that completes the stated task.'),
                 name: z.string().min(1).max(255).optional(),
-                renewable: z.boolean().default(false),
-                timeout_seconds: z.number().int().min(1).max(600).default(300)
+                renewable: z
+                    .boolean()
+                    .optional()
+                    .describe(
+                        'Keep a renewable login so it does not end after 60 minutes. Left unset, it is renewable when this computer has a credential store and a 60-minute login when it does not (the result says which). Set true to require renewable (it fails without a store), or false for a one-hour login.'
+                    ),
+                flow: z
+                    .enum(['auto', 'browser', 'device'])
+                    .default('auto')
+                    .describe('auto picks browser or device for this computer; set it only to override.'),
+                lifetime: z.enum(Object.keys(LOGIN_LIFETIMES) as [keyof typeof LOGIN_LIFETIMES, ...(keyof typeof LOGIN_LIFETIMES)[]]).optional(),
+                timeout_seconds: z
+                    .number()
+                    .int()
+                    .min(1)
+                    .max(600)
+                    .optional()
+                    .describe('How long to wait for approval. Default: 300 for the browser flow, until the code expires for the device flow.')
             },
             annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true }
         },
-        async ({ action, permissions, name, renewable, timeout_seconds }) => {
+        async ({ action, permissions, name, renewable, flow, lifetime, timeout_seconds }) => {
             if (action === 'status') return result(await authentication.loginStatus());
             if (action === 'cancel') return result(await authentication.cancelLogin());
 
@@ -119,19 +189,67 @@ export async function createHostingMcpServer(options: McpServerOptions): Promise
                 permissions,
                 ...(name ? { name } : {}),
                 renewable,
-                timeoutSeconds: timeout_seconds
+                flow,
+                ...(lifetime ? { lifetime } : {}),
+                ...(timeout_seconds === undefined ? {} : { timeoutSeconds: timeout_seconds })
             });
-            return result({
+            const prompt = pendingLogin.prompt;
+            const sharedFields = {
                 authenticated: false,
                 status: 'pending',
                 permissions: [...new Set(permissions)].sort(),
-                browserUrl: pendingLogin.browserUrl,
                 reused: pendingLogin.reused,
+                renewable: pendingLogin.renewable,
+                ...(pendingLogin.renewableFallbackReason ? { renewableFallbackReason: pendingLogin.renewableFallbackReason } : {})
+            };
+            const lasts = pendingLogin.renewableFallbackReason ? ` ${RENEWABLE_FALLBACK_NOTICE}` : '';
+            if (prompt.flow === 'device') {
+                return result({
+                    ...sharedFields,
+                    flow: 'device',
+                    verificationUri: prompt.verificationUri,
+                    ...(prompt.verificationUriComplete ? { verificationUriComplete: prompt.verificationUriComplete } : {}),
+                    userCode: prompt.userCode,
+                    expiresAt: new Date(prompt.expiresAt).toISOString(),
+                    message: `Give the user the link (${prompt.verificationUriComplete ?? prompt.verificationUri}) and the code ${prompt.userCode} verbatim. They open it on any device, check the code matches, choose how long access lasts, and approve. Do not open the link or approve it yourself. Then call login with action "status" until it reports authenticated, and tell the user which account and tenant it signed in to so they can confirm it is theirs.${pendingLogin.reused ? ' This is the same pending code as before, not a new one.' : ''}${lasts}`
+                });
+            }
+            return result({
+                ...sharedFields,
+                flow: 'browser',
+                browserUrl: prompt.url,
                 message: pendingLogin.reused
                     ? 'An identical browser sign-in was already in flight, so this is that same one-time URL, not a new one. Its permissions match this request. After sign-in, call login with action "status".'
-                    : 'Open the one-time sign-in URL if a browser did not open. Any earlier sign-in URL from this server is now cancelled. After you finish sign-in, call login with action "status" before using authenticated tools.'
+                    : 'Open the one-time sign-in URL if a browser did not open. Any earlier sign-in URL from this server is now cancelled. After you finish sign-in, call login with action "status" before using authenticated tools.' +
+                      lasts
             });
         }
+    );
+
+    server.registerTool(
+        'list_logins',
+        {
+            title: 'List saved ZynoHosting logins',
+            description:
+                'List the saved logins for this environment, one per account and tenant (organization): login id, tenant name and id, the account that approved it, which one is the default, when access and the approved lifetime end, and whether it has expired. When there is more than one, ask the user which tenant to work in. This changes nothing.',
+            annotations: { readOnlyHint: true, openWorldHint: false }
+        },
+        async () => result(await authentication.listLogins())
+    );
+
+    server.registerTool(
+        'use_login',
+        {
+            title: 'Choose the default ZynoHosting login',
+            description:
+                'Make a saved login the default for later calls, without signing in again. Pass the tenant name or id from list_logins. To use a different login for one call only, pass tenant on that tool instead. Pending deployment, promotion, and download plans are cleared because the context changes.',
+            inputSchema: {
+                tenant: z.string().min(1).max(255).describe('Login id, tenant id, or tenant name from list_logins.'),
+                account: z.string().min(1).max(320).optional().describe('Account email or id, when several accounts are signed in to that tenant.')
+            },
+            annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false }
+        },
+        async ({ tenant, account }) => result(await authentication.useLogin(tenant, account))
     );
 
     registerFormsMcp(server, () => authentication.clients());
@@ -375,6 +493,26 @@ export async function createHostingMcpServer(options: McpServerOptions): Promise
     );
 
     server.registerTool(
+        'set_not_found_handling',
+        {
+            title: 'Set how a site handles missing pages',
+            description:
+                'Set a site\'s not-found handling. "single-page-application" serves /index.html (status 200) for unknown paths unless they end in a listed asset extension (.js, .css, images, fonts, .json, .txt, ...), which still return 404, so client-side routers can handle deep links. "404-page" (default) returns 404 for every unknown path. Applies immediately to both production and preview and purges the CDN cache; it changes live traffic, so ask the user first. Static sites only: fails if the site runs PHP. Prefer pre-rendering every route; use this only when a client-side router needs it. Idempotent; waits for serving reconciliation. Requires hosting.deploy.',
+            inputSchema: {
+                site: z.string().min(1),
+                mode: z.enum(NOT_FOUND_HANDLING_MODES)
+            },
+            annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false }
+        },
+        async ({ site, mode }) => {
+            const { config, manager } = await authentication.clients();
+            await authorizedSite(manager, normalizeSiteRef(site));
+            const plan = await prepareSiteSettings(site, mode, options, config);
+            return result(await applyPreparedSiteSettings(plan));
+        }
+    );
+
+    server.registerTool(
         'plan_download',
         {
             title: 'Plan a complete site download',
@@ -436,22 +574,42 @@ interface LoginRequest {
     permissions: string[];
     name?: string;
     renewable: boolean;
+    flow: 'auto' | 'browser' | 'device';
+    lifetime?: string;
 }
 
 interface PendingMcpLogin {
-    browserUrl: Promise<string>;
-    url?: string;
+    prompt: Promise<LoginPrompt>;
+    value?: LoginPrompt;
     completion: Promise<ResolvedConfig>;
     request: LoginRequest;
     abort: AbortController;
+    /** Set when a renewable login was wanted but this computer has no credential store. */
+    renewableFallbackReason?: string;
 }
 
+/** Which saved login one call names. */
+interface LoginChoice {
+    tenant?: string | undefined;
+    account?: string | undefined;
+}
+
+/** Clients are cached per saved login: '' is the default login, any other key is a tenant named for one call. */
+const DEFAULT_LOGIN = '';
+
 class McpAuthentication {
-    private current: AuthenticatedMcpClients | undefined;
-    private pending: Promise<AuthenticatedMcpClients> | undefined;
+    /** Carries the `tenant` and `account` inputs of the tool call being handled. */
+    readonly tenant = new AsyncLocalStorage<LoginChoice>();
+    private readonly current = new Map<string, AuthenticatedMcpClients>();
+    private readonly pending = new Map<string, Promise<AuthenticatedMcpClients>>();
+    private readonly stopRefresh = new Map<string, () => void>();
+    /** Bumped whenever the default login may have changed, so a load that began earlier cannot cache a stale client. */
+    private generation = 0;
     private pendingLogin: PendingMcpLogin | undefined;
+    /** The sign-in that just finished, so its status names the tenant that was approved, whatever the default now is. */
+    private lastSignIn: Extract<LoginResult, { status: 'authenticated' }> | undefined;
+    private lastSignInFallback: string | undefined;
     private lastLoginError: unknown;
-    private stopRefresh: (() => void) | undefined;
 
     constructor(
         private readonly options: McpServerOptions,
@@ -459,48 +617,114 @@ class McpAuthentication {
         private readonly onLoginComplete: () => void
     ) {}
 
-    async clients(): Promise<AuthenticatedMcpClients> {
-        if (this.current) return this.current;
-        this.pending ??= this.load().finally(() => {
-            this.pending = undefined;
-        });
-        return this.pending;
+    async clients(choice: LoginChoice | undefined = this.tenant.getStore()): Promise<AuthenticatedMcpClients> {
+        const tenant = choice?.tenant?.trim() || undefined;
+        const account = choice?.account?.trim() || undefined;
+        const key = tenant || account ? `${tenant ?? ''}\u0000${account ?? ''}` : DEFAULT_LOGIN;
+        const cached = this.current.get(key);
+        if (cached) return cached;
+        let loading = this.pending.get(key);
+        if (!loading) {
+            const started: Promise<AuthenticatedMcpClients> = this.load(key, { tenant, account }).finally(() => {
+                if (this.pending.get(key) === started) this.pending.delete(key);
+            });
+            loading = started;
+            this.pending.set(key, loading);
+        }
+        return loading;
+    }
+
+    async listLogins(): Promise<Record<string, unknown>> {
+        const env = this.options.env ?? process.env;
+        const { profile, logins } = await savedLogins({ ...this.selectors() }, { env });
+        return {
+            profile,
+            logins,
+            message: logins.length
+                ? logins.length > 1
+                    ? 'Several logins are saved. Ask the user which tenant to work in, then pass it as tenant on each call or call use_login.'
+                    : 'One login is saved; it is used by default.'
+                : 'No saved logins. Call login with action "start".'
+        };
+    }
+
+    async useLogin(tenant: string, account?: string): Promise<Record<string, unknown>> {
+        this.requireSwitchableCredentialSource();
+        this.lastSignIn = undefined;
+        this.lastSignInFallback = undefined;
+        const env = this.options.env ?? process.env;
+        const active = await useLogin(tenant, { ...this.selectors(), ...(account ? { account } : {}) }, { env, write: () => {} });
+        this.resetClients();
+        this.onLoginComplete();
+        return { active, message: 'This is now the default login. Any pending deployment, promotion, or download plans were cleared.' };
     }
 
     async beginLogin(input: {
         permissions: string[];
         name?: string;
-        renewable: boolean;
-        timeoutSeconds: number;
-    }): Promise<{ browserUrl: string; reused: boolean }> {
+        renewable?: boolean | undefined;
+        flow: 'auto' | 'browser' | 'device';
+        lifetime?: string;
+        timeoutSeconds?: number;
+    }): Promise<{ prompt: LoginPrompt; reused: boolean; renewable: boolean; renewableFallbackReason?: string }> {
         this.requireSwitchableCredentialSource();
+        // Renewable is the default, but only where a renewal token can be kept. Probe the store before anything is minted.
+        const explicitRenewable = input.renewable !== undefined;
+        let renewable = input.renewable ?? true;
+        let renewableFallbackReason: string | undefined;
+        if (renewable) {
+            try {
+                await this.probeCredentialStore();
+            } catch (error) {
+                if (!(error instanceof CliError) || error.code !== 'credential_store_unavailable') throw error;
+                if (explicitRenewable) {
+                    throw new CliError(
+                        `A renewable login is not possible here: ${error.message} Call login with renewable: false for a 60-minute login, or set ZYNOHOSTING_CREDENTIAL_STORE=file in the MCP server's environment to keep the renewal token in a private file.`,
+                        error.exitCode,
+                        error.code
+                    );
+                }
+                renewable = false;
+                renewableFallbackReason = 'credential_store_unavailable';
+            }
+        }
         const request: LoginRequest = {
             permissions: [...new Set(input.permissions)].sort(),
             ...(input.name ? { name: input.name } : {}),
-            renewable: input.renewable
+            renewable,
+            flow: input.flow,
+            // A lifetime above 1h needs a renewable login, so a fallback drops the suggestion.
+            ...(input.lifetime && renewable ? { lifetime: input.lifetime } : {})
         };
-        // A different scope must never be answered with the in-flight URL: that browser flow would
+        // A different scope must never be answered with the in-flight prompt: that sign-in would
         // mint the earlier permissions while the caller believes it requested new ones. Re-check
         // after each await, because another call can install its own flow while this one waits.
         while (this.pendingLogin) {
             if (sameLoginRequest(this.pendingLogin.request, request)) {
-                return { browserUrl: await this.pendingLogin.browserUrl, reused: true };
+                return {
+                    prompt: await this.pendingLogin.prompt,
+                    reused: true,
+                    renewable,
+                    ...(this.pendingLogin.renewableFallbackReason ? { renewableFallbackReason: this.pendingLogin.renewableFallbackReason } : {})
+                };
             }
             await this.abortPendingLogin();
         }
         this.lastLoginError = undefined;
+        this.lastSignIn = undefined;
 
-        let publishBrowserUrl!: (url: string) => void;
-        let failBeforeBrowserUrl!: (error: unknown) => void;
-        const browserUrl = new Promise<string>((resolve, reject) => {
-            publishBrowserUrl = resolve;
-            failBeforeBrowserUrl = reject;
+        let publishPrompt!: (prompt: LoginPrompt) => void;
+        let failBeforePrompt!: (error: unknown) => void;
+        const prompt = new Promise<LoginPrompt>((resolve, reject) => {
+            publishPrompt = resolve;
+            failBeforePrompt = reject;
         });
         const pendingLogin: PendingMcpLogin = {
-            browserUrl,
+            prompt,
             completion: Promise.resolve<ResolvedConfig>(undefined as never),
             request,
-            abort: new AbortController()
+            abort: new AbortController(),
+            ...(renewableFallbackReason ? { renewableFallbackReason } : {})
         };
         this.pendingLogin = pendingLogin;
         pendingLogin.completion = login(
@@ -512,7 +736,9 @@ class McpAuthentication {
                 ...(request.name ? { name: request.name } : {}),
                 permissionKeys: request.permissions,
                 renewable: request.renewable,
-                timeoutSeconds: input.timeoutSeconds,
+                ...(request.flow === 'auto' ? {} : { device: request.flow === 'device' }),
+                ...(request.lifetime ? { lifetime: request.lifetime } : {}),
+                ...(input.timeoutSeconds === undefined ? {} : { timeoutSeconds: input.timeoutSeconds }),
                 signal: pendingLogin.abort.signal
             },
             {
@@ -521,62 +747,112 @@ class McpAuthentication {
                 // The MCP stdio transport owns stdout. Login progress and a fallback URL must never be
                 // emitted there because that would corrupt the protocol stream.
                 write: message => process.stderr.write(message),
-                onBrowserUrl: async url => {
-                    pendingLogin.url = url;
-                    publishBrowserUrl(url);
-                    await this.options.loginDependencies?.onBrowserUrl?.(url);
+                onLoginPrompt: async loginPrompt => {
+                    pendingLogin.value = loginPrompt;
+                    publishPrompt(loginPrompt);
+                    await this.options.loginDependencies?.onLoginPrompt?.(loginPrompt);
                 }
             }
         )
-            .then(async () => {
+            .then(async result => {
+                this.resetClients();
                 const config = await this.resolve();
-                this.setCurrent(config);
+                this.lastSignIn = result.status === 'authenticated' ? result : undefined;
+                this.lastSignInFallback = renewableFallbackReason;
+                this.setCurrent(DEFAULT_LOGIN, config);
                 this.onLoginComplete();
                 return config;
             })
             .catch(error => {
                 this.lastLoginError = error;
-                failBeforeBrowserUrl(error);
+                failBeforePrompt(error);
                 throw error;
             })
             .finally(() => {
                 if (this.pendingLogin === pendingLogin) this.pendingLogin = undefined;
             });
-        // The request itself returns the URL, so keep a later browser timeout or cancellation from
+        // The request itself returns the prompt, so keep a later timeout or cancellation from
         // becoming an unhandled rejection after the MCP tool result has been delivered.
         void pendingLogin.completion.catch(() => {});
-        return { browserUrl: await pendingLogin.browserUrl, reused: false };
+        return { prompt: await pendingLogin.prompt, reused: false, renewable, ...(renewableFallbackReason ? { renewableFallbackReason } : {}) };
+    }
+
+    /** Throws `credential_store_unavailable` when a renewable login could not keep its renewal token on this computer. */
+    private async probeCredentialStore(): Promise<void> {
+        const env = this.options.env ?? process.env;
+        const store =
+            this.options.loginDependencies?.renewalTokenStore ??
+            (env.ZYNOHOSTING_CREDENTIAL_STORE?.trim() === 'file' ? undefined : createRenewalTokenStore('system', configLocation(env).path));
+        await store?.probe?.();
     }
 
     async cancelLogin(): Promise<Record<string, unknown>> {
         if (!this.pendingLogin) {
-            return { authenticated: Boolean(this.current), status: 'not_pending', message: 'No browser sign-in is in flight.' };
+            return { authenticated: this.current.has(DEFAULT_LOGIN), status: 'not_pending', message: 'No sign-in is in flight.' };
         }
-        // The browser can win the race with a cancellation already on its way to the listener.
+        // The user can win the race with a cancellation already on its way.
         if (await this.abortPendingLogin()) return await this.loginStatus();
         return {
             authenticated: false,
             status: 'cancelled',
-            message: 'The browser sign-in was cancelled and its local callback listener was closed. Its one-time URL no longer works.'
+            message: 'The sign-in was cancelled. Its one-time URL or code no longer works.'
         };
     }
 
     async loginStatus(): Promise<Record<string, unknown>> {
         if (this.pendingLogin) {
+            const prompt = this.pendingLogin.value;
             return {
                 authenticated: false,
                 status: 'pending',
                 permissions: this.pendingLogin.request.permissions,
-                ...(this.pendingLogin.url ? { browserUrl: this.pendingLogin.url } : {}),
-                message: 'Browser sign-in is still waiting for its secure local callback.'
+                ...(prompt?.flow === 'browser' ? { flow: 'browser', browserUrl: prompt.url } : {}),
+                ...(prompt?.flow === 'device'
+                    ? {
+                          flow: 'device',
+                          verificationUri: prompt.verificationUri,
+                          ...(prompt.verificationUriComplete ? { verificationUriComplete: prompt.verificationUriComplete } : {}),
+                          userCode: prompt.userCode,
+                          expiresAt: new Date(prompt.expiresAt).toISOString()
+                      }
+                    : {}),
+                ...(this.pendingLogin.renewableFallbackReason
+                    ? { renewable: false, renewableFallbackReason: this.pendingLogin.renewableFallbackReason }
+                    : {}),
+                message:
+                    prompt?.flow === 'device'
+                        ? 'Still waiting for the user to approve the code. Give them the link and code again if needed; do not approve it yourself.'
+                        : 'Browser sign-in is still waiting for its secure local callback.'
             };
         }
         if (this.lastLoginError) {
-            return { authenticated: false, status: 'failed', message: `Browser sign-in failed: ${errorMessage(this.lastLoginError)}` };
+            return { authenticated: false, status: 'failed', message: `Sign-in failed: ${errorMessage(this.lastLoginError)}` };
         }
-        if (this.current) return authenticatedLoginStatus(this.current.config);
+        if (this.lastSignIn) {
+            const done = this.lastSignIn;
+            return {
+                authenticated: true,
+                status: 'authenticated',
+                expiresAt: done.accessExpiresAt,
+                loginId: done.loginId,
+                ...(done.accountId ? { accountId: done.accountId } : {}),
+                tenant: done.tenantId,
+                ...(done.tenantName ? { tenantName: done.tenantName } : {}),
+                ...(done.account ? { account: done.account } : {}),
+                ...(done.grantExpiresAt === undefined ? {} : { grantExpiresAt: new Date(done.grantExpiresAt).toISOString() }),
+                permissionKeys: done.permissionKeys,
+                deniedPermissionKeys: done.deniedPermissionKeys,
+                renewable: done.renewable,
+                ...(this.lastSignInFallback ? { renewableFallbackReason: this.lastSignInFallback } : {}),
+                message:
+                    'ZynoHosting login is ready. Tell the user which account and tenant this signed in to so they can confirm it is theirs. If deniedPermissionKeys is non-empty, tell the user which permissions were not granted and what that means (the approver does not hold them in that tenant, so anything needing them will fail); do not request them again unless the user asks. Any pending deployment or download plans were cleared because the login context changed.' +
+                    (this.lastSignInFallback ? ` ${RENEWABLE_FALLBACK_NOTICE}` : '')
+            };
+        }
+        const current = this.current.get(DEFAULT_LOGIN);
+        if (current) return authenticatedLoginStatus(current.config);
         try {
-            return authenticatedLoginStatus((await this.clients()).config);
+            return authenticatedLoginStatus((await this.clients({})).config);
         } catch (error) {
             if (error instanceof CliError && error.code === 'missing_config') {
                 return { authenticated: false, status: 'not_started', message: 'No saved ZynoHosting login. Call login with action "start".' };
@@ -586,15 +862,15 @@ class McpAuthentication {
     }
 
     close(): void {
-        this.stopRefresh?.();
-        this.stopRefresh = undefined;
-        this.current = undefined;
-        // Abort so the loopback listener and its one-time URL die with the MCP session.
+        for (const stop of this.stopRefresh.values()) stop();
+        this.stopRefresh.clear();
+        this.current.clear();
+        // Abort so the loopback listener or device code and its one-time URL die with the MCP session.
         this.pendingLogin?.abort.abort();
         this.pendingLogin = undefined;
     }
 
-    /** Ends the in-flight browser flow. Resolves true when it had already completed successfully. */
+    /** Ends the in-flight sign-in. Resolves true when it had already completed successfully. */
     private async abortPendingLogin(): Promise<boolean> {
         const pendingLogin = this.pendingLogin;
         if (!pendingLogin) return false;
@@ -611,44 +887,66 @@ class McpAuthentication {
         return completed;
     }
 
-    private async load(): Promise<AuthenticatedMcpClients> {
-        const config = await this.resolve();
-        return this.setCurrent(config);
+    private async load(key: string, choice: LoginChoice): Promise<AuthenticatedMcpClients> {
+        const generation = this.generation;
+        const config = await this.resolve(choice);
+        // The default login changed while this resolved, so what it read may be the old one: use it for this call only.
+        if (generation !== this.generation) return this.build(config);
+        return this.setCurrent(key, config);
     }
 
-    private async resolve(): Promise<ResolvedConfig> {
+    private async resolve(choice: LoginChoice = {}): Promise<ResolvedConfig> {
         try {
-            return await resolveConfig(this.options, this.options.env ?? process.env);
+            return await resolveConfig(
+                { ...this.options, ...(choice.tenant ? { tenant: choice.tenant } : {}), ...(choice.account ? { account: choice.account } : {}) },
+                this.options.env ?? process.env
+            );
         } catch (error) {
             if (error instanceof CliError && error.code === 'missing_config') {
-                throw new CliError(
-                    'ZynoHosting is not signed in. Call the login MCP tool to open the browser sign-in flow.',
-                    error.exitCode,
-                    error.code
-                );
+                throw new CliError('ZynoHosting is not signed in. Call the login MCP tool to start the sign-in flow.', error.exitCode, error.code);
             }
             throw error;
         }
     }
 
-    private setCurrent(config: ResolvedConfig): AuthenticatedMcpClients {
-        this.stopRefresh?.();
-        this.stopRefresh = startCredentialRefreshLoop(config.credential, { onError: this.onRefreshError });
-        const current = {
+    private build(config: ResolvedConfig): AuthenticatedMcpClients {
+        return {
             config,
             manager: new ManagerClient(config.apiUrl, config.credential),
             forms: new FormsClient(config.suiteApiUrl, config.credential),
             ...(config.suiteApiUrl ? { suiteApiUrl: config.suiteApiUrl } : {})
         };
-        this.current = current;
+    }
+
+    private setCurrent(key: string, config: ResolvedConfig): AuthenticatedMcpClients {
+        this.stopRefresh.get(key)?.();
+        this.stopRefresh.set(key, startCredentialRefreshLoop(config.credential, { onError: this.onRefreshError }));
+        const current = this.build(config);
+        this.current.set(key, current);
         return current;
+    }
+
+    /** The default login changed (a sign-in or use_login), so every cached client may now be wrong. */
+    private resetClients(): void {
+        this.generation++;
+        this.pending.clear();
+        for (const stop of this.stopRefresh.values()) stop();
+        this.stopRefresh.clear();
+        this.current.clear();
+    }
+
+    private selectors(): { apiUrl?: string; environment?: HostingEnvironment } {
+        return {
+            ...(this.options.apiUrl ? { apiUrl: this.options.apiUrl } : {}),
+            ...(this.options.environment ? { environment: this.options.environment } : {})
+        };
     }
 
     private requireSwitchableCredentialSource(): void {
         const env = this.options.env ?? process.env;
         if (this.options.apiKey || this.options.accessToken || env.ZYNOHOSTING_API_KEY || env.ZYNOHOSTING_ACCESS_TOKEN) {
             throw new CliError(
-                'This MCP process uses an API key or access token supplied by its command or environment, so browser login cannot switch its active context. Remove or replace that credential and restart the MCP host.',
+                'This MCP process uses an API key or access token supplied by its command or environment, so signing in or choosing a login cannot switch its active context. Remove or replace that credential and restart the MCP host.',
                 2,
                 'fixed_credential_source'
             );
@@ -660,17 +958,33 @@ function sameLoginRequest(a: LoginRequest, b: LoginRequest): boolean {
     return (
         a.renewable === b.renewable &&
         a.name === b.name &&
+        a.flow === b.flow &&
+        a.lifetime === b.lifetime &&
         a.permissions.length === b.permissions.length &&
         a.permissions.every((permission, index) => permission === b.permissions[index])
     );
 }
 
 function authenticatedLoginStatus(config: ResolvedConfig): Record<string, unknown> {
+    const login = config.login;
     return {
         authenticated: true,
         status: 'authenticated',
         expiresAt: config.credential.type === 'bearer' ? (config.credential.expiresAt ?? null) : null,
-        message: 'ZynoHosting login is ready. Any pending deployment or download plans were cleared because the login context changed.'
+        ...(login?.kind === 'login'
+            ? {
+                  loginId: login.id,
+                  ...(login.accountId ? { accountId: login.accountId } : {}),
+                  tenant: login.tenantId ?? login.id,
+                  ...(login.tenantName ? { tenantName: login.tenantName } : {})
+              }
+            : {}),
+        ...(login?.accountEmail ? { account: login.accountEmail } : {}),
+        ...(login?.grantExpiresAt === undefined ? {} : { grantExpiresAt: new Date(login.grantExpiresAt).toISOString() }),
+        ...(login?.permissionKeys ? { permissionKeys: login.permissionKeys } : {}),
+        ...(login?.deniedPermissionKeys ? { deniedPermissionKeys: login.deniedPermissionKeys } : {}),
+        message:
+            'ZynoHosting login is ready. Tell the user which account and tenant this is signed in to so they can confirm it is theirs. If deniedPermissionKeys is non-empty, tell the user which permissions were not granted and what that means (the approver does not hold them in that tenant, so anything needing them will fail); do not request them again unless the user asks. Any pending deployment or download plans were cleared because the login context changed.'
     };
 }
 

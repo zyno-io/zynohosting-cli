@@ -1,8 +1,16 @@
 # Install instructions for agents
 
-This page is addressed to the AI agent that fetched it. The person you are working for reads https://zyno-io.github.io/zynohosting-cli/mcp/setup instead.
+This page is addressed to the AI agent that fetched it. The person you are working for reads https://cli.zyno.host/agents/ instead.
 
-It covers one thing: installing the local ZynoHosting MCP server. Everything that applies afterward—deployment-domain policy, sign-in, form editing—is delivered by the server itself as MCP instructions and tool descriptions once it is connected. Do not look for that guidance here.
+## Check whether you need the MCP server
+
+Agents that can run shell commands now use ZynoHosting through its CLI and a skill file, not the MCP server. The CLI covers sites, files, deployments, preview, promotion, downloads, and ZynoForms. Nothing loads into your sessions until a task needs it, and no restart is required.
+
+- Normally, follow https://raw.githubusercontent.com/zyno-io/zynohosting-cli/main/docs/agents/install.md instead of this page. Tell the user you set up the CLI skill rather than the MCP server, because it stays out of the way until needed.
+- Continue below only if the user explicitly asks for the MCP server rather than the CLI. The older setup prompt (“Set up ZynoHosting MCP for this project if it's not already configured”) predates the CLI skill and does not count as that request on its own. Installing the skill as well is fine.
+- If you cannot run shell commands, see “Agents without a shell” below.
+
+The rest of this page covers one thing: installing the local ZynoHosting MCP server. Everything that applies afterward—deployment-domain policy, sign-in, form editing—is delivered by the server itself as MCP instructions and tool descriptions once it is connected. Do not look for that guidance here.
 
 ## Install
 
@@ -29,11 +37,11 @@ It covers one thing: installing the local ZynoHosting MCP server. Everything tha
 | Agent       | File                   | Entry                                                                                      |
 | ----------- | ---------------------- | ------------------------------------------------------------------------------------------ |
 | Claude Code | `./.mcp.json`          | `npx -y @zyno-io/zynohosting mcp --root ${CLAUDE_PROJECT_DIR:-.}`                          |
-| Codex       | `./.codex/config.toml` | `[mcp_servers.zynohosting]` with this project’s absolute path and `tool_timeout_sec = 330` |
+| Codex       | `./.codex/config.toml` | `[mcp_servers.zynohosting]` with this project’s absolute path and `tool_timeout_sec = 930` |
 
 Neither file holds an API key or any other credential, so both are safe to commit.
 
-Codex gets the raised tool timeout because browser sign-in waits up to five minutes for the user to complete multi-factor or single sign-on, which is longer than Codex’s default MCP tool timeout.
+Codex gets the raised tool timeout because some calls wait for the service to finish: `apply_promote` can take up to 900 seconds and `set_not_found_handling` up to 300 seconds while serving reconciles, which is longer than Codex’s default MCP tool timeout. Sign-in itself returns its link or code at once and does not wait.
 
 ## Agents without a shell
 
@@ -46,9 +54,9 @@ The Chat and Cowork tabs of the Claude desktop app cannot run this installer, an
 
 They install nothing else. The extension carries the server and runs on the runtime inside Claude Desktop, so Node.js is not required for this path, and the extension keeps itself up to date after that.
 
-If they also use the Code tab, mention it as an alternative: open the project there and paste the setup request again, and the installer writes a project `.mcp.json` that keeps the configuration with the project. That path does require Node.js 24 on their computer.
+If they also use the Code tab, mention it as an alternative: open the project there and ask it to set up ZynoHosting, and it installs the CLI skill per https://raw.githubusercontent.com/zyno-io/zynohosting-cli/main/docs/agents/install.md. That path does require Node.js 24 on their computer.
 
-The extension is available in the Code tab as well, so a user who installs it does not need the project install too. Prefer the project install when the work is tied to a repository, and the extension when it is not.
+The extension is available in the Code tab as well, so a user who installs it does not strictly need anything else there.
 
 ## When it fails
 
@@ -58,6 +66,8 @@ The extension is available in the Code tab as well, so a user who installs it do
 
 ## Editing this page
 
-Agents fetch it raw from GitHub, so keep it plain Markdown: no VitePress `:::` containers, and no relative links, which do not resolve on `raw.githubusercontent.com`. Use full `https://zyno-io.github.io/zynohosting-cli/...` URLs.
+Agents fetch it raw from GitHub, so keep it plain Markdown: no VitePress `:::` containers, and no relative links, which do not resolve on `raw.githubusercontent.com`. Use full `https://cli.zyno.host/...` URLs.
 
 Keep it install-only. Anything an agent needs after the server is connected belongs in `SERVER_INSTRUCTIONS` or a tool description in `src/mcp/server.ts` or `src/mcp/forms.ts`, where it reaches every session instead of only the one that happened to fetch this file.
+
+Earlier setup prompts point agents at this URL, so keep it working and keep the CLI-skill redirect at the top.

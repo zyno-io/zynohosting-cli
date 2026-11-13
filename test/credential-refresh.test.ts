@@ -122,3 +122,38 @@ test('stops background retries after a terminal invalid renewal credential', asy
         stop();
     }
 });
+
+test('does not try to renew in the last minutes of the approved lifetime, and stops at its end with grant_expired', async () => {
+    const grantEnd = Date.now() + 120_000;
+    const credential: BearerCredential = {
+        type: 'bearer',
+        accessToken: 'capped.jwt.signature',
+        // The server caps the access token at the grant's end, so it is inside the usual 5-minute renewal window.
+        expiresAt: grantEnd,
+        grantExpiresAt: grantEnd
+    };
+    let attempts = 0;
+    attachCredentialRefresh(credential, async () => {
+        attempts++;
+    });
+    await ensureFreshCredential(credential);
+    assert.equal(attempts, 0);
+
+    credential.expiresAt = Date.now() - 1;
+    credential.grantExpiresAt = Date.now() - 1;
+    await assert.rejects(ensureFreshCredential(credential), (error: unknown) => {
+        return error instanceof Error && 'code' in error && error.code === 'grant_expired' && /lifetime approved on/.test(error.message);
+    });
+    assert.equal(attempts, 0);
+});
+
+test('a login with no recorded grant end still renews as before', async () => {
+    const credential: BearerCredential = { type: 'bearer', accessToken: 'old.jwt.signature', expiresAt: Date.now() + 60_000 };
+    let attempts = 0;
+    attachCredentialRefresh(credential, async () => {
+        attempts++;
+        credential.expiresAt = Date.now() + 3_600_000;
+    });
+    await ensureFreshCredential(credential);
+    assert.equal(attempts, 1);
+});

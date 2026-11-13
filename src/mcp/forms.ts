@@ -1,3 +1,5 @@
+import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
+
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 
@@ -63,6 +65,8 @@ const createBasicFormInputSchema = z
             refineBasicField(field, context, ['fields', index]);
         }
     });
+
+const formReferenceShape = { form: z.string().trim().min(1).describe('Form UUID or slug') };
 
 const describeFormInputSchema = {
     form: z.string().trim().min(1).describe('Form UUID or slug'),
@@ -132,60 +136,62 @@ export interface FormsMcpClients {
     suiteApiUrl?: string;
 }
 
-export function registerFormsMcp(server: McpServer, clients: () => Promise<FormsMcpClients>): void {
-    server.registerResource(
-        'zynoforms_embedding_guide',
-        EMBEDDING_GUIDE_URI,
-        {
-            title: 'Embedding ZynoForms',
-            description: 'How to link, iframe, and submit published ZynoForms from a website.',
-            mimeType: 'text/markdown'
-        },
-        async () => ({
-            contents: [{ uri: EMBEDDING_GUIDE_URI, mimeType: 'text/markdown', text: EMBEDDING_GUIDE }]
-        })
-    );
+/**
+ * One ZynoForms operation, shared by the MCP tool and the `zynohosting forms` command. `input` parses a
+ * whole JSON object and rejects unknown keys (the CLI path); `mcpInput` is what the MCP tool registers,
+ * where it differs: a raw shape, or `null` for a tool that takes no arguments.
+ */
+export interface FormOperation {
+    tool: string;
+    command: string;
+    title: string;
+    description: string;
+    input: z.ZodTypeAny;
+    mcpInput?: z.ZodRawShape | z.ZodTypeAny | null;
+    annotations: ToolAnnotations;
+    // oxlint-disable-next-line typescript/no-explicit-any
+    run(clients: FormsMcpClients, input: any): Promise<unknown>;
+}
 
-    server.registerTool(
-        'list_forms',
-        {
-            title: 'List published ZynoForms',
-            description: 'List the tenant’s forms with direct links and ready-to-use iframe snippets.',
-            annotations: { readOnlyHint: true, openWorldHint: false }
-        },
-        async () => {
-            const { forms } = await clients();
+export const FORM_OPERATIONS: readonly FormOperation[] = [
+    {
+        tool: 'list_forms',
+        command: 'list',
+        title: 'List published ZynoForms',
+        description: 'List the tenant’s forms with direct links and ready-to-use iframe snippets.',
+        input: z.object({}).strict(),
+        mcpInput: null,
+        annotations: { readOnlyHint: true, openWorldHint: false },
+        async run(c) {
+            const { forms } = c;
             const listed = await forms.listForms();
-            return result({ forms: listed.map(form => decorateFormSummary(form)) });
+            return { forms: listed.map(form => decorateFormSummary(form)) };
         }
-    );
-
-    server.registerTool(
-        'get_form_integration',
-        {
-            title: 'Get ZynoForm integration details',
-            description: 'Get live field aliases, public endpoints, an iframe, and JSON, URL-encoded, multipart, and HTML examples.',
-            inputSchema: { form: z.string().trim().min(1).describe('Form UUID or slug') },
-            annotations: { readOnlyHint: true, openWorldHint: false }
-        },
-        async ({ form }) => {
-            const { forms, suiteApiUrl } = await clients();
+    },
+    {
+        tool: 'get_form_integration',
+        command: 'integration',
+        title: 'Get ZynoForm integration details',
+        description: 'Get live field aliases, public endpoints, an iframe, and JSON, URL-encoded, multipart, and HTML examples.',
+        input: z.object(formReferenceShape).strict(),
+        mcpInput: formReferenceShape,
+        annotations: { readOnlyHint: true, openWorldHint: false },
+        async run(c, { form }: { form: string }) {
+            const { forms, suiteApiUrl } = c;
             const detailed = await getFormByReference(forms, form);
-            return result(buildFormIntegration(detailed, requireSuiteApiUrl(suiteApiUrl)));
+            return buildFormIntegration(detailed, requireSuiteApiUrl(suiteApiUrl));
         }
-    );
-
-    server.registerTool(
-        'create_basic_form',
-        {
-            title: 'Create a basic published ZynoForm',
-            description:
-                'Create and immediately publish a one-page form with text, textarea, email, phone, URL, hidden, number, date, select, radio, checkbox, or contact fields. Fields submit by stable key aliases; required defaults to true except for hidden URL-parameter fields. Exact origins or ZynoHosting site references may be allowed for browser JavaScript. When a page already has its own form, read it first and keep its markup and layout instead of replacing it with a generic form.',
-            inputSchema: createBasicFormInputSchema,
-            annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }
-        },
-        async input => {
-            const { forms, manager, suiteApiUrl } = await clients();
+    },
+    {
+        tool: 'create_basic_form',
+        command: 'create',
+        title: 'Create a basic published ZynoForm',
+        description:
+            'Create and immediately publish a one-page form with text, textarea, email, phone, URL, hidden, number, date, select, radio, checkbox, or contact fields. Fields submit by stable key aliases; required defaults to true except for hidden URL-parameter fields. Exact origins or ZynoHosting site references may be allowed for browser JavaScript. When a page already has its own form, read it first and keep its markup and layout instead of replacing it with a generic form.',
+        input: createBasicFormInputSchema,
+        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+        async run(c, input: CreateBasicFormInput) {
+            const { forms, manager, suiteApiUrl } = c;
             const siteOrigins = await originsForSites(manager, input.origin_sites);
             const corsOrigins = unique([...input.origins.map(normalizeWebOrigin), ...siteOrigins]);
             const requestedBotProtection = botProtectionMode(input.bot_protection);
@@ -207,21 +213,20 @@ export function registerFormsMcp(server: McpServer, clients: () => Promise<Forms
                     'bot_protection_unsupported'
                 );
             }
-            return result(buildFormIntegration(created, requireSuiteApiUrl(suiteApiUrl)));
+            return buildFormIntegration(created, requireSuiteApiUrl(suiteApiUrl));
         }
-    );
-
-    server.registerTool(
-        'describe_form',
-        {
-            title: 'Describe a ZynoForm’s structure',
-            description:
-                'Describe a form the way it is authored: its fields in order with their keys, types, labels, and constraints, which of them this tool can edit, and what advanced content — sections, conditions, themes, translations — it preserves but cannot change. Read this before update_form.',
-            inputSchema: describeFormInputSchema,
-            annotations: { readOnlyHint: true, openWorldHint: false }
-        },
-        async ({ form, include_draft }) => {
-            const { forms } = await clients();
+    },
+    {
+        tool: 'describe_form',
+        command: 'describe',
+        title: 'Describe a ZynoForm’s structure',
+        description:
+            'Describe a form the way it is authored: its fields in order with their keys, types, labels, and constraints, which of them this tool can edit, and what advanced content — sections, conditions, themes, translations — it preserves but cannot change. Read this before update_form.',
+        input: z.object(describeFormInputSchema).strict(),
+        mcpInput: describeFormInputSchema,
+        annotations: { readOnlyHint: true, openWorldHint: false },
+        async run(c, { form, include_draft }: { form: string; include_draft: boolean }) {
+            const { forms } = c;
             const detailed = await getFormByReference(forms, form);
             const live = requireLiveDefinition(detailed);
             const structure = describeFormContent(live.content);
@@ -231,7 +236,7 @@ export function registerFormsMcp(server: McpServer, clients: () => Promise<Forms
                 warnings.push('This form has an unpublished draft, so the live structure below is not what the builder currently shows.');
             }
 
-            return result({
+            return {
                 form: decorateFormSummary(detailed),
                 notificationEmails: detailed.emailTo ?? [],
                 botProtection: detailed.botProtection ?? null,
@@ -247,21 +252,19 @@ export function registerFormsMcp(server: McpServer, clients: () => Promise<Forms
                       }
                     : {}),
                 warnings
-            });
+            };
         }
-    );
-
-    server.registerTool(
-        'update_form',
-        {
-            title: 'Update a ZynoForm',
-            description:
-                'Change a form’s name, link, heading, submit label, success message, or notification emails, and add, update, move, or remove fields addressed by key. Call describe_form first; it reports what is editable, what is locked, and whether an unpublished draft is blocking the edit. Untouched fields keep their identity, and content this vocabulary cannot express is preserved. Publishes a new version by default. Removing a field does not affect existing submissions, which are pinned to the version they were made against.',
-            inputSchema: updateFormInputSchema,
-            annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false }
-        },
-        async input => {
-            const { forms, suiteApiUrl } = await clients();
+    },
+    {
+        tool: 'update_form',
+        command: 'update',
+        title: 'Update a ZynoForm',
+        description:
+            'Change a form’s name, link, heading, submit label, success message, or notification emails, and add, update, move, or remove fields addressed by key. Call describe_form first; it reports what is editable, what is locked, and whether an unpublished draft is blocking the edit. Untouched fields keep their identity, and content this vocabulary cannot express is preserved. Publishes a new version by default. Removing a field does not affect existing submissions, which are pinned to the version they were made against.',
+        input: updateFormInputSchema,
+        annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+        async run(c, input: UpdateFormInput) {
+            const { forms, suiteApiUrl } = c;
             const detailed = await getFormByReference(forms, input.form);
             requireExpectedDefinition(input.expected_definition_id, detailed);
 
@@ -327,28 +330,27 @@ export function registerFormsMcp(server: McpServer, clients: () => Promise<Forms
                     );
                 }
             }
-            return result({
+            return {
                 ...integration,
                 applied,
                 // Only what was actually written: an edit the base already reflected changed nothing, and
                 // reporting it as a change would read as work this call performed.
                 changes: rewrites ? (edit?.changes ?? []) : [],
                 warnings
-            });
+            };
         }
-    );
-
-    server.registerTool(
-        'update_form_bot_protection',
-        {
-            title: 'Update ZynoForm bot protection',
-            description:
-                'Idempotently set Cap.js protection to an interactive widget, an invisible programmatic solve, or disabled for legacy submissions. A request that already matches skips the update call.',
-            inputSchema: updateBotProtectionInputSchema,
-            annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false }
-        },
-        async input => {
-            const { forms, suiteApiUrl } = await clients();
+    },
+    {
+        tool: 'update_form_bot_protection',
+        command: 'bot-protection',
+        title: 'Update ZynoForm bot protection',
+        description:
+            'Idempotently set Cap.js protection to an interactive widget, an invisible programmatic solve, or disabled for legacy submissions. A request that already matches skips the update call.',
+        input: updateBotProtectionInputSchema.strict(),
+        mcpInput: updateBotProtectionInputSchema,
+        annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+        async run(c, input: z.infer<typeof updateBotProtectionInputSchema>) {
+            const { forms, suiteApiUrl } = c;
             const detailed = await getFormByReference(forms, input.form);
             const wanted = botProtectionMode(input.bot_protection);
             const updated = detailed.botProtectionMode === wanted ? detailed : await forms.updateForm(detailed.id, { botProtectionMode: wanted });
@@ -368,25 +370,23 @@ export function registerFormsMcp(server: McpServer, clients: () => Promise<Forms
             );
             // Named for the tri-state argument rather than the stored column, which the spread integration
             // already reports as `form.botProtectionMode` (null when off) and `botProtection` (the config).
-            return result({
+            return {
                 ...integration,
                 botProtectionChanged: changed,
                 botProtectionSetting: botProtectionModeName(updated.botProtectionMode)
-            });
+            };
         }
-    );
-
-    server.registerTool(
-        'update_form_origins',
-        {
-            title: 'Update ZynoForm CORS origins',
-            description:
-                'Idempotently add or remove exact HTTP(S) origins. Site references expand to the site’s primary, alias, and vanity HTTPS hostnames.',
-            inputSchema: updateOriginsInputSchema,
-            annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false }
-        },
-        async input => {
-            const { forms, manager } = await clients();
+    },
+    {
+        tool: 'update_form_origins',
+        command: 'origins',
+        title: 'Update ZynoForm CORS origins',
+        description:
+            'Idempotently add or remove exact HTTP(S) origins. Site references expand to the site’s primary, alias, vanity, and preview HTTPS hostnames.',
+        input: updateOriginsInputSchema,
+        annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+        async run(c, input: z.infer<typeof updateOriginsInputSchema>) {
+            const { forms, manager } = c;
             const detailed = await getFormByReference(forms, input.form);
             const [addSiteOrigins, removeSiteOrigins] = await Promise.all([
                 originsForSites(manager, input.add_sites),
@@ -406,15 +406,49 @@ export function registerFormsMcp(server: McpServer, clients: () => Promise<Forms
                 if (!after.some(existing => canonicalStoredOrigin(existing) === origin)) after.push(origin);
             }
             const updated = arraysEqual(before, after) ? detailed : await forms.updateForm(detailed.id, { corsOrigins: after.length ? after : null });
-            return result({
+            return {
                 form: decorateFormSummary(updated),
                 before,
                 corsOrigins: updated.corsOrigins ?? [],
                 added: additions.filter(origin => !before.some(existing => canonicalStoredOrigin(existing) === origin)),
                 removed: before.filter(origin => removeSet.has(canonicalStoredOrigin(origin)))
-            });
+            };
         }
+    }
+];
+
+export function registerFormsMcp(server: McpServer, clients: () => Promise<FormsMcpClients>): void {
+    server.registerResource(
+        'zynoforms_embedding_guide',
+        EMBEDDING_GUIDE_URI,
+        {
+            title: 'Embedding ZynoForms',
+            description: 'How to link, iframe, and submit published ZynoForms from a website.',
+            mimeType: 'text/markdown'
+        },
+        async () => ({
+            contents: [{ uri: EMBEDDING_GUIDE_URI, mimeType: 'text/markdown', text: EMBEDDING_GUIDE }]
+        })
     );
+
+    for (const operation of FORM_OPERATIONS) {
+        const inputSchema = operation.mcpInput === undefined ? operation.input : operation.mcpInput;
+        server.registerTool(
+            operation.tool,
+            {
+                title: operation.title,
+                description: operation.description,
+                ...(inputSchema === null ? {} : { inputSchema }),
+                annotations: operation.annotations
+            },
+            // oxlint-disable-next-line typescript/no-explicit-any
+            (async (...args: any[]) => {
+                // A tool without an input schema is called with (extra) only; the others with (input, extra).
+                const input = inputSchema === null ? {} : args[0];
+                return result(await operation.run(await clients(), input));
+            }) as never
+        );
+    }
 }
 
 export function buildBasicFormDefinition(input: CreateBasicFormInput): FormDefinitionContent {
@@ -1289,7 +1323,7 @@ Use \`list_forms\` to discover published forms and \`get_form_integration\` to r
 
 \`create_basic_form\` creates and immediately publishes a one-page form. Each field has a unique \`key\`, which becomes its stable submission alias, and \`required\` defaults to true. The creator supports text, textarea, email, phone, URL, hidden URL-parameter, number, date, select, radio, checkbox, and one contact field. A hidden field accepts only \`key\` and \`label\`: the public ZynoForm reads its matching query parameter (for example, \`?campaign=spring\`) into that response. It is visitor-controlled attribution, not a secret or trusted input. Contact details label themselves and are selected with \`fields\`, such as \`["first_name", "last_name", "email", "phone_cell", "address"]\`. Use \`zip\` for ZIP-only collection; \`address\` already includes street, ZIP, city, and state. Its \`bot_protection\` defaults to \`interactive\`; choose \`invisible\` for a programmatic solve or \`disabled\` to preserve a legacy submission integration.
 
-Set explicit \`origins\`, or use \`origin_sites\` to allow HTTPS origins for a ZynoHosting site's primary, alias, and vanity hostnames. The result includes the published form's complete integration details.
+Set explicit \`origins\`, or use \`origin_sites\` to allow HTTPS origins for a ZynoHosting site's primary, alias, vanity, and preview hostnames. The result includes the published form's complete integration details.
 
 ## Inspecting and editing a form
 
@@ -1369,7 +1403,7 @@ The rendered ZynoForm and generated HTML enforce required fields in the browser.
 
 ## CORS origins
 
-Browser JavaScript that fetches a definition or submits cross-origin must use an allowed exact origin. Use \`update_form_origins\` with explicit HTTP(S) origins, or add a ZynoHosting site to allow HTTPS from its primary, alias, and vanity hostnames. Origins contain only scheme, host, and optional port—never a path.
+Browser JavaScript that fetches a definition or submits cross-origin must use an allowed exact origin. Use \`update_form_origins\` with explicit HTTP(S) origins, or add a ZynoHosting site to allow HTTPS from its primary, alias, vanity, and preview hostnames. Origins contain only scheme, host, and optional port—never a path.
 
 Allowed origins govern the ZynoSuite form endpoints only. Cap's own \`apiEndpoint\` answers any origin, so solving needs no configuration; a page that solves successfully and is then refused at submission has an origin problem, not a verification one.
 

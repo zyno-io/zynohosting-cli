@@ -2,6 +2,8 @@
 
 File commands operate on regular files relative to a site’s document root. They are useful for targeted inspection and small changes that do not need a full directory synchronization.
 
+File commands always act on **production**. They cannot read or change the [preview slot](../guide/preview); change the project and run `deploy --preview` instead.
+
 ## List files
 
 List one directory:

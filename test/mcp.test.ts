@@ -14,6 +14,9 @@ import { AllowedLocalRoots } from '../src/mcp/local-paths.js';
 import { createHostingMcpServer } from '../src/mcp/server.js';
 import { resolveMcpServerOptions } from '../src/mcp/start.js';
 
+// The browser flow is what these tests exercise; a headless CI machine would otherwise pick the device flow.
+process.env.DISPLAY ||= ':0';
+
 test('serves site metadata and downloads files only inside allowed roots', async () => {
     const root = await mkdtemp(join(tmpdir(), 'zynohosting-mcp-'));
     const snapshot = await siteArchive('snapshot');
@@ -171,10 +174,12 @@ test('serves site metadata and downloads files only inside allowed roots', async
         return value;
     };
     const configFile = join(root, 'hosting-config.json');
-    await writeFile(configFile, JSON.stringify({ apiUrl: `http://127.0.0.1:${address().port}`, apiKey: 'secret' }));
+    const baseUrl = `http://127.0.0.1:${address().port}`;
+    await writeFile(configFile, JSON.stringify({ version: 2, profiles: { [`url:${baseUrl}`]: { apiUrl: baseUrl, apiKey: 'secret' } } }));
     const hosting = await createHostingMcpServer({
         roots: await AllowedLocalRoots.create([root]),
         version: '0.2.0',
+        apiUrl: baseUrl,
         env: { ZYNOHOSTING_CONFIG: configFile }
     });
     const client = new Client({ name: 'test-client', version: '1.0.0' });
@@ -195,15 +200,18 @@ test('serves site metadata and downloads files only inside allowed roots', async
             'get_site',
             'list_files',
             'list_forms',
+            'list_logins',
             'list_sites',
             'login',
             'plan_deploy',
             'plan_download',
             'plan_promote',
             'put_file',
+            'set_not_found_handling',
             'update_form',
             'update_form_bot_protection',
-            'update_form_origins'
+            'update_form_origins',
+            'use_login'
         ]);
         const sites = await client.callTool({ name: 'list_sites', arguments: {} });
         assert.match(JSON.stringify(sites.structuredContent), /example\.com/);
@@ -433,7 +441,10 @@ test('starts without credentials and can complete browser login through MCP', as
         assert.equal(beforeLogin.isError, true);
         assert.match(JSON.stringify(beforeLogin.content), /login MCP tool/);
 
-        const started = await client.callTool({ name: 'login', arguments: { permissions: ['hosting.sitesRead'], timeout_seconds: 5 } });
+        const started = await client.callTool({
+            name: 'login',
+            arguments: { renewable: false, flow: 'browser', permissions: ['hosting.sitesRead'], timeout_seconds: 5 }
+        });
         assert.equal(started.isError, undefined);
         const startedContent = started.structuredContent as { authenticated: boolean; status: string; browserUrl: string };
         assert.equal(startedContent.authenticated, false);
@@ -494,13 +505,18 @@ test('reports a failed browser context switch instead of the prior login', async
     await new Promise<void>(resolve => httpServer.listen(0, '127.0.0.1', resolve));
     const address = httpServer.address();
     assert(address && typeof address === 'object');
-    await writeFile(configFile, JSON.stringify({ apiUrl: `http://127.0.0.1:${address.port}`, accessToken: 'prior-login-token', scopedToken: true }));
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+    await writeFile(
+        configFile,
+        JSON.stringify({ version: 2, profiles: { [`url:${baseUrl}`]: { apiUrl: baseUrl, accessToken: 'prior-login-token', scopedToken: true } } })
+    );
     const hosting = await createHostingMcpServer({
         roots: await AllowedLocalRoots.create([root]),
         version: '1.0.0',
+        apiUrl: baseUrl,
         env: { ZYNOHOSTING_CONFIG: configFile, ZYNOHOSTING_LOGIN_URL: 'https://login.example.test/cli/login' },
         loginDependencies: {
-            onBrowserUrl: async () => {
+            onLoginPrompt: async () => {
                 throw new Error('The sign-in was denied.');
             }
         }
@@ -513,7 +529,7 @@ test('reports a failed browser context switch instead of the prior login', async
         const priorSites = await client.callTool({ name: 'list_sites', arguments: {} });
         assert.equal(priorSites.isError, undefined);
 
-        const started = await client.callTool({ name: 'login', arguments: { timeout_seconds: 5 } });
+        const started = await client.callTool({ name: 'login', arguments: { flow: 'browser', renewable: false, timeout_seconds: 5 } });
         assert.equal(started.isError, undefined);
         assert.match(JSON.stringify(started.structuredContent), /browserUrl/);
 
@@ -548,12 +564,15 @@ test('a changed permission request supersedes the in-flight browser flow and can
     await hosting.connect(serverTransport);
     await client.connect(clientTransport);
     const call = async (args: Record<string, unknown>) => {
-        const response = await client.callTool({ name: 'login', arguments: args });
+        const response = await client.callTool({ name: 'login', arguments: { flow: 'browser', renewable: false, ...args } });
         assert.equal(response.isError, undefined);
         return response.structuredContent as { status?: string; browserUrl?: string; reused?: boolean; permissions?: string[] };
     };
     try {
-        const invented = await client.callTool({ name: 'login', arguments: { permissions: ['hosting.sitesWrite'], timeout_seconds: 30 } });
+        const invented = await client.callTool({
+            name: 'login',
+            arguments: { flow: 'browser', permissions: ['hosting.sitesWrite'], timeout_seconds: 30 }
+        });
         assert.equal(invented.isError, true);
         assert.match(JSON.stringify(invented.content), /hosting\.filesWrite/);
 

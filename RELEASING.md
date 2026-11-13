@@ -33,6 +33,7 @@ The public release job remains skipped until `GITHUB_MIRROR_SSH_KEY_B64` is conf
 7. Create the protected GitHub Actions environment named `npm`. Add reviewers if release approval is desired.
 8. In GitHub **Settings → Pages**, select **GitHub Actions** as the publishing source.
 9. Allow the `github-pages` environment to deploy from tags matching `v*`. The docs workflow also supports manual dispatch for recovery.
+10. The docs are served at `https://cli.zyno.host/` through the GitHub Pages custom domain: set it under **Settings → Pages → Custom domain** and add a DNS CNAME from `cli.zyno.host` to `zyno-io.github.io`. The VitePress base is `/`, so the site only works when it is served from that domain, not from `zyno-io.github.io/zynohosting-cli/`. Do not add a `CNAME` file: Actions deployments ignore it.
 
 The first npm publication may require a one-time owner bootstrap before npm allows trusted-publisher configuration. Remove any long-lived npm publication token after OIDC is working.
 
@@ -124,6 +125,6 @@ In parallel, the GitHub documentation workflow:
 3. uploads `docs/.vitepress/dist` as a GitHub Pages artifact;
 4. deploys the artifact through the `github-pages` environment.
 
-The documentation site is published at `https://zyno-io.github.io/zynohosting-cli/` and uses `/zynohosting-cli/` as its VitePress base path.
+The documentation site is published at `https://cli.zyno.host/` and uses `/` as its VitePress base path.
 
 Existing tags are never moved. A non-descendant tag cannot update GitHub `main`. Release jobs are serialized on both CI systems.

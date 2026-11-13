@@ -1,6 +1,6 @@
 {
     "name": "@zyno-io/zynohosting",
-    "version": "0.5.0",
+    "version": "0.6.0",
     "description": "CLI and local MCP server for managing ZynoHosting sites and ZynoForms integrations",
     "license": "MIT",
     "mcpName": "io.github.zyno-io/zynohosting",
@@ -9,7 +9,7 @@
         "type": "git",
         "url": "git+https://github.com/zyno-io/zynohosting-cli.git"
     },
-    "homepage": "https://zyno-io.github.io/zynohosting-cli/",
+    "homepage": "https://cli.zyno.host/",
     "bugs": {
         "url": "https://github.com/zyno-io/zynohosting-cli/issues"
     },
@@ -34,8 +34,8 @@
         "docs:dev": "vitepress docs",
         "docs:build": "vitepress build docs",
         "docs:preview": "vitepress preview docs",
-        "format": "oxfmt --write src test scripts docs .github *.md .oxfmtrc.json tsconfig.json tsconfig.build.json",
-        "test": "tsx --test test/**/*.test.ts",
+        "format": "oxfmt --write src test scripts docs skills .github *.md .oxfmtrc.json tsconfig.json tsconfig.build.json",
+        "test": "tsx --import ./test/support/clean-env.ts --test test/**/*.test.ts",
         "typecheck": "tsc -p tsconfig.json --noEmit",
         "verify-package": "node scripts/verify-package.mjs",
         "prepack": "yarn clean && yarn build && yarn verify-package"

@@ -1,36 +1,47 @@
 # MCP tool reference
 
-All tools return JSON as structured content and as a text content block. Argument names use snake case.
+All tools return JSON as structured content and as a text content block. Argument names use snake case. There are 23 tools.
+
+Every tool except `login`, `list_logins` and `use_login` also accepts an optional `tenant` (a login id, tenant id, or tenant name from `list_logins`) and an optional `account` (an email or account id). They pick which saved login to use for that one call and never change the default. A tenant with several accounts signed in needs `account` (or the full login id), otherwise the call fails with `login_ambiguous`. Omit it to use the default login. The tool schemas show it, so it is not repeated in the tables below.
 
 ## Site discovery
 
 ### `login`
 
-Starts Zyno’s browser login flow from the MCP process and returns its one-time URL in the tool result, then saves the resulting scoped credential for subsequent MCP calls. Use it when no login is saved or when the explicitly requested domain is unavailable in the current login context. After the browser callback completes, call it with `action: "status"` to confirm the login is ready.
+Starts a sign-in from the MCP process, then saves the resulting scoped credential for subsequent MCP calls. Use it when no login is saved, when the explicitly requested domain is unavailable in the current login context, or to add a login for another tenant. It chooses the flow itself:
 
-| Input             | Required | Default             | Meaning                                                           |
-| ----------------- | -------- | ------------------- | ----------------------------------------------------------------- |
-| `action`          | no       | `start`             | `start`, `status` to check completion, or `cancel` to abandon it. |
-| `permissions`     | no       | `hosting.sitesRead` | Explicit permissions to request, from the list below.             |
-| `name`            | no       | host-based CLI name | Name shown on the authorization page.                             |
-| `renewable`       | no       | `false`             | Store a rotating renewal credential in the system key store.      |
-| `timeout_seconds` | no       | `300`               | Time to wait for browser sign-in to complete.                     |
+- **Browser flow:** where a browser can open on the computer running the MCP. The tool result holds a one-time `browserUrl`, and the server also tries to open it.
+- **Device flow (link and code):** over SSH or on a machine with no display. The tool result holds `verificationUri`, `verificationUriComplete` (the link with the code filled in), `userCode` and `expiresAt`. Give the user the link and the code verbatim. They open it on any device, check that the code matches, pick how long the access lasts, tick the confirmation box, and approve. The agent never opens the link or approves it. The device code itself is never returned.
+
+After the person finishes, call it with `action: "status"` until it reports `authenticated`. The status then includes `tenant`, `tenantName`, `account`, `grantExpiresAt`, `permissionKeys` (what the approver granted) and `deniedPermissionKeys` (requested but not granted, because the approver does not hold them in that tenant). If any were not granted, tell the user exactly which and what that means, and do not request them again unless asked; tell the user which account and organization it is and ask them to confirm.
+
+| Input             | Required | Default                                                   | Meaning                                                                                                                                    |
+| ----------------- | -------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `action`          | no       | `start`                                                   | `start`, `status` to check completion, or `cancel` to abandon it.                                                                          |
+| `permissions`     | no       | `hosting.sitesRead`                                       | Explicit permissions to request, from the list below.                                                                                      |
+| `name`            | no       | host-based CLI name                                       | Name shown on the authorization page.                                                                                                      |
+| `renewable`       | no       | unset (renewable if this computer has a credential store) | Keep a rotating renewal credential, in the system key store, so the login does not end after 60 minutes. Set `false` for a one-hour login. |
+| `flow`            | no       | `auto`                                                    | `auto`, `browser` or `device`. Set it only to override the choice.                                                                         |
+| `lifetime`        | no       | none                                                      | `1h`, `1d`, `7d` or `30d`: a suggestion; the user decides. Above `1h` needs `renewable`.                                                   |
+| `timeout_seconds` | no       | 300 (browser); until the code expires (device)            | Time to wait for the sign-in to complete (1–600).                                                                                          |
+
+The renewal token can only go in the system store unless the MCP host sets `ZYNOHOSTING_CREDENTIAL_STORE=file` in its environment. The model cannot choose the file store through a tool input.
 
 `permissions` is an enumeration. These are the only valid values; a plausible-looking key such as `hosting.sitesWrite` does not exist, and one invalid entry rejects the whole request rather than granting the remainder:
 
-| Permission                  | Capability                                                    |
-| --------------------------- | ------------------------------------------------------------- |
-| `hosting.sitesRead`         | List and inspect sites (required by every hosting operation). |
-| `hosting.filesRead`         | List files and read individual files.                         |
-| `hosting.filesWrite`        | Create and replace individual files.                          |
-| `hosting.filesDelete`       | Delete individual files.                                      |
-| `hosting.deploy`            | Deploy production/preview content and promote preview.        |
-| `hosting.download`          | Download the deployable snapshot.                             |
-| `hosting.downloadSensitive` | Include protected and user-generated content in a download.   |
-| `hosting.analyticsRead`     | Read hosting analytics.                                       |
-| `hosting.analyticsManage`   | Change analytics configuration.                               |
-| `forms.create`              | Create and publish a basic form.                              |
-| `forms.edit`                | Edit a form, its bot protection, and its allowed origins.     |
+| Permission                  | Capability                                                                            |
+| --------------------------- | ------------------------------------------------------------------------------------- |
+| `hosting.sitesRead`         | List and inspect sites (required by every hosting operation).                         |
+| `hosting.filesRead`         | List files and read individual files.                                                 |
+| `hosting.filesWrite`        | Create and replace individual files.                                                  |
+| `hosting.filesDelete`       | Delete individual files.                                                              |
+| `hosting.deploy`            | Deploy production/preview content, promote preview, and change missing-page handling. |
+| `hosting.download`          | Download the deployable snapshot.                                                     |
+| `hosting.downloadSensitive` | Include protected and user-generated content in a download.                           |
+| `hosting.analyticsRead`     | Read hosting analytics.                                                               |
+| `hosting.analyticsManage`   | Change analytics configuration.                                                       |
+| `forms.create`              | Create and publish a basic form.                                                      |
+| `forms.edit`                | Edit a form, its bot protection, and its allowed origins.                             |
 
 Request the narrowest complete set for the stated task, always including `hosting.sitesRead` for hosting work:
 
@@ -45,15 +56,25 @@ Request the narrowest complete set for the stated task, always including `hostin
 | Include user content  | add `hosting.downloadSensitive`                                               |
 | Build or edit a form  | `forms.create`, `forms.edit`, and `hosting.sitesRead` to add a site’s origins |
 
-A token’s scope is fixed for its lifetime; a missing permission means logging out and signing in again.
+A token’s scope is fixed for its lifetime; a missing permission means signing in again. Signing in again as the same account in the same tenant replaces and revokes the old login. There is no logout tool; a full sign-out is `zynohosting logout` in a terminal.
 
-Only one browser flow runs at a time, and the result says which one you received:
+Only one sign-in runs at a time, and the result says which one you received:
 
-- `start` with the same `permissions`, `name`, and `renewable` as the flow already in flight returns that same URL with `"reused": true`.
-- `start` with any different request cancels the in-flight flow—closing its loopback listener and invalidating its URL—and returns a new URL with `"reused": false`. The requested scope is never silently replaced by the earlier one.
-- `cancel` ends the in-flight flow and reports `cancelled`; it reports `not_pending` when nothing is in flight, and the normal authenticated status when the browser completed sign-in first.
+- `start` with the same `permissions`, `name`, `renewable`, `flow` and `lifetime` as the one already in flight returns that same URL or code with `"reused": true`.
+- `start` with any different request cancels the in-flight sign-in—closing its loopback listener or cancelling its code on the server, so the old URL or code stops working—and returns a new one with `"reused": false`. The requested scope is never silently replaced by the earlier one.
+- `cancel` ends the in-flight sign-in and reports `cancelled`; it reports `not_pending` when nothing is in flight, and the normal authenticated status when the person completed sign-in first.
+
+A saved login is one account in one tenant: signing in again as the same account in the same tenant replaces that login; another account or tenant adds a login and makes it the default.
 
 `status` echoes the pending request’s `permissions` so a long-running flow can be checked against what was asked for. The tool cannot replace an API key or bearer token injected into the MCP process. Change that injected credential and restart the MCP host instead.
+
+### `list_logins`
+
+Lists the saved logins for this environment, one per account and tenant: `loginId`, `accountId`, `accountEmail`, `tenantId`, `tenantName`, `active` (the default), `renewable`, `permissionKeys`, `deniedPermissionKeys`, `accessExpiresAt`, `grantExpiresAt`, and `expired`. It takes no input and changes nothing. When there is more than one login, ask the user which organization to work in before acting, then pass its name or id as `tenant`.
+
+### `use_login`
+
+Makes a saved login the default for later calls, without signing in again. Input: `tenant` (required: a login id, tenant id, or tenant name) and optional `account` to narrow it. It clears pending deploy, promote and download plans, because the context changes. It fails with `fixed_credential_source` when the MCP process was given an API key or token. To use another login for one call only, pass `tenant` on that tool instead.
 
 ### `list_sites`
 
@@ -170,7 +191,7 @@ For `select`, supply string `options`. Radio options may be strings or `{ "title
 
 Its `fields` may contain `display_name`, `first_name`, `last_name`, `company`, `birthdate`, `phone_cell`, `email`, `address`, and `zip`. Use `zip` for ZIP-only collection; `address` already includes street, ZIP, city, and state.
 
-Exact `origins` are normalized and deduplicated. Each `origin_sites` reference expands through `get_site` to HTTPS origins for its current primary, alias, and vanity hostnames. The result contains the same integration package as `get_form_integration`.
+Exact `origins` are normalized and deduplicated. Each `origin_sites` reference expands through `get_site` to HTTPS origins for its current primary, alias, vanity, and preview hostnames. The result contains the same integration package as `get_form_integration`.
 
 - Mutates remote state: yes; creates and publishes
 - Idempotent: no
@@ -452,6 +473,21 @@ Preview has no separate database and uses the main site’s database. It shares 
 storage quota. Database changes from preview can affect the live site. See
 [the CLI feature details](../cli/deploy#preview-sites-and-promotion).
 
+## Site settings
+
+### `set_not_found_handling`
+
+```json
+{ "site": "example.com", "mode": "single-page-application" }
+```
+
+| Argument | Required | Meaning                                            |
+| -------- | -------- | -------------------------------------------------- |
+| `site`   | yes      | Site UUID or hostname.                             |
+| `mode`   | yes      | `404-page` (default) or `single-page-application`. |
+
+`single-page-application` serves `/index.html` with status 200 for unknown paths unless they end in a listed asset extension (`.js`, `.css`, images, fonts, `.json`, `.txt`, ...), which still return 404, so client-side routers can handle deep links. The change applies immediately to production and preview and clears the CDN cache, so ask the user first, and prefer pre-rendering every route. Static sites only: it fails with `not_found_handling_requires_static` on a PHP site. Older managers that do not report `notFoundHandling` fail with `not_found_handling_unavailable`. Idempotent; waits for serving reconciliation and returns `siteId`, `site`, `notFoundHandling`, `previous`, `changed`, `operationId`, and `status`. There is no plan step. Permission: `hosting.deploy` (plus `hosting.sitesRead`). `get_site` reports the current `notFoundHandling`.
+
 ## Complete downloads
 
 ### `plan_download`
@@ -488,11 +524,11 @@ The plan must come from `plan_download` in the same MCP process. A successful ap
 
 Treat these tools as follows:
 
-| Category        | Tools                                                                                                            | Review expectation                                         |
-| --------------- | ---------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
-| Remote read     | `list_sites`, `get_site`, `list_forms`, `get_form_integration`, `describe_form`                                  | Safe for routine discovery.                                |
-| Local write     | `get_file`, `apply_download`                                                                                     | Confirm the destination and overwrite behavior.            |
-| Remote mutation | `create_basic_form`, `update_form`, `update_form_bot_protection`, `update_form_origins`, file/deploy apply tools | Review form/site, fields, origins, paths, and plans.       |
-| Plan only       | `plan_deploy`, `plan_download`, `plan_promote`                                                                   | Inspect the returned target, scope, and URLs before apply. |
+| Category        | Tools                                                                                                                                      | Review expectation                                         |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------- |
+| Remote read     | `list_sites`, `get_site`, `list_forms`, `get_form_integration`, `describe_form`                                                            | Safe for routine discovery.                                |
+| Local write     | `get_file`, `apply_download`                                                                                                               | Confirm the destination and overwrite behavior.            |
+| Remote mutation | `create_basic_form`, `update_form`, `update_form_bot_protection`, `update_form_origins`, `set_not_found_handling`, file/deploy apply tools | Review form/site, fields, origins, paths, and plans.       |
+| Plan only       | `plan_deploy`, `plan_download`, `plan_promote`                                                                                             | Inspect the returned target, scope, and URLs before apply. |
 
 The MCP server enforces technical boundaries, but the calling agent or user remains responsible for choosing the intended site and reviewing destructive operations. Never infer a deployment domain. If an explicitly named domain is unavailable, do not substitute another site; offer `login` so the user can switch contexts. Likewise, never select `plan_promote` `force: true` unless the user explicitly requests that override.

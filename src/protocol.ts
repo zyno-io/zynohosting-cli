@@ -42,10 +42,11 @@ export interface ReconciliationOperation {
     lastError: string | null;
 }
 
-export interface PromotionAccepted {
+export interface SiteMutationAccepted {
     result: AutomationSite;
     operation: ReconciliationOperation;
 }
+export type PromotionAccepted = SiteMutationAccepted;
 export type OperationKind = 'create' | 'replace' | 'delete';
 export type AgentAccessScope =
     | 'deploy:inventory'
@@ -68,11 +69,16 @@ export interface DeploymentSession {
     url?: string;
 }
 
+export const NOT_FOUND_HANDLING_MODES = ['404-page', 'single-page-application'] as const;
+export type NotFoundHandling = (typeof NOT_FOUND_HANDLING_MODES)[number];
+
 export interface AutomationSite {
     id: string;
     fqdn: string;
     status: string;
     phpVersion: string | null;
+    /** Absent on managers that predate the setting. Any string is accepted so a future mode cannot break unrelated commands. */
+    notFoundHandling?: string;
     deployments?: SiteDeployments;
     hostnames?: Array<{ name: string; type: string }>;
 }
@@ -236,6 +242,7 @@ export function parseAutomationSite(value: unknown): AutomationSite {
         fqdn: string(object.fqdn ?? object.primaryHostname, 'site.fqdn'),
         status: string(object.status, 'site.status'),
         phpVersion: object.phpVersion === null ? null : string(object.phpVersion, 'site.phpVersion'),
+        ...(object.notFoundHandling === undefined ? {} : { notFoundHandling: string(object.notFoundHandling, 'site.notFoundHandling') }),
         ...(hostnames === undefined ? {} : { hostnames }),
         ...(object.deployments === undefined ? {} : { deployments: parseSiteDeployments(object.deployments) })
     };
@@ -278,9 +285,13 @@ export function parseReconciliation(value: unknown): ReconciliationOperation {
     return { id, status, statusUrl, lastError: object.lastError === null ? null : string(object.lastError, 'operation.lastError') };
 }
 
-export function parsePromotionAccepted(value: unknown): PromotionAccepted {
-    const object = record(value, 'promotion');
+export function parseSiteMutationAccepted(value: unknown, label = 'site update'): SiteMutationAccepted {
+    const object = record(value, label);
     return { result: parseAutomationSite(object.result), operation: parseReconciliation(object.operation) };
+}
+
+export function parsePromotionAccepted(value: unknown): PromotionAccepted {
+    return parseSiteMutationAccepted(value, 'promotion');
 }
 
 export function parseFileList(value: unknown): FileListResponse {

@@ -61,7 +61,7 @@ export function startCredentialRefreshLoop(credential: ManagerCredential, option
                 // Reporting must not stop credential maintenance.
             }
         }
-        if (stopped || (error instanceof CliError && error.code === 'renewal_invalid')) return;
+        if (stopped || (error instanceof CliError && (error.code === 'renewal_invalid' || error.code === 'grant_expired'))) return;
         const expiresAt = credential.expiresAt;
         if (expiresAt === undefined) return;
         const untilRefreshWindow = expiresAt - Date.now() - refreshWindowMs;
@@ -80,6 +80,12 @@ export async function ensureFreshCredential(credential: ManagerCredential): Prom
 
     const now = Date.now();
     const state = refreshStates.get(credential);
+    const grantEnd = credential.grantExpiresAt;
+    if (grantEnd !== undefined && state) {
+        // The approved lifetime is a hard stop: nothing renews past it, so do not try in its last minutes.
+        if (grantEnd <= now) throw grantExpired(grantEnd);
+        if (credential.expiresAt >= grantEnd - 1000 && credential.expiresAt > now) return;
+    }
     if (credential.expiresAt > now + REFRESH_WINDOW_MS) return;
     if (!state) {
         if (credential.expiresAt <= now) throw expired();
@@ -124,6 +130,14 @@ export async function ensureFreshCredential(credential: ManagerCredential): Prom
     }
 
     if (credential.expiresAt <= Date.now()) throw expired();
+}
+
+function grantExpired(grantExpiresAt: number): CliError {
+    return new CliError(
+        `This ZynoHosting login reached the end of the lifetime approved on ${new Date(grantExpiresAt).toISOString().slice(0, 10)}. Run \`zynohosting login\` again.`,
+        3,
+        'grant_expired'
+    );
 }
 
 function expired(): CliError {

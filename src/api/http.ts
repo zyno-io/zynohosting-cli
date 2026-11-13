@@ -3,6 +3,7 @@ import type { Readable } from 'node:stream';
 import { request as requestHttp, type IncomingHttpHeaders, type IncomingMessage } from 'node:http';
 import { request as requestHttps } from 'node:https';
 
+import { permissionDeniedHint } from '../auth/denied-permissions.js';
 import { HttpError } from '../errors.js';
 import { userAgent } from './user-agent.js';
 
@@ -57,7 +58,11 @@ export async function request(url: string, options: RequestOptions = {}): Promis
             init.duplex = 'half';
         }
         const response = await fetch(url, init);
-        if (!response.ok) throw await responseError(response);
+        if (!response.ok) {
+            const failure = await responseError(response);
+            if (failure.status === 403) failure.message += permissionDeniedHint((init.headers as Headers).get('authorization'));
+            throw failure;
+        }
         return response;
     } catch (error) {
         if (error instanceof HttpError) throw error;
