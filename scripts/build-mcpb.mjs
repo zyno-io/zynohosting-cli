@@ -114,8 +114,8 @@ const manifest = {
     // certificate's common name so the stated and cryptographic identity agree.
     author: { name: 'Zyno Consulting', url: 'https://zyno.io' },
     repository: { type: 'git', url: 'https://github.com/zyno-io/zynohosting-cli.git' },
-    homepage: 'https://zyno-io.github.io/zynohosting-cli/',
-    documentation: 'https://zyno-io.github.io/zynohosting-cli/agents/',
+    homepage: 'https://cli.zyno.host/',
+    documentation: 'https://cli.zyno.host/agents/',
     support: 'https://github.com/zyno-io/zynohosting-cli/issues',
     license: pkg.license,
     keywords: ['hosting', 'deployment', 'forms', 'static-site'],

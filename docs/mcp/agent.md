@@ -1,6 +1,6 @@
 # Install instructions for agents
 
-This page is addressed to the AI agent that fetched it. The person you are working for reads https://zyno-io.github.io/zynohosting-cli/agents/ instead.
+This page is addressed to the AI agent that fetched it. The person you are working for reads https://cli.zyno.host/agents/ instead.
 
 ## Check whether you need the MCP server
 
@@ -66,7 +66,7 @@ The extension is available in the Code tab as well, so a user who installs it do
 
 ## Editing this page
 
-Agents fetch it raw from GitHub, so keep it plain Markdown: no VitePress `:::` containers, and no relative links, which do not resolve on `raw.githubusercontent.com`. Use full `https://zyno-io.github.io/zynohosting-cli/...` URLs.
+Agents fetch it raw from GitHub, so keep it plain Markdown: no VitePress `:::` containers, and no relative links, which do not resolve on `raw.githubusercontent.com`. Use full `https://cli.zyno.host/...` URLs.
 
 Keep it install-only. Anything an agent needs after the server is connected belongs in `SERVER_INSTRUCTIONS` or a tool description in `src/mcp/server.ts` or `src/mcp/forms.ts`, where it reaches every session instead of only the one that happened to fetch this file.
 

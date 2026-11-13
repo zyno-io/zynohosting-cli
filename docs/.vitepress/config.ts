@@ -5,10 +5,10 @@ export default defineConfig({
     title: 'ZynoHosting CLI & MCP',
     titleTemplate: ':title · ZynoHosting',
     description: 'Deploy, preview, and promote ZynoHosting sites from the command line or an agent, and create and connect ZynoForms.',
-    base: '/zynohosting-cli/',
+    base: '/',
     lastUpdated: true,
     sitemap: {
-        hostname: 'https://zyno-io.github.io/zynohosting-cli/'
+        hostname: 'https://cli.zyno.host/'
     },
     markdown: {
         lineNumbers: true

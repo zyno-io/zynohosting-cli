@@ -13,7 +13,7 @@
 
 The package requires Node.js 24.
 
-Full CLI and MCP documentation is available at [zyno-io.github.io/zynohosting-cli](https://zyno-io.github.io/zynohosting-cli/).
+Full CLI and MCP documentation is available at [cli.zyno.host](https://cli.zyno.host/).
 
 ## Install
 
@@ -154,7 +154,7 @@ Only `deploy --preview` writes to preview; `files` and `download` always act on 
 After a promotion preview is empty, so promoting again would publish an empty site. Because
 `wp-config.php` and `wp-content/uploads/` are never deployed, WordPress sites should deploy
 straight to production rather than promote. See
-[Preview and production](https://zyno-io.github.io/zynohosting-cli/guide/preview).
+[Preview and production](https://cli.zyno.host/guide/preview).
 
 Preview has no separate database and uses the main site’s database. It shares the main site’s
 storage quota. Database changes from preview can affect the live site. Both operations use the
@@ -174,7 +174,7 @@ zynohosting forms origins --input '{"form":"contact-us","add_sites":["example.co
 zynohosting forms guide
 ```
 
-Errors go to stderr as JSON. See [ZynoForms commands](https://zyno-io.github.io/zynohosting-cli/cli/forms).
+Errors go to stderr as JSON. See [ZynoForms commands](https://cli.zyno.host/cli/forms).
 
 ## Complete download
 
@@ -202,11 +202,11 @@ The agent writes the skill to `.claude/skills/zynohosting/SKILL.md` or `.agents/
 
 The local MCP server remains for the **Claude desktop app's Chat and Cowork tabs**, which cannot run a CLI or install anything from a conversation. The user opens the signed desktop extension, [`zynohosting.mcpb`](https://github.com/zyno-io/zynohosting-cli/releases/latest/download/zynohosting.mcpb). It carries the server as a single bundled file, runs on the Node runtime inside Claude Desktop so nothing else has to be installed, and stages newer signed releases so installs do not go stale.
 
-See [CLI, skill, or MCP](https://zyno-io.github.io/zynohosting-cli/agents/interfaces) for the reasoning, and [Set up an agent](https://zyno-io.github.io/zynohosting-cli/agents/) for per-agent steps and copy-and-paste prompts.
+See [CLI, skill, or MCP](https://cli.zyno.host/agents/interfaces) for the reasoning, and [Set up an agent](https://cli.zyno.host/agents/) for per-agent steps and copy-and-paste prompts.
 
 ## Local MCP server
 
-The MCP server is local stdio only. It does not open a port or provide a hosted/cloud MCP endpoint. See [Configure the local MCP server](https://zyno-io.github.io/zynohosting-cli/mcp/).
+The MCP server is local stdio only. It does not open a port or provide a hosted/cloud MCP endpoint. See [Configure the local MCP server](https://cli.zyno.host/mcp/).
 
 `ZYNOHOSTING_MCP_ROOTS` is an optional local-computer allowlist for the MCP process. When it is unset, local-file tools can use any absolute path the MCP process user can access. When roots are configured, local file reads, writes, deploy sources, ignore files, and download destinations are constrained to them after canonical path resolution.
 
@@ -299,7 +299,7 @@ Most CLI commands accept `--json`. Deploy emits newline-delimited progress, plan
 
 ## Public API and release process
 
-The [public documentation site](https://zyno-io.github.io/zynohosting-cli/) covers CLI commands, MCP tools, configuration, permissions, and safety. The manager and node-agent contract is documented in [BACKEND_PLAN.md](./BACKEND_PLAN.md). Maintainer release setup and the tag-only mirror design are documented in [RELEASING.md](./RELEASING.md).
+The [public documentation site](https://cli.zyno.host/) covers CLI commands, MCP tools, configuration, permissions, and safety. The manager and node-agent contract is documented in [BACKEND_PLAN.md](./BACKEND_PLAN.md). Maintainer release setup and the tag-only mirror design are documented in [RELEASING.md](./RELEASING.md).
 
 ## License
 

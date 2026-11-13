@@ -110,7 +110,7 @@ Know these before you use preview:
 - **"Go live", "launch", or "publish" is ambiguous** once a preview exists. Ask whether they mean deploy to production or promote preview.
 - **`promotion_pending` means it is still running.** Do not re-run `promote`. `sites get` cannot tell you whether it finished, because the new deployment ID appears as soon as the promotion is accepted. Report the operation ID to the user.
 
-Full model and hostname table: https://zyno-io.github.io/zynohosting-cli/guide/preview
+Full model and hostname table: https://cli.zyno.host/guide/preview
 
 ## Individual files (production only)
 
@@ -171,7 +171,7 @@ zynohosting forms update --input @edit.json
 #    "operations":[{"op":"add_field","field":{"type":"phone","key":"phone","label":"Phone","required":false}}]}
 ```
 
-Input fields and results are identical to the MCP tools of the same purpose (`list_forms`, `describe_form`, `get_form_integration`, `create_basic_form`, `update_form`, `update_form_bot_protection`, `update_form_origins`). The full argument reference, including every field type and operation, is at https://zyno-io.github.io/zynohosting-cli/mcp/tools. Unknown keys are rejected.
+Input fields and results are identical to the MCP tools of the same purpose (`list_forms`, `describe_form`, `get_form_integration`, `create_basic_form`, `update_form`, `update_form_bot_protection`, `update_form_origins`). The full argument reference, including every field type and operation, is at https://cli.zyno.host/mcp/tools. Unknown keys are rejected.
 
 Rules for forms:
 

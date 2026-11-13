@@ -22,7 +22,7 @@ yarn docs:build
 yarn docs:preview
 ```
 
-The production output is `docs/.vitepress/dist` and the public base path is `/zynohosting-cli/`.
+The production output is `docs/.vitepress/dist` and the public base path is `/` (served at `https://cli.zyno.host/`).
 
 ## One-time GitHub Pages setup
 

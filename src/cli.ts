@@ -298,7 +298,7 @@ export function createProgram(): Command {
             .description('discover, create, inspect, edit, and connect ZynoForms (JSON in, JSON out)')
             .hook('preAction', () => forceJsonErrors())
     );
-    const formsDocs = 'https://zyno-io.github.io/zynohosting-cli/cli/forms';
+    const formsDocs = 'https://cli.zyno.host/cli/forms';
     for (const operation of FORM_OPERATIONS) {
         const command = jsonParseErrors(forms.command(operation.command).description(operation.title));
         // `list` takes no arguments but still accepts `--input '{}'`, as its MCP tool accepts an empty object.

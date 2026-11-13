@@ -1,12 +1,12 @@
 # Set up ZynoHosting: instructions for agents
 
-This page is for the AI agent that fetched it. The person you are working for reads https://zyno-io.github.io/zynohosting-cli/agents/ instead.
+This page is for the AI agent that fetched it. The person you are working for reads https://cli.zyno.host/agents/ instead.
 
 If you can run shell commands, you use ZynoHosting through its CLI and a skill file that teaches you the CLI. Setup takes one download, and you can carry on in this session right away. Do not install the MCP server as well; the CLI covers hosting and ZynoForms.
 
 If you cannot run shell commands, skip to "Agents without a shell".
 
-If you have your own cloud computer as well as access to the user's computer (Grok Bot, ChatGPT dots), run every command in this page, and every ZynoHosting command afterward, on the user's computer in their website folder. The cloud computer cannot see their files, and sign-in only completes on the machine whose browser approves it. If you only have the cloud computer, stop and send the user to https://zyno-io.github.io/zynohosting-cli/agents/always-on.html to turn on access to their computer.
+If you have your own cloud computer as well as access to the user's computer (Grok Bot, ChatGPT dots), run every command in this page, and every ZynoHosting command afterward, on the user's computer in their website folder. The cloud computer cannot see their files, and sign-in only completes on the machine whose browser approves it. If you only have the cloud computer, stop and send the user to https://cli.zyno.host/agents/always-on.html to turn on access to their computer.
 
 ## Install the skill
 
@@ -49,6 +49,6 @@ The extension carries everything it needs, so Node.js is not required, and it ke
 
 ## Editing this page
 
-Agents fetch it raw from GitHub, so keep it plain Markdown: no VitePress `:::` containers, and no relative links, which do not resolve on `raw.githubusercontent.com`. Use full `https://zyno-io.github.io/zynohosting-cli/...` URLs.
+Agents fetch it raw from GitHub, so keep it plain Markdown: no VitePress `:::` containers, and no relative links, which do not resolve on `raw.githubusercontent.com`. Use full `https://cli.zyno.host/...` URLs.
 
 Keep it install-only. Everything an agent needs afterward belongs in `skills/zynohosting/SKILL.md`.

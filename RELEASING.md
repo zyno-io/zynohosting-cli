@@ -124,6 +124,6 @@ In parallel, the GitHub documentation workflow:
 3. uploads `docs/.vitepress/dist` as a GitHub Pages artifact;
 4. deploys the artifact through the `github-pages` environment.
 
-The documentation site is published at `https://zyno-io.github.io/zynohosting-cli/` and uses `/zynohosting-cli/` as its VitePress base path.
+The documentation site is published at `https://cli.zyno.host/` and uses `/` as its VitePress base path.
 
 Existing tags are never moved. A non-descendant tag cannot update GitHub `main`. Release jobs are serialized on both CI systems.

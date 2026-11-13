@@ -9,7 +9,7 @@
         "type": "git",
         "url": "git+https://github.com/zyno-io/zynohosting-cli.git"
     },
-    "homepage": "https://zyno-io.github.io/zynohosting-cli/",
+    "homepage": "https://cli.zyno.host/",
     "bugs": {
         "url": "https://github.com/zyno-io/zynohosting-cli/issues"
     },
