@@ -238,3 +238,62 @@ test('a server without device sign-in reports it through the login tool', async 
         await auth.close();
     }
 });
+
+test('a sign-in that finishes after use_login leaves that choice alone, but its status names the tenant it approved', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'zynohosting-mcp-login-vs-use-'));
+    const file = join(root, 'config.json');
+    const hosting = await manager();
+    const key = `url:${hosting.url}`;
+    const saved = (tenantId: string, name: string) => ({
+        tenantId,
+        tenantName: name,
+        accessToken: `${name.toLowerCase()}.jwt.signature`,
+        expiresAt: Date.now() + 3_600_000,
+        scopedToken: true as const
+    });
+    await updateProfile(
+        key,
+        { apiUrl: hosting.url, logins: { [ACME]: saved(ACME, 'Acme'), [GLOBEX]: saved(GLOBEX, 'Globex') }, activeLogin: ACME },
+        file
+    );
+    const { client, close } = await connect({
+        roots: await AllowedLocalRoots.create([root]),
+        version: '1.0.0',
+        apiUrl: hosting.url,
+        env: { ZYNOHOSTING_CONFIG: file, ZYNOHOSTING_LOGIN_URL: 'https://login.example.test/cli/login' },
+        loginDependencies: { openUrl: async () => {}, platform: 'darwin' }
+    });
+    try {
+        const started = (await client.callTool({ name: 'login', arguments: { flow: 'browser', timeout_seconds: 20 } })).structuredContent as {
+            browserUrl: string;
+        };
+        const url = new URL(started.browserUrl);
+        await client.callTool({ name: 'use_login', arguments: { tenant: GLOBEX } });
+        // The sign-in completes for a third tenant, after the user chose Globex.
+        const NEW_TENANT = '00000000-0000-0000-0000-0000000000c3';
+        const response = await fetch(url.searchParams.get('callback')!, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: new URLSearchParams({
+                jwt: 'initech.jwt.signature',
+                tenantId: NEW_TENANT,
+                expiresAt: String(Date.now() + 3_600_000),
+                state: url.searchParams.get('state')!,
+                tenantName: 'Initech',
+                accountEmail: 'me@example.com'
+            })
+        });
+        assert.equal(response.status, 200);
+        let status: Record<string, unknown> = {};
+        for (let attempt = 0; attempt < 100 && status.authenticated !== true; attempt++) {
+            status = (await client.callTool({ name: 'login', arguments: { action: 'status' } })).structuredContent as Record<string, unknown>;
+            await new Promise(resolve => setTimeout(resolve, 20));
+        }
+        assert.equal(status.tenant, NEW_TENANT);
+        assert.equal(status.tenantName, 'Initech');
+        assert.equal(status.account, 'me@example.com');
+    } finally {
+        await close();
+        await hosting.close();
+    }
+});

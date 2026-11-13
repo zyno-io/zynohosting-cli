@@ -375,7 +375,7 @@ export async function login(options: LoginOptions, dependencies: LoginDependenci
                         await mutateProfile(
                             profileKey,
                             current => {
-                                if (!current.pendingDeviceLogin) return current;
+                                if (current.pendingDeviceLogin?.deviceCode !== pending.deviceCode) return current;
                                 const { deliveryUncertain: _old, ...rest } = current.pendingDeviceLogin;
                                 return { ...current, pendingDeviceLogin: deliveryUncertain ? { ...rest, deliveryUncertain: true } : rest };
                             },
@@ -388,7 +388,7 @@ export async function login(options: LoginOptions, dependencies: LoginDependenci
             } catch (error) {
                 if (error instanceof CliError && error.code === 'login_pending')
                     emit({ type: 'login_pending', resume: 'zynohosting login --resume' });
-                else await dropPending(error);
+                else await dropPending(error, pending.deviceCode);
                 throw error;
             }
         }
@@ -536,7 +536,7 @@ export async function login(options: LoginOptions, dependencies: LoginDependenci
     }
 
     /** A pending device sign-in that the server has ended (or that failed for good) is no use to `--resume`. */
-    async function dropPending(error: unknown): Promise<void> {
+    async function dropPending(error: unknown, deviceCode: string): Promise<void> {
         if (
             !(error instanceof CliError) ||
             !['login_denied', 'device_code_expired', 'device_credential_lost', 'login_cancelled'].includes(error.code)
@@ -545,6 +545,8 @@ export async function login(options: LoginOptions, dependencies: LoginDependenci
         await mutateProfile(
             profileKey,
             current => {
+                // Only the sign-in this process was handling: a newer one started elsewhere must survive.
+                if (current.pendingDeviceLogin?.deviceCode !== deviceCode) return current;
                 const { pendingDeviceLogin: _pending, ...rest } = current;
                 return rest;
             },

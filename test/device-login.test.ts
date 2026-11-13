@@ -9,8 +9,9 @@ import type { LoginPrompt } from '../src/commands/login.js';
 
 import { ScopedTokenClient } from '../src/api/scoped-token-client.js';
 import { login } from '../src/commands/login.js';
-import { loadStoredConfig } from '../src/config.js';
-import { CliError } from '../src/errors.js';
+import { loadStoredConfig, updateProfile } from '../src/config.js';
+import { CliError, HttpError } from '../src/errors.js';
+import { pollDeviceApproval } from '../src/login/device.js';
 import { approvedPoll, DEVICE_CODE, JWT, RENEWAL_TOKEN, startFakeAuth, TENANT_ID, USER_CODE } from './support/fake-auth.js';
 
 const HOSTING_URL = 'https://hosting.api-alpha.zyno.dev';
@@ -458,6 +459,83 @@ test('a failure to store the credential after approval revokes the grant and lea
         );
         assert.deepEqual(revoked, [JWT]);
         assert.deepEqual(await loadStoredConfig(context.file, 'alpha'), {});
+    } finally {
+        await context.auth.close();
+    }
+});
+
+test('at the give-up deadline an uncertain delivery is a lost credential, not an expiry', async () => {
+    const options = {
+        client: {
+            async pollDevice(): Promise<never> {
+                throw new HttpError('down', 0);
+            },
+            async cancelDevice() {}
+        },
+        deviceCode: DEVICE_CODE,
+        interval: 0.01,
+        expectation: { renewable: false, permissionKeys: ['hosting.sitesRead'] }
+    };
+    const code = (error: unknown) => (error instanceof CliError ? error.code : undefined);
+    await assert.rejects(
+        pollDeviceApproval({ ...options, giveUpAt: Date.now() - 1, uncertain: true }),
+        (error: unknown) => code(error) === 'device_credential_lost'
+    );
+    await assert.rejects(
+        pollDeviceApproval({ ...options, giveUpAt: Date.now() + 300 }),
+        (error: unknown) => code(error) === 'device_credential_lost'
+    );
+    await assert.rejects(
+        pollDeviceApproval({
+            ...options,
+            client: {
+                ...options.client,
+                async pollDevice() {
+                    return { status: 'pending' as const };
+                }
+            },
+            giveUpAt: Date.now() + 100
+        }),
+        (error: unknown) => code(error) === 'device_code_expired'
+    );
+});
+
+test('a resume only changes or removes the pending sign-in it is handling', async () => {
+    const context = await setup([{ status: 'pending' }]);
+    try {
+        await login({ ...context.options, noWait: true }, context.dependencies);
+        const first = (await loadStoredConfig(context.file, 'alpha')).pendingDeviceLogin!;
+        // While the resume polls, another process replaces the pending sign-in with a different code.
+        let replaced = false;
+        const replacement = { ...first, deviceCode: `zdc_${'Z'.repeat(43)}`, userCode: 'WXYZ-2345' };
+        await assert.rejects(
+            login(
+                { apiUrl: HOSTING_URL, resume: true, timeoutSeconds: 1 },
+                {
+                    ...context.dependencies,
+                    scopedTokenClient: url => {
+                        const real = new ScopedTokenClient(url);
+                        return Object.assign(real, {
+                            async pollDevice(): Promise<never> {
+                                if (!replaced) {
+                                    replaced = true;
+                                    await updateProfile(
+                                        'alpha',
+                                        { ...(await loadStoredConfig(context.file, 'alpha')), pendingDeviceLogin: replacement },
+                                        context.file
+                                    );
+                                }
+                                throw new HttpError('down', 0);
+                            }
+                        });
+                    }
+                }
+            ),
+            (error: unknown) => error instanceof CliError && error.code === 'login_pending'
+        );
+        const now = (await loadStoredConfig(context.file, 'alpha')).pendingDeviceLogin;
+        assert.equal(now?.deviceCode, replacement.deviceCode);
+        assert.equal(now?.deliveryUncertain, undefined);
     } finally {
         await context.auth.close();
     }

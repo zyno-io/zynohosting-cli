@@ -73,11 +73,14 @@ export async function pollDeviceApproval(options: DevicePollOptions): Promise<De
             }
             await stop(new CliError('Timed out waiting for sign-in approval', 3, 'login_timeout'), true);
         }
-        if (now >= options.giveUpAt)
+        if (now >= options.giveUpAt) {
             await stop(
-                new CliError('The sign-in code expired before it was approved. Run `zynohosting login` again.', 3, 'device_code_expired'),
+                uncertain
+                    ? lost()
+                    : new CliError('The sign-in code expired before it was approved. Run `zynohosting login` again.', 3, 'device_code_expired'),
                 false
             );
+        }
 
         const limit = Math.min(options.deadline ?? Infinity, options.giveUpAt) - now;
         try {

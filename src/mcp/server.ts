@@ -11,7 +11,7 @@ import { startCredentialRefreshLoop } from '../auth/credential-refresh.js';
 import { applyPreparedDeployment, prepareDeployment, PreparedDeployment } from '../commands/deploy-site.js';
 import { applyDownload, prepareDownload, PreparedDownload } from '../commands/download-site.js';
 import { createFileClient, purgeSiteCacheAfterMutation, writeResponseAtomically } from '../commands/files.js';
-import { login, LOGIN_LIFETIMES, LoginDependencies, type LoginPrompt } from '../commands/login.js';
+import { login, LOGIN_LIFETIMES, LoginDependencies, type LoginPrompt, type LoginResult } from '../commands/login.js';
 import { savedLogins, useLogin } from '../commands/logins.js';
 import { applyPreparedPromotion, preparePromotion, PreparedPromotion, promotionSummary } from '../commands/promote-site.js';
 import { ConfigOverrides, type HostingEnvironment, ResolvedConfig, resolveConfig } from '../config.js';
@@ -554,6 +554,8 @@ class McpAuthentication {
     /** Bumped whenever the default login may have changed, so a load that began earlier cannot cache a stale client. */
     private generation = 0;
     private pendingLogin: PendingMcpLogin | undefined;
+    /** The sign-in that just finished, so its status names the tenant that was approved, whatever the default now is. */
+    private lastSignIn: Extract<LoginResult, { status: 'authenticated' }> | undefined;
     private lastLoginError: unknown;
 
     constructor(
@@ -593,6 +595,7 @@ class McpAuthentication {
 
     async useLogin(tenant: string): Promise<Record<string, unknown>> {
         this.requireSwitchableCredentialSource();
+        this.lastSignIn = undefined;
         const env = this.options.env ?? process.env;
         const active = await useLogin(tenant, this.selectors(), { env, write: () => {} });
         this.resetClients();
@@ -626,6 +629,7 @@ class McpAuthentication {
             await this.abortPendingLogin();
         }
         this.lastLoginError = undefined;
+        this.lastSignIn = undefined;
 
         let publishPrompt!: (prompt: LoginPrompt) => void;
         let failBeforePrompt!: (error: unknown) => void;
@@ -669,8 +673,8 @@ class McpAuthentication {
         )
             .then(async result => {
                 this.resetClients();
-                // Report the tenant that was just approved, even if ZYNOHOSTING_TENANT would select another.
-                const config = await this.resolve(result.status === 'authenticated' ? result.tenantId : undefined);
+                const config = await this.resolve();
+                this.lastSignIn = result.status === 'authenticated' ? result : undefined;
                 this.setCurrent(DEFAULT_LOGIN, config);
                 this.onLoginComplete();
                 return config;
@@ -727,6 +731,20 @@ class McpAuthentication {
         }
         if (this.lastLoginError) {
             return { authenticated: false, status: 'failed', message: `Sign-in failed: ${errorMessage(this.lastLoginError)}` };
+        }
+        if (this.lastSignIn) {
+            const done = this.lastSignIn;
+            return {
+                authenticated: true,
+                status: 'authenticated',
+                expiresAt: done.accessExpiresAt,
+                tenant: done.tenantId,
+                ...(done.tenantName ? { tenantName: done.tenantName } : {}),
+                ...(done.account ? { account: done.account } : {}),
+                ...(done.grantExpiresAt === undefined ? {} : { grantExpiresAt: new Date(done.grantExpiresAt).toISOString() }),
+                message:
+                    'ZynoHosting login is ready. Tell the user which account and tenant this signed in to so they can confirm it is theirs. Any pending deployment or download plans were cleared because the login context changed.'
+            };
         }
         const current = this.current.get(DEFAULT_LOGIN);
         if (current) return authenticatedLoginStatus(current.config);
