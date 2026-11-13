@@ -38,6 +38,15 @@ function macOsKeychainStore(): RenewalTokenStore {
     };
     return {
         get,
+        async probe() {
+            // A lookup for a random account exits 44 (not found) when the keychain can be searched. Anything else, or a
+            // missing `security` tool, means it cannot. A locked keychain may still pass here and fail when storing.
+            await run('/usr/bin/security', ['find-generic-password', '-s', SERVICE, '-a', randomUUID()], undefined, [44]).catch(error => {
+                throw error instanceof CliError && error.code === 'credential_store_unavailable'
+                    ? error
+                    : unavailable('The macOS keychain could not be searched');
+            });
+        },
         async set(key, token) {
             validateRenewalKey(key);
             validateRenewalToken(token);
@@ -129,6 +138,14 @@ if ('${operation}' -eq 'set') {
         run('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', credentialScript(operation), SERVICE, key], input, [44]);
 
     return {
+        async probe() {
+            // Looking up a random entry exits 44 (not found) when the vault works.
+            await invoke('get', randomUUID()).catch(error => {
+                throw error instanceof CliError && error.code === 'credential_store_unavailable'
+                    ? error
+                    : unavailable('Windows Credential Locker could not be searched');
+            });
+        },
         async get(key) {
             validateRenewalKey(key);
             const result = await invoke('get', key);

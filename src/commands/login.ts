@@ -15,7 +15,7 @@ import {
 } from '../auth/logins.js';
 import { resolvePermissionGrant } from '../auth/permission-grant.js';
 import { createRenewalTokenStore, type RenewalTokenStore } from '../auth/renewal-token-store.js';
-import { retireDisplacedLogins, retireLogin } from '../auth/retire.js';
+import { retireDisplacedLoginsQuietly, retireLogin } from '../auth/retire.js';
 import {
     configLocation,
     describeProfileKey,
@@ -188,6 +188,12 @@ export async function login(options: LoginOptions, dependencies: LoginDependenci
         return { status: 'api_key_saved', profile: profileKey };
     }
 
+    if (env.ZYNOHOSTING_ACCESS_TOKEN) {
+        const message =
+            'ZYNOHOSTING_ACCESS_TOKEN is set in the environment, so it overrides saved logins for every command, including the one you are about to sign in with. Unset it to use the saved login.';
+        (dependencies.warn ?? ((text: string) => process.stderr.write(text)))(`Warning: ${message}\n`);
+        emit({ type: 'warning', code: 'access_token_in_environment', message });
+    }
     if (env.ZYNOHOSTING_API_KEY) {
         const message =
             'ZYNOHOSTING_API_KEY is set in the environment, so it overrides saved logins for every command, including the one you are about to sign in with. Unset it to use the saved login.';
@@ -285,7 +291,7 @@ export async function login(options: LoginOptions, dependencies: LoginDependenci
             await removeLegacyConfigIfMatching(file, { logins: { [loginId]: previous } });
             await retire(previous);
         }
-        await retireDisplacedLogins(profileKey, file, {
+        await retireDisplacedLoginsQuietly(profileKey, file, {
             configPath,
             renewalTokenStore: dependencies.renewalTokenStore,
             scopedTokenClient: dependencies.scopedTokenClient,

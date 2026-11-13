@@ -1,7 +1,7 @@
 import type { RenewalTokenStore } from '../auth/renewal-token-store.js';
 
 import { chooseLogin, describeEntry, entryName, findEntry, loginEntries, selectEntry, type LoginEntry, type StoredConfig } from '../auth/logins.js';
-import { retireDisplacedLogins, type RetireDependencies } from '../auth/retire.js';
+import { retireDisplacedLoginsQuietly, type RetireDependencies } from '../auth/retire.js';
 import {
     configLocation,
     describeProfileKey,
@@ -18,6 +18,7 @@ export interface LoginsOptions {
     environment?: HostingEnvironment;
     tenant?: string;
     account?: string;
+    apiKey?: string;
     json?: boolean;
 }
 
@@ -34,7 +35,9 @@ export interface LoginsDependencies {
 export interface LoginSummary {
     /** What to pass to `--tenant` or `logins use` to pick exactly this login: `<accountId>:<tenantId>` (or `api-key`). */
     loginId: string;
-    kind: 'login' | 'api-key';
+    kind: 'login' | 'api-key' | 'access-token';
+    /** Set when the credential is injected rather than saved. */
+    source?: 'environment' | 'option';
     accountId?: string;
     accountEmail?: string;
     tenantId?: string;
@@ -154,10 +157,11 @@ export async function useLogin(query: string, options: LoginsOptions = {}, depen
         location
     );
     const entry = chosen!;
-    await retireDisplacedLogins(key, location, {
+    await retireDisplacedLoginsQuietly(key, location, {
         configPath: typeof location === 'string' ? location : location.path,
         renewalTokenStore: dependencies.renewalTokenStore,
-        scopedTokenClient: dependencies.scopedTokenClient
+        scopedTokenClient: dependencies.scopedTokenClient,
+        write
     });
     const summary = summarize(entry, true, now);
     if (options.json) write(`${JSON.stringify({ profile: label, active: summary })}\n`);
@@ -174,6 +178,31 @@ export async function whoami(
 ): Promise<LoginSummary | LoginSummary[]> {
     if (options.all) return listLogins(options, dependencies);
     const { env, location, key, write, now } = context(options, dependencies);
+    // An injected credential is what commands actually use, whatever is saved.
+    const injected = options.apiKey
+        ? { kind: 'api-key' as const, source: 'option' as const, name: '--api-key' }
+        : env.ZYNOHOSTING_API_KEY
+          ? { kind: 'api-key' as const, source: 'environment' as const, name: 'ZYNOHOSTING_API_KEY' }
+          : env.ZYNOHOSTING_ACCESS_TOKEN
+            ? { kind: 'access-token' as const, source: 'environment' as const, name: 'ZYNOHOSTING_ACCESS_TOKEN' }
+            : undefined;
+    if (injected) {
+        const summary: LoginSummary = {
+            loginId: injected.source === 'option' ? 'option' : 'env',
+            kind: injected.kind,
+            source: injected.source,
+            tenantName: injected.kind === 'api-key' ? 'API key' : 'Access token',
+            active: true,
+            renewable: false,
+            expired: false
+        };
+        if (options.json) write(`${JSON.stringify({ profile: describeProfileKey(key), login: summary })}\n`);
+        else
+            write(
+                `Commands use the ${injected.kind === 'api-key' ? 'API key' : 'access token'} from ${injected.source === 'option' ? 'the command line' : 'the environment'} (${injected.name}), not a saved login.\n`
+            );
+        return summary;
+    }
     const file = await loadConfigFile(location);
     const entry = selectEntry(file.profiles[key] ?? {}, chooseLogin(options, env), describeProfileKey(key));
     if (!entry) throw missingCredentialError(key, file);

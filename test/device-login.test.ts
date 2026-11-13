@@ -655,3 +655,23 @@ test('an explicit --api-key is still saved', async () => {
         await context.auth.close();
     }
 });
+
+test('a ZYNOHOSTING_ACCESS_TOKEN in the environment gets the same warning as an API key', async () => {
+    const context = await setup([approvedPoll()]);
+    try {
+        const warnings: string[] = [];
+        await login(
+            { ...context.options, json: true, timeoutSeconds: 20 },
+            {
+                ...context.dependencies,
+                env: { ...context.dependencies.env, ZYNOHOSTING_ACCESS_TOKEN: 'secret.jwt.token' },
+                warn: message => warnings.push(message)
+            }
+        );
+        assert.match(warnings.join(''), /ZYNOHOSTING_ACCESS_TOKEN is set in the environment, so it overrides saved logins/);
+        assert(!warnings.join('').includes('secret.jwt.token'));
+        assert.equal(context.events.find(event => event.type === 'warning')!.code, 'access_token_in_environment');
+    } finally {
+        await context.auth.close();
+    }
+});

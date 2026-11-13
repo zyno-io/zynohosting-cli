@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 
 import { updateProfile } from '../src/config.js';
+import { CliError } from '../src/errors.js';
 import { AllowedLocalRoots } from '../src/mcp/local-paths.js';
 import { createHostingMcpServer } from '../src/mcp/server.js';
 import { approvedPoll, DEVICE_CODE, JWT, RENEWAL_TOKEN, startFakeAuth, TENANT_ID, USER_CODE } from './support/fake-auth.js';
@@ -346,6 +347,89 @@ test('the MCP login asks for a renewable login unless told otherwise', async () 
         await client.callTool({ name: 'login', arguments: { action: 'cancel' } });
         await client.callTool({ name: 'login', arguments: { flow: 'device', renewable: false } });
         assert.equal(auth.requests.filter(request => request.path.endsWith('/device/start')).at(-1)!.body.renewable, false);
+    } finally {
+        await close();
+        await auth.close();
+    }
+});
+
+/** A system store that cannot work, as on a Linux or WSL machine with no Secret Service. */
+const brokenStore = {
+    async get() {
+        return undefined;
+    },
+    async set() {},
+    async delete() {},
+    async probe() {
+        throw new CliError('secret-tool is not installed.', 3, 'credential_store_unavailable');
+    }
+};
+
+test('without a credential store the MCP login falls back to a 60-minute login and says so; an explicit renewable fails clearly', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'zynohosting-mcp-fallback-'));
+    const auth = await startFakeAuth([approvedPoll()]);
+    const { client, close } = await connect({
+        roots: await AllowedLocalRoots.create([root]),
+        version: '1.0.0',
+        apiUrl: 'http://127.0.0.1:1',
+        authApiUrl: auth.url,
+        env: { ZYNOHOSTING_CONFIG: join(root, 'config.json') },
+        loginDependencies: { renewalTokenStore: brokenStore }
+    });
+    try {
+        const explicit = await client.callTool({ name: 'login', arguments: { flow: 'device', renewable: true } });
+        assert.equal(explicit.isError, true);
+        assert.match(JSON.stringify(explicit.content), /renewable: false/);
+        assert.match(JSON.stringify(explicit.content), /ZYNOHOSTING_CREDENTIAL_STORE=file/);
+        assert.equal(auth.requests.length, 0);
+
+        const started = (await client.callTool({ name: 'login', arguments: { flow: 'device', lifetime: '7d' } })).structuredContent as Record<
+            string,
+            unknown
+        >;
+        assert.equal(started.renewable, false);
+        assert.equal(started.renewableFallbackReason, 'credential_store_unavailable');
+        assert.match(
+            String(started.message),
+            /lasts 60 minutes because this computer has no credential store; set ZYNOHOSTING_CREDENTIAL_STORE=file in the server environment to stay signed in/
+        );
+        const start = auth.requests.find(request => request.path.endsWith('/device/start'))!;
+        assert.equal(start.body.renewable, false);
+        assert.equal(start.body.requestedLifetimeSecs, undefined);
+
+        let status: Record<string, unknown> = {};
+        for (let attempt = 0; attempt < 100 && status.authenticated !== true; attempt++) {
+            status = (await client.callTool({ name: 'login', arguments: { action: 'status' } })).structuredContent as Record<string, unknown>;
+            await new Promise(resolve => setTimeout(resolve, 20));
+        }
+        assert.equal(status.renewable, false);
+        assert.equal(status.renewableFallbackReason, 'credential_store_unavailable');
+        assert.match(String(status.message), /lasts 60 minutes/);
+
+        // Explicitly not renewable never probes or falls back.
+        await client.callTool({ name: 'login', arguments: { flow: 'device', renewable: false } });
+    } finally {
+        await close();
+        await auth.close();
+    }
+});
+
+test('with a working credential store the unset MCP login stays renewable', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'zynohosting-mcp-working-store-'));
+    const auth = await startFakeAuth([{ status: 'pending' }]);
+    const store = { ...brokenStore, async probe() {} };
+    const { client, close } = await connect({
+        roots: await AllowedLocalRoots.create([root]),
+        version: '1.0.0',
+        apiUrl: 'http://127.0.0.1:1',
+        authApiUrl: auth.url,
+        env: { ZYNOHOSTING_CONFIG: join(root, 'config.json') },
+        loginDependencies: { renewalTokenStore: store }
+    });
+    try {
+        const started = (await client.callTool({ name: 'login', arguments: { flow: 'device' } })).structuredContent as Record<string, unknown>;
+        assert.equal(started.renewable, true);
+        assert.equal(started.renewableFallbackReason, undefined);
     } finally {
         await close();
         await auth.close();

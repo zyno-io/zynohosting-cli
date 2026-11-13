@@ -995,3 +995,156 @@ test('two stored entries that become the same account and tenant keep the newer 
     assert.equal(after.retiredLogins, undefined);
     assert.equal(after.logins?.[`${ALICE}:${ACME}`]?.accessToken, jwtFor(ALICE, 'new'));
 });
+
+/** A profile in which two stored entries are the same account and tenant, and whose retirement cannot succeed. */
+async function profileWithStuckRetirement(file: string, extra: Record<string, unknown> = {}) {
+    await writeFile(
+        file,
+        JSON.stringify({
+            version: 3,
+            profiles: {
+                alpha: {
+                    apiUrl: API_URL,
+                    // An insecure auth URL makes retirement throw, whatever else works.
+                    authApiUrl: 'http://auth.example.com',
+                    logins: {
+                        'legacy-key': savedLogin(ACME, 'Acme Co', { accessToken: jwtFor(ALICE, 'old'), renewalKey: KEY_ACME, createdAt: 1_000 }),
+                        [ACME]: savedLogin(ACME, 'Acme Co', { accessToken: jwtFor(ALICE, 'new'), createdAt: 2_000 })
+                    },
+                    activeLogin: ACME,
+                    ...extra
+                }
+            }
+        })
+    );
+}
+
+test('a failure while retiring displaced logins only warns: logins use still succeeds and the login stays aside', async () => {
+    const { file, env } = await setup();
+    await profileWithStuckRetirement(file);
+    const output: string[] = [];
+    const summary = await useLogin(`${ALICE}:${ACME}`, { environment: 'alpha' }, { env, write: message => output.push(message) });
+    assert.equal(summary.loginId, `${ALICE}:${ACME}`);
+    assert.match(output.join(''), /Warning: a replaced login could not be fully retired/);
+    assert.equal((await loadConfigFile(file)).profiles.alpha?.retiredLogins?.length, 1);
+});
+
+test('a store that fails while retiring a replaced login only warns, and the new login is still saved', async () => {
+    const { file, env } = await setup();
+    await twoAccounts(file);
+    const failing = {
+        ...new MemoryStore(),
+        async get() {
+            throw new Error('locked');
+        },
+        async set() {},
+        async delete() {
+            throw new Error('locked');
+        }
+    };
+    const output: string[] = [];
+    let failure: unknown;
+    await updateProfile(
+        'alpha',
+        {
+            ...(await loadConfigFile(file)).profiles.alpha!,
+            logins: {
+                ...(await loadConfigFile(file)).profiles.alpha!.logins!,
+                [`${BOB}:${ACME}`]: savedLogin(ACME, 'Acme Co', { accountId: BOB, accessToken: jwtFor(BOB), renewalKey: KEY_ACME })
+            }
+        },
+        file
+    );
+    await login(
+        { apiUrl: API_URL, loginUrl: 'https://zyno.dev/cli/login', timeoutSeconds: 5, device: false },
+        {
+            configFile: file,
+            env,
+            renewalTokenStore: failing,
+            write: message => output.push(message),
+            scopedTokenClient: () => ({
+                startDevice: async () => Promise.reject(new Error('x')),
+                pollDevice: async () => Promise.reject(new Error('x')),
+                cancelDevice: async () => {},
+                revoke: async () => {
+                    throw new Error('offline');
+                }
+            }),
+            openUrl: async value => {
+                try {
+                    const url = new URL(value);
+                    const response = await fetch(url.searchParams.get('callback')!, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                        body: new URLSearchParams({
+                            jwt: jwtFor(BOB, 'again'),
+                            tenantId: ACME,
+                            accountId: BOB,
+                            expiresAt: String(Date.now() + 3_600_000),
+                            state: url.searchParams.get('state')!
+                        })
+                    });
+                    assert.equal(response.status, 200);
+                } catch (error) {
+                    failure = error;
+                }
+            }
+        }
+    );
+    if (failure) throw failure;
+    assert.match(output.join(''), /login complete/i);
+    assert.match(output.join(''), /could not be removed/);
+    assert.equal((await loadConfigFile(file)).profiles.alpha?.logins?.[`${BOB}:${ACME}`]?.accessToken, jwtFor(BOB, 'again'));
+});
+
+test('logout keeps a profile that still holds a displaced login awaiting retirement', async () => {
+    const { file, env } = await setup();
+    await profileWithStuckRetirement(file);
+    const output: string[] = [];
+    await logout(
+        { environment: 'alpha' },
+        {
+            configFile: file,
+            env,
+            write: message => output.push(message),
+            scopedTokenClient: () => ({ renew: async () => Promise.reject(new Error('x')), revoke: async () => {} })
+        }
+    );
+    const profile = (await loadConfigFile(file)).profiles.alpha;
+    assert(profile, 'the profile must not be deleted');
+    assert.equal(profile.logins, undefined);
+    assert.equal(profile.retiredLogins?.length, 1);
+    assert.match(output.join(''), /could not be fully retired/);
+});
+
+test('whoami reports the credential that commands actually use when one is injected', async () => {
+    const { file, env } = await setup();
+    await twoLogins(file);
+    const output: string[] = [];
+    const key = (await whoami(
+        { environment: 'alpha', json: true },
+        { env: { ...env, ZYNOHOSTING_API_KEY: 'k' }, write: message => output.push(message) }
+    )) as { kind: string; source: string };
+    assert.equal(key.kind, 'api-key');
+    assert.equal(key.source, 'environment');
+    assert.equal((JSON.parse(output[0]!) as { login: { kind: string } }).login.kind, 'api-key');
+    assert(!output.join('').includes('"k"'));
+    const token = (await whoami(
+        { environment: 'alpha' },
+        { env: { ...env, ZYNOHOSTING_ACCESS_TOKEN: 'a.b.c' }, write: message => output.push(message) }
+    )) as { kind: string };
+    assert.equal(token.kind, 'access-token');
+    assert.match(output.at(-1)!, /access token from the environment \(ZYNOHOSTING_ACCESS_TOKEN\), not a saved login/);
+});
+
+test('the CLI entry checks the Node version before importing anything', async () => {
+    const source = await readFile(new URL('../src/index.ts', import.meta.url), 'utf8');
+    const beforeCheck = source
+        .slice(0, source.indexOf('process.versions.node'))
+        .split('\n')
+        .filter(line => !line.trim().startsWith('//'))
+        .join('\n');
+    assert.doesNotMatch(beforeCheck, /^\s*import\s/m);
+    assert.doesNotMatch(beforeCheck, /\bawait\b/);
+    assert.match(source, /await import\('\.\/main\.js'\)/);
+});

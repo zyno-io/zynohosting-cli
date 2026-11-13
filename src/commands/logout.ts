@@ -4,7 +4,7 @@ import { ScopedTokenClient } from '../api/scoped-token-client.js';
 import { createFileRenewalTokenStore, tokenFilePath } from '../auth/file-renewal-token-store.js';
 import { chooseLogin, describeEntry, hasStoredCredential, loginEntries, selectEntry, withoutEntry, type LoginEntry } from '../auth/logins.js';
 import { createRenewalTokenStore, type RenewalTokenStore } from '../auth/renewal-token-store.js';
-import { retireDisplacedLogins } from '../auth/retire.js';
+import { retireDisplacedLoginsQuietly } from '../auth/retire.js';
 import {
     type ConfigTarget,
     configLocation,
@@ -77,12 +77,12 @@ export async function logout(options: LogoutOptions = {}, dependencies: LogoutDe
     }
 
     for (const key of new Set(targets.map(target => target.key))) {
-        await retireDisplacedLogins(key, location, {
+        await retireDisplacedLoginsQuietly(key, location, {
             configPath: typeof location === 'string' ? location : location.path,
             renewalTokenStore: dependencies.renewalTokenStore,
             scopedTokenClient: dependencies.scopedTokenClient,
             write
-        }).catch(() => {});
+        });
     }
     let firstError: unknown;
     for (const { key, entry } of targets) {
@@ -175,7 +175,8 @@ async function logoutEntry(
                 return current;
             }
             const next = withoutEntry(current, entry);
-            return hasStoredCredential(next) || next.pendingDeviceLogin ? next : undefined;
+            // A profile that still holds a displaced login awaiting retirement is kept, so that login is never lost silently.
+            return hasStoredCredential(next) || next.pendingDeviceLogin || next.retiredLogins?.length ? next : undefined;
         },
         location
     );
@@ -204,7 +205,7 @@ async function dropPendingDeviceLogin(key: string, stored: StoredConfig, locatio
         key,
         current => {
             const { pendingDeviceLogin: _pending, ...rest } = current;
-            return hasStoredCredential(rest) ? rest : undefined;
+            return hasStoredCredential(rest) || rest.retiredLogins?.length ? rest : undefined;
         },
         location
     );

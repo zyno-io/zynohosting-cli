@@ -8,6 +8,7 @@ import { FormsClient } from '../api/forms-client.js';
 import { ManagerClient } from '../api/manager-client.js';
 import { resolveDistribution } from '../api/user-agent.js';
 import { startCredentialRefreshLoop } from '../auth/credential-refresh.js';
+import { createRenewalTokenStore } from '../auth/renewal-token-store.js';
 import { applyPreparedDeployment, normalizeSiteRef, prepareDeployment, PreparedDeployment } from '../commands/deploy-site.js';
 import { applyDownload, prepareDownload, PreparedDownload } from '../commands/download-site.js';
 import { createFileClient, purgeSiteCacheAfterMutation, writeResponseAtomically } from '../commands/files.js';
@@ -15,7 +16,7 @@ import { login, LOGIN_LIFETIMES, LoginDependencies, type LoginPrompt, type Login
 import { savedLogins, useLogin } from '../commands/logins.js';
 import { applyPreparedPromotion, preparePromotion, PreparedPromotion, promotionSummary } from '../commands/promote-site.js';
 import { applyPreparedSiteSettings, prepareSiteSettings } from '../commands/site-settings.js';
-import { ConfigOverrides, type HostingEnvironment, ResolvedConfig, resolveConfig } from '../config.js';
+import { configLocation, ConfigOverrides, type HostingEnvironment, ResolvedConfig, resolveConfig } from '../config.js';
 import { CliError, errorMessage, HttpError } from '../errors.js';
 import { DELEGABLE_PERMISSION_KEYS, permissionCapabilityLines } from '../permissions.js';
 import { NOT_FOUND_HANDLING_MODES, PREVIEW_RESOURCE_NOTICE } from '../protocol.js';
@@ -32,6 +33,8 @@ export interface McpServerOptions extends ConfigOverrides {
 }
 
 const MAX_PENDING_PLANS = 16;
+const RENEWABLE_FALLBACK_NOTICE =
+    'This sign-in lasts 60 minutes because this computer has no credential store; set ZYNOHOSTING_CREDENTIAL_STORE=file in the server environment to stay signed in.';
 /** These manage logins themselves, so they take no per-call tenant. */
 const TENANT_EXEMPT_TOOLS = new Set(['login', 'list_logins', 'use_login']);
 // Policy that applies once this server is connected belongs here or in a tool description, not in
@@ -159,8 +162,10 @@ export async function createHostingMcpServer(options: McpServerOptions): Promise
                 name: z.string().min(1).max(255).optional(),
                 renewable: z
                     .boolean()
-                    .default(true)
-                    .describe('Keep a renewable login so it does not end after 60 minutes. On by default; set false for a one-hour login.'),
+                    .optional()
+                    .describe(
+                        'Keep a renewable login so it does not end after 60 minutes. Left unset, it is renewable when this computer has a credential store and a 60-minute login when it does not (the result says which). Set true to require renewable (it fails without a store), or false for a one-hour login.'
+                    ),
                 flow: z
                     .enum(['auto', 'browser', 'device'])
                     .default('auto')
@@ -193,8 +198,11 @@ export async function createHostingMcpServer(options: McpServerOptions): Promise
                 authenticated: false,
                 status: 'pending',
                 permissions: [...new Set(permissions)].sort(),
-                reused: pendingLogin.reused
+                reused: pendingLogin.reused,
+                renewable: pendingLogin.renewable,
+                ...(pendingLogin.renewableFallbackReason ? { renewableFallbackReason: pendingLogin.renewableFallbackReason } : {})
             };
+            const lasts = pendingLogin.renewableFallbackReason ? ` ${RENEWABLE_FALLBACK_NOTICE}` : '';
             if (prompt.flow === 'device') {
                 return result({
                     ...sharedFields,
@@ -203,7 +211,7 @@ export async function createHostingMcpServer(options: McpServerOptions): Promise
                     ...(prompt.verificationUriComplete ? { verificationUriComplete: prompt.verificationUriComplete } : {}),
                     userCode: prompt.userCode,
                     expiresAt: new Date(prompt.expiresAt).toISOString(),
-                    message: `Give the user the link (${prompt.verificationUriComplete ?? prompt.verificationUri}) and the code ${prompt.userCode} verbatim. They open it on any device, check the code matches, choose how long access lasts, and approve. Do not open the link or approve it yourself. Then call login with action "status" until it reports authenticated, and tell the user which account and tenant it signed in to so they can confirm it is theirs.${pendingLogin.reused ? ' This is the same pending code as before, not a new one.' : ''}`
+                    message: `Give the user the link (${prompt.verificationUriComplete ?? prompt.verificationUri}) and the code ${prompt.userCode} verbatim. They open it on any device, check the code matches, choose how long access lasts, and approve. Do not open the link or approve it yourself. Then call login with action "status" until it reports authenticated, and tell the user which account and tenant it signed in to so they can confirm it is theirs.${pendingLogin.reused ? ' This is the same pending code as before, not a new one.' : ''}${lasts}`
                 });
             }
             return result({
@@ -212,7 +220,8 @@ export async function createHostingMcpServer(options: McpServerOptions): Promise
                 browserUrl: prompt.url,
                 message: pendingLogin.reused
                     ? 'An identical browser sign-in was already in flight, so this is that same one-time URL, not a new one. Its permissions match this request. After sign-in, call login with action "status".'
-                    : 'Open the one-time sign-in URL if a browser did not open. Any earlier sign-in URL from this server is now cancelled. After you finish sign-in, call login with action "status" before using authenticated tools.'
+                    : 'Open the one-time sign-in URL if a browser did not open. Any earlier sign-in URL from this server is now cancelled. After you finish sign-in, call login with action "status" before using authenticated tools.' +
+                      lasts
             });
         }
     );
@@ -575,6 +584,8 @@ interface PendingMcpLogin {
     completion: Promise<ResolvedConfig>;
     request: LoginRequest;
     abort: AbortController;
+    /** Set when a renewable login was wanted but this computer has no credential store. */
+    renewableFallbackReason?: string;
 }
 
 /** Which saved login one call names. */
@@ -597,6 +608,7 @@ class McpAuthentication {
     private pendingLogin: PendingMcpLogin | undefined;
     /** The sign-in that just finished, so its status names the tenant that was approved, whatever the default now is. */
     private lastSignIn: Extract<LoginResult, { status: 'authenticated' }> | undefined;
+    private lastSignInFallback: string | undefined;
     private lastLoginError: unknown;
 
     constructor(
@@ -639,6 +651,7 @@ class McpAuthentication {
     async useLogin(tenant: string, account?: string): Promise<Record<string, unknown>> {
         this.requireSwitchableCredentialSource();
         this.lastSignIn = undefined;
+        this.lastSignInFallback = undefined;
         const env = this.options.env ?? process.env;
         const active = await useLogin(tenant, { ...this.selectors(), ...(account ? { account } : {}) }, { env, write: () => {} });
         this.resetClients();
@@ -649,25 +662,51 @@ class McpAuthentication {
     async beginLogin(input: {
         permissions: string[];
         name?: string;
-        renewable: boolean;
+        renewable?: boolean | undefined;
         flow: 'auto' | 'browser' | 'device';
         lifetime?: string;
         timeoutSeconds?: number;
-    }): Promise<{ prompt: LoginPrompt; reused: boolean }> {
+    }): Promise<{ prompt: LoginPrompt; reused: boolean; renewable: boolean; renewableFallbackReason?: string }> {
         this.requireSwitchableCredentialSource();
+        // Renewable is the default, but only where a renewal token can be kept. Probe the store before anything is minted.
+        const explicitRenewable = input.renewable !== undefined;
+        let renewable = input.renewable ?? true;
+        let renewableFallbackReason: string | undefined;
+        if (renewable) {
+            try {
+                await this.probeCredentialStore();
+            } catch (error) {
+                if (!(error instanceof CliError) || error.code !== 'credential_store_unavailable') throw error;
+                if (explicitRenewable) {
+                    throw new CliError(
+                        `A renewable login is not possible here: ${error.message} Call login with renewable: false for a 60-minute login, or set ZYNOHOSTING_CREDENTIAL_STORE=file in the MCP server's environment to keep the renewal token in a private file.`,
+                        error.exitCode,
+                        error.code
+                    );
+                }
+                renewable = false;
+                renewableFallbackReason = 'credential_store_unavailable';
+            }
+        }
         const request: LoginRequest = {
             permissions: [...new Set(input.permissions)].sort(),
             ...(input.name ? { name: input.name } : {}),
-            renewable: input.renewable,
+            renewable,
             flow: input.flow,
-            ...(input.lifetime ? { lifetime: input.lifetime } : {})
+            // A lifetime above 1h needs a renewable login, so a fallback drops the suggestion.
+            ...(input.lifetime && renewable ? { lifetime: input.lifetime } : {})
         };
         // A different scope must never be answered with the in-flight prompt: that sign-in would
         // mint the earlier permissions while the caller believes it requested new ones. Re-check
         // after each await, because another call can install its own flow while this one waits.
         while (this.pendingLogin) {
             if (sameLoginRequest(this.pendingLogin.request, request)) {
-                return { prompt: await this.pendingLogin.prompt, reused: true };
+                return {
+                    prompt: await this.pendingLogin.prompt,
+                    reused: true,
+                    renewable,
+                    ...(this.pendingLogin.renewableFallbackReason ? { renewableFallbackReason: this.pendingLogin.renewableFallbackReason } : {})
+                };
             }
             await this.abortPendingLogin();
         }
@@ -684,7 +723,8 @@ class McpAuthentication {
             prompt,
             completion: Promise.resolve<ResolvedConfig>(undefined as never),
             request,
-            abort: new AbortController()
+            abort: new AbortController(),
+            ...(renewableFallbackReason ? { renewableFallbackReason } : {})
         };
         this.pendingLogin = pendingLogin;
         pendingLogin.completion = login(
@@ -718,6 +758,7 @@ class McpAuthentication {
                 this.resetClients();
                 const config = await this.resolve();
                 this.lastSignIn = result.status === 'authenticated' ? result : undefined;
+                this.lastSignInFallback = renewableFallbackReason;
                 this.setCurrent(DEFAULT_LOGIN, config);
                 this.onLoginComplete();
                 return config;
@@ -733,7 +774,16 @@ class McpAuthentication {
         // The request itself returns the prompt, so keep a later timeout or cancellation from
         // becoming an unhandled rejection after the MCP tool result has been delivered.
         void pendingLogin.completion.catch(() => {});
-        return { prompt: await pendingLogin.prompt, reused: false };
+        return { prompt: await pendingLogin.prompt, reused: false, renewable, ...(renewableFallbackReason ? { renewableFallbackReason } : {}) };
+    }
+
+    /** Throws `credential_store_unavailable` when a renewable login could not keep its renewal token on this computer. */
+    private async probeCredentialStore(): Promise<void> {
+        const env = this.options.env ?? process.env;
+        const store =
+            this.options.loginDependencies?.renewalTokenStore ??
+            (env.ZYNOHOSTING_CREDENTIAL_STORE?.trim() === 'file' ? undefined : createRenewalTokenStore('system', configLocation(env).path));
+        await store?.probe?.();
     }
 
     async cancelLogin(): Promise<Record<string, unknown>> {
@@ -766,6 +816,9 @@ class McpAuthentication {
                           expiresAt: new Date(prompt.expiresAt).toISOString()
                       }
                     : {}),
+                ...(this.pendingLogin.renewableFallbackReason
+                    ? { renewable: false, renewableFallbackReason: this.pendingLogin.renewableFallbackReason }
+                    : {}),
                 message:
                     prompt?.flow === 'device'
                         ? 'Still waiting for the user to approve the code. Give them the link and code again if needed; do not approve it yourself.'
@@ -789,8 +842,11 @@ class McpAuthentication {
                 ...(done.grantExpiresAt === undefined ? {} : { grantExpiresAt: new Date(done.grantExpiresAt).toISOString() }),
                 permissionKeys: done.permissionKeys,
                 deniedPermissionKeys: done.deniedPermissionKeys,
+                renewable: done.renewable,
+                ...(this.lastSignInFallback ? { renewableFallbackReason: this.lastSignInFallback } : {}),
                 message:
-                    'ZynoHosting login is ready. Tell the user which account and tenant this signed in to so they can confirm it is theirs. If deniedPermissionKeys is non-empty, tell the user which permissions were not granted and what that means (the approver does not hold them in that tenant, so anything needing them will fail); do not request them again unless the user asks. Any pending deployment or download plans were cleared because the login context changed.'
+                    'ZynoHosting login is ready. Tell the user which account and tenant this signed in to so they can confirm it is theirs. If deniedPermissionKeys is non-empty, tell the user which permissions were not granted and what that means (the approver does not hold them in that tenant, so anything needing them will fail); do not request them again unless the user asks. Any pending deployment or download plans were cleared because the login context changed.' +
+                    (this.lastSignInFallback ? ` ${RENEWABLE_FALLBACK_NOTICE}` : '')
             };
         }
         const current = this.current.get(DEFAULT_LOGIN);

@@ -15,15 +15,15 @@ Starts a sign-in from the MCP process, then saves the resulting scoped credentia
 
 After the person finishes, call it with `action: "status"` until it reports `authenticated`. The status then includes `tenant`, `tenantName`, `account`, `grantExpiresAt`, `permissionKeys` (what the approver granted) and `deniedPermissionKeys` (requested but not granted, because the approver does not hold them in that tenant). If any were not granted, tell the user exactly which and what that means, and do not request them again unless asked; tell the user which account and organization it is and ask them to confirm.
 
-| Input             | Required | Default                                        | Meaning                                                                                                                                    |
-| ----------------- | -------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `action`          | no       | `start`                                        | `start`, `status` to check completion, or `cancel` to abandon it.                                                                          |
-| `permissions`     | no       | `hosting.sitesRead`                            | Explicit permissions to request, from the list below.                                                                                      |
-| `name`            | no       | host-based CLI name                            | Name shown on the authorization page.                                                                                                      |
-| `renewable`       | no       | `true`                                         | Keep a rotating renewal credential, in the system key store, so the login does not end after 60 minutes. Set `false` for a one-hour login. |
-| `flow`            | no       | `auto`                                         | `auto`, `browser` or `device`. Set it only to override the choice.                                                                         |
-| `lifetime`        | no       | none                                           | `1h`, `1d`, `7d` or `30d`: a suggestion; the user decides. Above `1h` needs `renewable`.                                                   |
-| `timeout_seconds` | no       | 300 (browser); until the code expires (device) | Time to wait for the sign-in to complete (1–600).                                                                                          |
+| Input             | Required | Default                                                   | Meaning                                                                                                                                    |
+| ----------------- | -------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `action`          | no       | `start`                                                   | `start`, `status` to check completion, or `cancel` to abandon it.                                                                          |
+| `permissions`     | no       | `hosting.sitesRead`                                       | Explicit permissions to request, from the list below.                                                                                      |
+| `name`            | no       | host-based CLI name                                       | Name shown on the authorization page.                                                                                                      |
+| `renewable`       | no       | unset (renewable if this computer has a credential store) | Keep a rotating renewal credential, in the system key store, so the login does not end after 60 minutes. Set `false` for a one-hour login. |
+| `flow`            | no       | `auto`                                                    | `auto`, `browser` or `device`. Set it only to override the choice.                                                                         |
+| `lifetime`        | no       | none                                                      | `1h`, `1d`, `7d` or `30d`: a suggestion; the user decides. Above `1h` needs `renewable`.                                                   |
+| `timeout_seconds` | no       | 300 (browser); until the code expires (device)            | Time to wait for the sign-in to complete (1–600).                                                                                          |
 
 The renewal token can only go in the system store unless the MCP host sets `ZYNOHOSTING_CREDENTIAL_STORE=file` in its environment. The model cannot choose the file store through a tool input.
 

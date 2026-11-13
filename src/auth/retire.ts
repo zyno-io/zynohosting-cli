@@ -18,9 +18,14 @@ export interface RetireDependencies {
  * token. An expired access token is renewed first, as logout does, because revoking needs a live one.
  */
 export async function retireLogin(previous: StoredLogin, dependencies: RetireDependencies): Promise<void> {
-    const store = previous.renewalKey
-        ? (dependencies.renewalTokenStore ?? createRenewalTokenStore(previous.renewalStore ?? 'system', dependencies.configPath))
-        : undefined;
+    let store: RenewalTokenStore | undefined;
+    try {
+        store = previous.renewalKey
+            ? (dependencies.renewalTokenStore ?? createRenewalTokenStore(previous.renewalStore ?? 'system', dependencies.configPath))
+            : undefined;
+    } catch {
+        // No usable store: the grant can still be revoked below if its access token is live.
+    }
     const url = dependencies.authApiUrl;
     if (previous.scopedToken && previous.accessToken && url) {
         try {
@@ -63,4 +68,19 @@ export async function retireDisplacedLogins(
         },
         location
     );
+}
+
+/** Like `retireDisplacedLogins`, but a failure only warns: the user's command has already done what it was asked to do. */
+export async function retireDisplacedLoginsQuietly(
+    profileKey: string,
+    location: ConfigTarget,
+    dependencies: Omit<RetireDependencies, 'authApiUrl'>
+): Promise<void> {
+    try {
+        await retireDisplacedLogins(profileKey, location, dependencies);
+    } catch (error) {
+        dependencies.write?.(
+            `Warning: a replaced login could not be fully retired (${error instanceof Error ? error.message : String(error)}). It stays saved aside and is retried on the next login, logins use, or logout.\n`
+        );
+    }
 }
