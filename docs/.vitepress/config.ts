@@ -63,6 +63,7 @@ export default defineConfig({
                         { text: 'Claude desktop app', link: '/agents/claude-desktop' },
                         { text: 'Claude Code', link: '/agents/claude-code' },
                         { text: 'Codex', link: '/agents/codex' },
+                        { text: 'Grok Bot or ChatGPT dots', link: '/agents/always-on' },
                         { text: 'Another coding agent', link: '/agents/other' },
                         { text: 'What to ask your agent', link: '/agents/prompts' }
                     ]

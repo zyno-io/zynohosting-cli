@@ -1,6 +1,6 @@
 # Set up another coding agent
 
-For Cursor, Windsurf, Gemini CLI, GitHub Copilot's agent mode, and other agents that work in a project folder and can run commands.
+For Cursor, Meta's Muse Code, Windsurf, Gemini CLI, GitHub Copilot's agent mode, and other agents that work in a project folder and can run commands. Using Grok Bot or ChatGPT dots? See [their setup](./always-on).
 
 ## 1. Paste this into your agent
 
@@ -11,6 +11,8 @@ Set up ZynoHosting for this project. Follow https://raw.githubusercontent.com/zy
 Your agent saves an instruction file that teaches it to use ZynoHosting. If it supports skills, the file goes where it keeps skills. If not, it reads the file whenever ZynoHosting comes up.
 
 ZynoHosting needs **Node.js 24** on your computer. If your agent reports it missing, install it from [nodejs.org](https://nodejs.org/) and paste the message again.
+
+Agents that run commands in a sandbox, such as Muse Code, may ask to allow network access, running `npx`, or writing outside the project folder. Allow them; ZynoHosting needs all three to reach your site.
 
 ## 2. Sign in
 
@@ -26,4 +28,4 @@ If your agent forgets about ZynoHosting in a later conversation, start with: _Re
 
 ## Agents that can't run commands
 
-An agent that only chats, with no way to run commands on your computer, cannot use ZynoHosting. If you have the Claude desktop app, use [its setup](./claude-desktop) instead.
+An agent that only chats, or runs commands only on its own cloud computer, cannot use ZynoHosting. If you have the Claude desktop app, use [its setup](./claude-desktop) instead.

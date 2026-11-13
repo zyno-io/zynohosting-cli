@@ -6,6 +6,8 @@ If you can run shell commands, you use ZynoHosting through its CLI and a skill f
 
 If you cannot run shell commands, skip to "Agents without a shell".
 
+If you have your own cloud computer as well as access to the user's computer (Grok Bot, ChatGPT dots), run every command in this page, and every ZynoHosting command afterward, on the user's computer in their website folder. The cloud computer cannot see their files, and sign-in only completes on the machine whose browser approves it. If you only have the cloud computer, stop and send the user to https://zyno-io.github.io/zynohosting-cli/agents/always-on.html to turn on access to their computer.
+
 ## Install the skill
 
 1. Identify which agent you are, then run exactly one of these from the project root:
@@ -14,7 +16,7 @@ If you cannot run shell commands, skip to "Agents without a shell".
     # Claude Code (terminal, IDE extensions, or the desktop app's Code tab)
     mkdir -p .claude/skills/zynohosting && curl -fsSL https://raw.githubusercontent.com/zyno-io/zynohosting-cli/main/skills/zynohosting/SKILL.md -o .claude/skills/zynohosting/SKILL.md
 
-    # Codex
+    # Codex or Muse Code
     mkdir -p .agents/skills/zynohosting && curl -fsSL https://raw.githubusercontent.com/zyno-io/zynohosting-cli/main/skills/zynohosting/SKILL.md -o .agents/skills/zynohosting/SKILL.md
     ```
 

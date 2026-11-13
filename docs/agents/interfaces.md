@@ -5,6 +5,8 @@ Agents reach ZynoHosting through one of two interfaces. Use the CLI with the Zyn
 | Client                                               | Use                                             | Why                                                       |
 | ---------------------------------------------------- | ----------------------------------------------- | --------------------------------------------------------- |
 | Claude Code (terminal, IDE, desktop Code tab), Codex | **CLI + skill**                                 | Has a shell. Nothing runs or loads until a task needs it. |
+| Muse Code, Cursor, and other local coding agents     | **CLI + skill**                                 | Same as above.                                            |
+| Grok Bot, ChatGPT dots                               | **CLI + skill**, run on the user's computer     | Their cloud computer can't see local files or sign in.    |
 | Claude desktop app, Chat and Cowork tabs             | **Desktop extension** (`.mcpb`, the MCP server) | No shell, so a CLI is unusable there.                     |
 | CI and scripts                                       | **CLI** with `ZYNOHOSTING_API_KEY`              | No agent involved.                                        |
 
