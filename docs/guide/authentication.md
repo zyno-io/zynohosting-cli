@@ -14,7 +14,7 @@ On a computer with a browser, run:
 zynohosting login
 ```
 
-The CLI opens Zyno’s CLI authorization page and starts an ephemeral callback listener on literal `127.0.0.1`. The browser sends the result as a top-level `application/x-www-form-urlencoded` navigation, keeping credentials out of URLs and avoiding browser CORS and Private Network Access preflights. The CLI verifies a cryptographically random `state` value before accepting it.
+The CLI opens ZynoSuite’s CLI authorization page and starts an ephemeral callback listener on literal `127.0.0.1`. The browser sends the result as a top-level `application/x-www-form-urlencoded` navigation, keeping credentials out of URLs and avoiding browser CORS and Private Network Access preflights. The CLI verifies a cryptographically random `state` value before accepting it.
 
 The default request is read-only site discovery:
 

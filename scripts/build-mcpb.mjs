@@ -159,8 +159,8 @@ const manifest = {
         // without it the host leaves the literal ${user_config...} in the environment.
         environment: {
             type: 'string',
-            title: 'Environment (Zyno staff only)',
-            description: 'Leave as production unless you are testing against another Zyno environment: production, alpha, or dev.',
+            title: 'Environment (Zyno Consulting staff only)',
+            description: 'Leave as production unless you are testing against another ZynoSuite environment: production, alpha, or dev.',
             required: false,
             default: 'production'
         }

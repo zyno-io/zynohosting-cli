@@ -479,7 +479,7 @@ export async function login(options: LoginOptions, dependencies: LoginDependenci
                 // Let programmatic callers return the one-time link to their user before attempting to
                 // launch a browser. This is essential for an MCP host where browser launching can fail.
                 await dependencies.onLoginPrompt?.(prompt);
-                write('Opening your browser to sign in to Zyno…\n');
+                write('Opening your browser to sign in to ZynoSuite…\n');
                 if (options.open === false) {
                     write(`Open this URL to continue:\n${prompt.url}\n`);
                 } else {
