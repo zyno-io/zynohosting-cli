@@ -80,7 +80,7 @@ Local roots are an optional allowlist for the filesystem of the computer running
 }
 ```
 
-The MCP process inherits the normal saved login unless the client replaces `HOME` or `ZYNOHOSTING_CONFIG`. It can also start without a saved login: after the MCP is connected, the agent can call the `login` tool to launch Zyno’s browser sign-in flow. The tool returns the one-time URL as content, then the agent calls `login` with `action: "status"` after the browser callback completes. For a personal, long-running MCP, authorize only its required permissions and opt into secure renewal:
+The MCP process inherits the normal saved login unless the client replaces `HOME` or `ZYNOHOSTING_CONFIG`. It can also start without a saved login: after the MCP is connected, the agent can call the `login` tool to launch ZynoSuite’s browser sign-in flow. The tool returns the one-time URL as content, then the agent calls `login` with `action: "status"` after the browser callback completes. For a personal, long-running MCP, authorize only its required permissions and opt into secure renewal:
 
 ```bash
 zynohosting login \

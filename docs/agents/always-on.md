@@ -48,7 +48,7 @@ Go to [What to ask your agent](./prompts).
 The access you approve ends when the time you chose runs out. Your agent then asks you to approve a new sign-in. You can end it sooner at any time:
 
 - Ask your agent: _Sign out of ZynoHosting everywhere._ (A plain sign-out removes only the default sign-in; the agent should use `logout --all` to remove every one.)
-- Or cancel it yourself on the **CLI logins** page of your Zyno account.
+- Or cancel it yourself in ZynoSuite: open the menu under your name and choose **CLI logins**.
 
 If you belong to more than one organization, the agent keeps one sign-in for each account and organization. Signing in again as the same account in the same organization replaces that sign-in; another account or organization adds one. It asks which organization you mean before it changes anything. Ask _Which organizations are you signed in to?_ to see them.
 

@@ -34,7 +34,7 @@ npx -y @zyno-io/zynohosting sites list
 
 ## Sign in
 
-Interactive users can sign in through Zyno:
+Interactive users can sign in through ZynoSuite:
 
 ```bash
 zynohosting login --permission hosting.sitesRead
