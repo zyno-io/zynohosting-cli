@@ -10,7 +10,7 @@ export const REQUEST_CODE = `zkr_${'Q9w8E7r6'.repeat(5)}abc`;
 export const USER_CODE = 'ABCD-EFGH';
 export const HUMAN_JWT = 'human.jwt.signature';
 
-export type Script = Record<string, unknown> | 'drop' | { httpStatus: number; body?: unknown };
+export type Script = Record<string, unknown> | 'drop' | { rawBody: string } | { httpStatus: number; body?: unknown };
 
 export interface Seen {
     method: string;
@@ -34,6 +34,7 @@ export interface FakeKeyServer {
         keys: unknown[];
         siteStatus: number;
         whoamiStatus: number;
+        whoamiError: string;
         /** `default` of GET /v1/php-versions; null when no PHP version is deployed. */
         phpDefault: string | null;
     };
@@ -71,6 +72,7 @@ export async function startFakeKeyServer(): Promise<FakeKeyServer> {
     const seen: Seen[] = [];
     let pollIndex = 0;
     let baseUrl = '';
+    let starts = 0;
     const state: FakeKeyServer['state'] = {
         polls: [{ status: 'pending', interval: 0.02 }, approvedPoll()],
         tokenEnvironments: ['production'],
@@ -82,6 +84,7 @@ export async function startFakeKeyServer(): Promise<FakeKeyServer> {
         keys: [],
         siteStatus: 200,
         whoamiStatus: 200,
+        whoamiError: 'unauthorized',
         phpDefault: '8.4'
     };
     const site = () => ({
@@ -112,7 +115,7 @@ export async function startFakeKeyServer(): Promise<FakeKeyServer> {
         const path = url.split('?')[0]!;
         if (method === 'GET' && (path === '/v1/sites/example.com' || path === `/v1/sites/${SITE_ID}`)) return send(site(), state.siteStatus);
         if (method === 'GET' && path === '/v1/deploy-token') {
-            if (state.whoamiStatus !== 200) return send({ error: 'unauthorized' }, state.whoamiStatus);
+            if (state.whoamiStatus !== 200) return send({ error: state.whoamiError }, state.whoamiStatus);
             return send({ keyId: KEY_ID, siteId: SITE_ID, environments: state.tokenEnvironments, expiresAt: state.tokenExpiresAt, site: site() });
         }
         if (method === 'GET' && path === '/v1/php-versions') return send({ versions: ['8.2', '8.3', '8.4'], default: state.phpDefault });
@@ -127,9 +130,12 @@ export async function startFakeKeyServer(): Promise<FakeKeyServer> {
         if (method === 'GET' && path === `/reconciliations/${OPERATION_ID}`) {
             return send({ id: OPERATION_ID, status: 'succeeded', statusUrl: `/reconciliations/${OPERATION_ID}`, lastError: null });
         }
+        if (method === 'GET' && path === '/v1/sites') return send([site()]);
         if (method === 'POST' && path === '/identity/key-requests') {
+            // Each request gets its own code; the first is REQUEST_CODE.
+            const requestCode = `${REQUEST_CODE.slice(0, -1)}${String.fromCharCode(REQUEST_CODE.charCodeAt(REQUEST_CODE.length - 1) + starts++)}`;
             return send({
-                requestCode: REQUEST_CODE,
+                requestCode,
                 userCode: USER_CODE,
                 verificationUri: `${baseUrl}/keys/approve`,
                 verificationUriComplete: `${baseUrl}/keys/approve?code=${USER_CODE}`,
@@ -142,6 +148,10 @@ export async function startFakeKeyServer(): Promise<FakeKeyServer> {
             const script = state.polls[Math.min(pollIndex++, state.polls.length - 1)]!;
             if (script === 'drop') {
                 request.socket.destroy();
+                return;
+            }
+            if ('rawBody' in script) {
+                response.end((script as { rawBody: string }).rawBody);
                 return;
             }
             if ('httpStatus' in script)

@@ -213,7 +213,10 @@ export async function prepareRuntime(
     const manager = new ManagerClient(config.apiUrl, config.credential, timeoutMs);
     const site = await loadSiteForSettings(manager, config, normalized);
     let phpVersion: string | null = null;
-    if (runtime.kind === 'php') {
+    if (runtime.kind === 'php' && runtime.version === undefined && site.phpVersion !== null) {
+        // Plain `php` on a site that already runs PHP keeps its version; it never switches to the platform default.
+        phpVersion = site.phpVersion;
+    } else if (runtime.kind === 'php') {
         const supported = await manager.getPhpVersions().catch(error => diagnoseDeployToken(config, error));
         if (runtime.version === undefined && supported.default === null) {
             throw new CliError('No PHP version is available on this platform right now', 5, 'php_unavailable');

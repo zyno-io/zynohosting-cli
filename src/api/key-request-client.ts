@@ -4,7 +4,7 @@ import type { ManagerCredential } from '../config.js';
 
 import { DEPLOY_TOKEN_PATTERN } from '../config.js';
 import { CliError, HttpError } from '../errors.js';
-import { requestJson } from './http.js';
+import { request, requestJson } from './http.js';
 import { authorizationHeaders, basicAuthorization } from './manager-client.js';
 
 export type KeyEnvironment = 'production' | 'preview';
@@ -164,6 +164,46 @@ function grantOf(capabilities: z.infer<typeof capabilitiesSchema>): { siteId?: s
     return hosting ? { siteId: hosting.siteId, environments: hosting.environments } : {};
 }
 
+/** Reads one poll answer. Throws `invalid_auth_response` for anything the contract does not allow. */
+function parsePoll(value: unknown, delivery: KeyDelivery): KeyRequestPoll {
+    const parsed = pollSchema.safeParse(value);
+    if (!parsed.success) throw invalid(parsed.error, 'key request poll');
+    const { status, interval, key, secret, delivery: answered } = parsed.data;
+    if (status === 'approved') {
+        if (!key || answered !== delivery) {
+            throw new CliError('ZynoAuth returned an invalid key request poll response (delivery or key)', 5, 'invalid_auth_response');
+        }
+        const issued: IssuedKey = { id: key.id, preview: key.keyPreview, expiresAt: key.expiresAt, ...grantOf(key.capabilities) };
+        if (delivery === 'display') return { status, key: issued };
+        if (!secret || !DEPLOY_TOKEN_PATTERN.test(secret)) {
+            throw new CliError('ZynoAuth returned an approved key request without a valid key', 5, 'invalid_auth_response');
+        }
+        return { status, key: issued, secret };
+    }
+    if (status === 'pending' || status === 'slow_down') {
+        if (interval === undefined)
+            throw new CliError('ZynoAuth returned an invalid key request poll response (interval)', 5, 'invalid_auth_response');
+        return { status, interval };
+    }
+    return { status };
+}
+
+/** A well-formed secret in an approved answer, found before the rest of the body is validated. Also searches text that is not JSON. */
+function findSecret(value: unknown, text: string): string | undefined {
+    if (value === undefined) return /zck_[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])/.exec(text)?.[0];
+    if (!value || typeof value !== 'object') return undefined;
+    const object = value as Record<string, unknown>;
+    if (object.status !== 'approved' || typeof object.secret !== 'string') return undefined;
+    return DEPLOY_TOKEN_PATTERN.test(object.secret) ? object.secret : undefined;
+}
+
+/** The key id, when the answer names one that looks like an id, so a person can find the key to revoke. */
+function keyHints(value: unknown): string | undefined {
+    const key = value && typeof value === 'object' ? (value as Record<string, unknown>).key : undefined;
+    const id = key && typeof key === 'object' ? (key as Record<string, unknown>).id : undefined;
+    return typeof id === 'string' && UUID.test(id) ? id : undefined;
+}
+
 export class KeyRequestClient {
     constructor(
         private readonly apiUrl: string,
@@ -215,34 +255,50 @@ export class KeyRequestClient {
     /**
      * Asks whether the person approved. With `poll` delivery the secret arrives exactly once, here, and must match the key
      * format. With `display` delivery the response must carry no secret; if one is there it is dropped unread.
+     *
+     * With `poll` delivery the secret is found before anything else is checked. If the rest of the answer is unusable the
+     * key already exists and nobody holds it, so it is revoked with itself before the error is raised.
      */
     async poll(requestCode: string, delivery: KeyDelivery): Promise<KeyRequestPoll> {
-        const value = await requestJson(`${this.apiUrl}/identity/key-requests/poll`, {
+        const response = await request(`${this.apiUrl}/identity/key-requests/poll`, {
             method: 'POST',
             timeoutMs: this.timeoutMs,
             headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
             body: JSON.stringify({ requestCode })
         });
-        const parsed = pollSchema.safeParse(value);
-        if (!parsed.success) throw invalid(parsed.error, 'key request poll');
-        const { status, interval, key, secret, delivery: answered } = parsed.data;
-        if (status === 'approved') {
-            if (!key || answered !== delivery) {
-                throw new CliError('ZynoAuth returned an invalid key request poll response (delivery or key)', 5, 'invalid_auth_response');
-            }
-            const issued: IssuedKey = { id: key.id, preview: key.keyPreview, expiresAt: key.expiresAt, ...grantOf(key.capabilities) };
-            if (delivery === 'display') return { status, key: issued };
-            if (!secret || !DEPLOY_TOKEN_PATTERN.test(secret)) {
-                throw new CliError('ZynoAuth returned an approved key request without a valid key', 5, 'invalid_auth_response');
-            }
-            return { status, key: issued, secret };
+        let text: string;
+        try {
+            text = await response.text();
+        } catch {
+            throw new HttpError('Request failed: the connection dropped', 0, 'network_error');
         }
-        if (status === 'pending' || status === 'slow_down') {
-            if (interval === undefined)
-                throw new CliError('ZynoAuth returned an invalid key request poll response (interval)', 5, 'invalid_auth_response');
-            return { status, interval };
+        let value: unknown;
+        try {
+            value = text ? (JSON.parse(text) as unknown) : null;
+        } catch {
+            value = undefined;
         }
-        return { status };
+        const secret = delivery === 'poll' ? findSecret(value, text) : undefined;
+        try {
+            if (value === undefined)
+                throw new HttpError('Server returned invalid JSON from /identity/key-requests/poll', response.status, 'invalid_json_response');
+            return parsePoll(value, delivery);
+        } catch (error) {
+            if (!secret) throw error;
+            let revoked = false;
+            try {
+                await this.revokeSelf(secret, 10_000);
+                revoked = true;
+            } catch {
+                revoked = false;
+            }
+            const key = keyHints(value);
+            throw new CliError(
+                `The approved deploy token could not be read from ZynoAuth's answer, so ${revoked ? 'it was revoked' : 'it could not be revoked automatically'}${key ? ` (key ${key})` : ''}. ${revoked ? 'Run `zynohosting deploy-tokens create` again.' : 'Run `zynohosting deploy-tokens list` and revoke it, then create it again.'}`,
+                3,
+                'key_credential_lost'
+            );
+        }
     }
 
     /** Abandons a key request. Best effort. */

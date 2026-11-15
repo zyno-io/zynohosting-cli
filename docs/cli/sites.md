@@ -62,7 +62,7 @@ zynohosting sites runtime example.com php@8.3 --yes
 zynohosting sites runtime example.com static --yes
 ```
 
-The runtime is `static` (PHP off), `php` (PHP on at the platform default version), or `php@<version>` such as `php@8.3`. The CLI checks the version against the versions the platform supports and fails with `unsupported_php_version` (exit 2) before it changes anything. If the platform has no default version, plain `php` fails with `php_unavailable` (exit 5); name a version. Reading the supported versions needs `hosting.sitesRead`.
+The runtime is `static` (PHP off), `php` (PHP on at the platform default version; a site already running PHP keeps its current version), or `php@<version>` such as `php@8.3`. The CLI checks the version against the versions the platform supports and fails with `unsupported_php_version` (exit 2) before it changes anything. If the platform has no default version, plain `php` fails with `php_unavailable` (exit 5); name a version. Reading the supported versions needs `hosting.sitesRead`.
 
 | Option                | Meaning                                                  |
 | --------------------- | -------------------------------------------------------- |

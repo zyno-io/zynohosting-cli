@@ -121,3 +121,21 @@ test('a platform with no default PHP version cannot turn PHP on without a versio
         await server.close();
     }
 });
+
+test('plain php on a site already running PHP keeps its version and sends nothing', async () => {
+    const server = await startFakeKeyServer();
+    try {
+        server.state.phpVersion = '8.2';
+        const config = await resolveConfig({ apiUrl: server.url }, env);
+        const plan = await prepareRuntime('example.com', parseRuntimeChoice('php'), {}, config);
+        assert.equal(plan.phpVersion, '8.2');
+        assert.equal((await applyPreparedRuntime(plan)).status, 'unchanged');
+        assert.equal(server.count('PATCH', `/v1/sites/${SITE_ID}`), 0);
+        assert.equal(server.count('GET', '/v1/php-versions'), 0);
+        // An explicit version still switches.
+        const switched = await prepareRuntime('example.com', parseRuntimeChoice('php@8.4'), { timeoutSeconds: 5 }, config);
+        assert.equal((await applyPreparedRuntime(switched)).changed, true);
+    } finally {
+        await server.close();
+    }
+});

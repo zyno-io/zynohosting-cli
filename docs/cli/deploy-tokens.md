@@ -56,7 +56,9 @@ Pick one destination. The CLI checks that `gh` or `glab` is signed in and can re
 
 The token goes to `gh` and `glab` on standard input. It is never in a command line, in `--json` output, in an error, or in a log.
 
-If saving the token fails, the CLI revokes the new token with itself and exits with an error. Nothing is left behind.
+If saving the token fails, the CLI revokes the new token with itself and exits with `handoff_failed`. The message says the token was revoked. If the revoke also fails, the message says so and names the key id: run `zynohosting deploy-tokens revoke <keyId>` with that id (or revoke it in ZynoSuite), because a live token nobody holds is left until then.
+
+If a destination such as a GitLab variable already exists, the CLI replaces its value (`glab variable update`). GitHub secrets are overwritten by `gh secret set`.
 
 A file inside a git repository that is not ignored gets a warning. Add it to `.gitignore` before you commit.
 
@@ -180,24 +182,24 @@ To limit the variable to protected branches, mark it protected in the project's 
 
 ## Errors
 
-| Code                               | Meaning                                                                                                |
-| ---------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `deploy_token_not_allowed`         | A deploy token cannot run this command (exit 3).                                                       |
-| `conflicting_credentials`          | A deploy token was set together with an API key or access token (exit 2).                              |
-| `invalid_deploy_token`             | The value is not a deploy token. A tenant API key gets its own message (exit 2).                       |
-| `deploy_token_wrong_site`          | The site is not the one the token was created for (exit 3).                                            |
-| `deploy_token_wrong_environment`   | The token does not include that environment (exit 3).                                                  |
-| `deploy_token_requires_production` | The site runs PHP, so its token must include production (exit 2 when creating, exit 3 when deploying). |
-| `deploy_token_expired`             | The token expired. Create a new one (exit 3).                                                          |
-| `deploy_token_revoked`             | The token was revoked or is no longer valid (exit 3).                                                  |
-| `ambiguous_deploy_argument`        | One argument is both the site and a directory. Give both (exit 2).                                     |
-| `handoff_unavailable`              | `gh`, `glab`, or the file path cannot take the token. Nothing was requested (exit 2).                  |
-| `handoff_failed`                   | Saving the token failed. The new token was revoked if possible (exit 7).                               |
-| `key_request_denied`               | The approver denied the request (exit 3).                                                              |
-| `key_request_expired`              | The approval code ran out. Start again (exit 3).                                                       |
-| `key_request_pending`              | `--resume` timed out with nobody approving (exit 3).                                                   |
-| `no_pending_key_request`           | `--resume` with nothing saved (exit 2).                                                                |
-| `key_credential_lost`              | The connection dropped as the token was handed over. List and revoke, then create again (exit 3).      |
+| Code                               | Meaning                                                                                           |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `deploy_token_not_allowed`         | A deploy token cannot run this command (exit 3).                                                  |
+| `conflicting_credentials`          | A deploy token was set together with an API key or access token (exit 2).                         |
+| `invalid_deploy_token`             | The value is not a deploy token. A tenant API key gets its own message (exit 2).                  |
+| `deploy_token_wrong_site`          | The site is not the one the token was created for (exit 3).                                       |
+| `deploy_token_wrong_environment`   | The token does not include that environment (exit 3).                                             |
+| `deploy_token_requires_production` | The site runs PHP, so its token must include production (exit 3).                                 |
+| `deploy_token_expired`             | The token expired. Create a new one (exit 3).                                                     |
+| `deploy_token_revoked`             | The token was revoked or is no longer valid (exit 3).                                             |
+| `ambiguous_deploy_argument`        | One argument is both the site and a directory. Give both (exit 2).                                |
+| `handoff_unavailable`              | `gh`, `glab`, or the file path cannot take the token. Nothing was requested (exit 2).             |
+| `handoff_failed`                   | Saving the token failed. The new token was revoked if possible (exit 7).                          |
+| `key_request_denied`               | The approver denied the request (exit 3).                                                         |
+| `key_request_expired`              | The approval code ran out. Start again (exit 3).                                                  |
+| `key_request_pending`              | `--resume` timed out with nobody approving (exit 3).                                              |
+| `no_pending_key_request`           | `--resume` with nothing saved (exit 2).                                                           |
+| `key_credential_lost`              | The connection dropped as the token was handed over. List and revoke, then create again (exit 3). |
 
 ## Permissions
 

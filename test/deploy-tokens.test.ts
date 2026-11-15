@@ -113,7 +113,7 @@ test('a GitHub environment secret and a custom name are passed as arguments', as
 });
 
 test('a GitLab hand-off creates a masked variable with the token on stdin', async () => {
-    const context = await setup();
+    const context = await setup(call => (call.command === 'glab' && call.args[1] === 'get' ? { code: 1 } : undefined));
     try {
         await createDeployToken(
             'example.com',
@@ -468,12 +468,115 @@ test('ZynoAuth responses are parsed strictly: a malformed start, poll, or list i
         // Poll delivery without a secret, with a malformed one, and answered as the other delivery.
         assert.equal(await bad({ status: 'approved', delivery: 'poll', key: (approvedPoll() as { key: unknown }).key }), 'invalid_auth_response');
         assert.equal(await bad({ ...(approvedPoll() as object), secret: 'zck_short' }), 'invalid_auth_response');
-        assert.equal(await bad({ ...(approvedPoll() as object), delivery: 'display' }), 'invalid_auth_response');
+        // With a well-formed secret present, an unusable answer revokes the key instead (see the revoke test below).
+        assert.equal(await bad({ ...(approvedPoll() as object), delivery: 'display' }), 'key_credential_lost');
         assert.equal(await bad({ ...(displayApprovedPoll() as object) }), 'invalid_auth_response');
         assert.equal(await bad({ status: 'mystery' }), 'invalid_auth_response');
         // A key without its fields.
-        assert.equal(await bad({ status: 'approved', delivery: 'poll', secret: SECRET, key: { id: KEY_ID } }), 'invalid_auth_response');
+        assert.equal(await bad({ status: 'approved', delivery: 'poll', secret: SECRET, key: { id: KEY_ID } }), 'key_credential_lost');
     } finally {
         await context.server.close();
     }
+});
+
+test('a GitLab variable that already exists is updated, a new one is created, and the old value is never shown', async () => {
+    for (const exists of [true, false]) {
+        const context = await setup(call =>
+            call.command === 'glab' && call.args[1] === 'get' ? { code: exists ? 0 : 1, stdout: 'old-secret-value' } : undefined
+        );
+        try {
+            await createDeployToken('example.com', { ...context.options, gitlab: 'group/project' }, context.dependencies);
+            const write = context.calls.find(call => call.command === 'glab' && (call.args[1] === 'set' || call.args[1] === 'update'));
+            assert.deepEqual(write?.args, ['variable', exists ? 'update' : 'set', 'ZYNOHOSTING_DEPLOY_TOKEN', '--masked', '-R', 'group/project']);
+            assert.equal(write?.input, SECRET);
+            assert(!visible(context).includes('old-secret-value'));
+        } finally {
+            await context.server.close();
+        }
+    }
+});
+
+test('--no-wait over a saved request cancels the old one on the server and keeps the new one', async () => {
+    const context = await setup();
+    try {
+        await createDeployToken('example.com', { ...context.options, noWait: true }, context.dependencies);
+        await createDeployToken('example.com', { ...context.options, noWait: true }, context.dependencies);
+        const cancels = context.server.seen.filter(entry => entry.url === '/identity/key-requests/cancel');
+        assert.equal(cancels.length, 1);
+        assert.equal(cancels[0]!.body.requestCode, REQUEST_CODE);
+        const saved = (await loadStoredConfig(context.file, `url:${context.server.url}`)).pendingKeyRequest;
+        assert.notEqual(saved?.requestCode, REQUEST_CODE);
+    } finally {
+        await context.server.close();
+    }
+});
+
+test('a resumed request clears its uncertain flag after a good poll, and display delivery never reports a lost key', async () => {
+    const context = await setup();
+    try {
+        await createDeployToken('example.com', { ...context.options, noWait: true }, context.dependencies);
+        const resumeOptions = { apiUrl: context.server.url, resume: true, json: true };
+        // A dropped poll marks it uncertain; a pending answer afterwards clears the mark.
+        context.server.state.polls = ['drop', { status: 'pending' }];
+        await assert.rejects(
+            createDeployToken(undefined, { ...resumeOptions, timeoutSeconds: 1 }, context.dependencies),
+            (error: unknown) => error instanceof CliError && error.code === 'key_request_pending'
+        );
+        const saved = (await loadStoredConfig(context.file, `url:${context.server.url}`)).pendingKeyRequest;
+        assert(saved);
+        assert.equal(saved.deliveryUncertain, undefined);
+
+        // After a dropped poll an `expired` answer is an ordinary expiry for display delivery, and the saved request is removed.
+        context.server.state.polls = ['drop', { status: 'expired' }];
+        await assert.rejects(
+            createDeployToken(undefined, resumeOptions, context.dependencies),
+            (error: unknown) => error instanceof CliError && error.code === 'key_request_expired'
+        );
+        assert.equal((await loadStoredConfig(context.file, `url:${context.server.url}`)).pendingKeyRequest, undefined);
+    } finally {
+        await context.server.close();
+    }
+});
+
+test('an approved poll-delivery answer that cannot be read revokes the token with itself and never shows it', async () => {
+    const { KeyRequestClient } = await import('../src/api/key-request-client.js');
+    const context = await setup();
+    try {
+        const client = new KeyRequestClient(context.server.url);
+        const unreadable = [
+            // The key is malformed.
+            { ...(approvedPoll() as object), key: { id: KEY_ID } },
+            // Not JSON at all, with the token inside.
+            { rawBody: `<html>${SECRET}` }
+        ];
+        for (const script of unreadable) {
+            context.server.state.polls = [script as never];
+            const before = context.server.count('POST', '/identity/tenant-keys/self-revoke');
+            await assert.rejects(client.poll(REQUEST_CODE, 'poll'), (error: unknown) => {
+                assert(error instanceof CliError);
+                assert.equal(error.code, 'key_credential_lost');
+                assert.match(error.message, /revoked/);
+                assertNoSecret(error.message);
+                return true;
+            });
+            assert.equal(context.server.count('POST', '/identity/tenant-keys/self-revoke'), before + 1);
+            const revoke = context.server.seen.filter(entry => entry.url === '/identity/tenant-keys/self-revoke').at(-1)!;
+            assert.equal(revoke.authorization, `Basic ${Buffer.from(`api:${SECRET}`).toString('base64')}`);
+        }
+        // Display delivery has no secret to revoke, so an unreadable answer is just an invalid response.
+        context.server.state.polls = [{ status: 'approved', delivery: 'display' }];
+        await assert.rejects(
+            client.poll(REQUEST_CODE, 'display'),
+            (error: unknown) => error instanceof CliError && error.code === 'invalid_auth_response'
+        );
+    } finally {
+        await context.server.close();
+    }
+});
+
+test('hand-off programs run from a neutral directory', { skip: process.platform === 'win32' }, async () => {
+    const { runProcess } = await import('../src/deploy-tokens/handoff.js');
+    const { realpath } = await import('node:fs/promises');
+    const result = await runProcess('pwd', []);
+    assert.equal(result.stdout.trim(), await realpath(tmpdir()));
 });

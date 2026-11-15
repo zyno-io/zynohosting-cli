@@ -14,6 +14,7 @@ import {
     DEFAULT_SECRET_NAME,
     deliverSecret,
     describeHandoff,
+    type HandoffPreflight,
     handoffKind,
     handoffTarget,
     preflightHandoff,
@@ -190,6 +191,7 @@ export async function createDeployToken(
     let siteId: string;
     let siteName: string;
     let environments: KeyEnvironment[];
+    let handoffPlan: HandoffPreflight = { replacesExisting: false };
 
     if (options.resume) {
         if (
@@ -251,7 +253,7 @@ export async function createDeployToken(
         delivery = handoff.kind === 'manual' ? 'display' : 'poll';
         // A preview-only token cannot deploy to a site that runs PHP, so fail here instead of after approval.
         assertTokenAllowedForSite(site, environments);
-        await preflightHandoff(handoff, dependencies);
+        handoffPlan = await preflightHandoff(handoff, dependencies);
         const input: KeyRequestInput = {
             siteId,
             environments,
@@ -304,7 +306,19 @@ export async function createDeployToken(
                     handoff: toStoredHandoff(handoff),
                     createdAt: Date.now()
                 };
-                await mutateProfile(profileKey, current => ({ ...current, pendingKeyRequest: saved }), location);
+                let previous: PendingKeyRequest | undefined;
+                await mutateProfile(
+                    profileKey,
+                    current => {
+                        previous = current.pendingKeyRequest;
+                        return { ...current, pendingKeyRequest: saved };
+                    },
+                    location
+                );
+                // A saved request this one replaces can no longer be resumed, so end it on the server too (best effort).
+                if (previous && previous.requestCode !== saved.requestCode) {
+                    await new KeyRequestClient(previous.authApiUrl).cancel(previous.requestCode).catch(() => {});
+                }
                 write('\nThe request is saved. After you approve it, run `zynohosting deploy-tokens create --resume`.\n');
                 emit({ type: 'result', status: 'pending', site: siteName, ...prompt });
                 return { status: 'pending', site: siteName, ...prompt };
@@ -321,6 +335,8 @@ export async function createDeployToken(
             mutateProfile(
                 profileKey,
                 current => {
+                    // Only this request's own record: a newer saved request must survive.
+                    if (current.pendingKeyRequest?.requestCode !== start.requestCode) return current;
                     const { pendingKeyRequest: _gone, ...rest } = current;
                     return rest;
                 },
@@ -334,7 +350,8 @@ export async function createDeployToken(
                     return result.status === 'approved' ? { status: 'approved', value: result } : result;
                 },
                 cancel: () => activeClient.cancel(start.requestCode),
-                errors: keyError,
+                // For display delivery the server holds the key, so nothing can have been lost in transit.
+                errors: { ...keyError, lost: delivery === 'display' ? keyError.expiredOrUsed : keyError.lost },
                 interval: start.interval,
                 signal: abort.signal,
                 ...(options.timeoutSeconds === undefined ? {} : { deadline: Date.now() + options.timeoutSeconds * 1000 }),
@@ -345,13 +362,11 @@ export async function createDeployToken(
                     if (!pending) return;
                     await mutateProfile(
                         profileKey,
-                        current =>
-                            current.pendingKeyRequest?.requestCode === pending!.requestCode
-                                ? {
-                                      ...current,
-                                      pendingKeyRequest: { ...current.pendingKeyRequest, ...(uncertain ? { deliveryUncertain: true } : {}) }
-                                  }
-                                : current,
+                        current => {
+                            if (current.pendingKeyRequest?.requestCode !== pending!.requestCode) return current;
+                            const { deliveryUncertain: _old, ...rest } = current.pendingKeyRequest;
+                            return { ...current, pendingKeyRequest: uncertain ? { ...rest, deliveryUncertain: true } : rest };
+                        },
                         location
                     );
                 }
@@ -362,7 +377,7 @@ export async function createDeployToken(
             if (delivery === 'poll') {
                 secret = approved.secret ?? '';
                 try {
-                    const outcome = await deliverSecret(handoff, secret, dependencies);
+                    const outcome = await deliverSecret(handoff, secret, dependencies, handoffPlan);
                     destination = outcome.destination;
                     warnings = outcome.warnings;
                 } catch (error) {
@@ -393,7 +408,14 @@ export async function createDeployToken(
         } catch (error) {
             if (
                 error instanceof CliError &&
-                ['key_request_denied', 'key_request_expired', 'key_request_cancelled', 'key_request_timeout'].includes(error.code)
+                [
+                    'key_request_denied',
+                    'key_request_expired',
+                    'key_request_cancelled',
+                    'key_request_timeout',
+                    'key_credential_lost',
+                    'handoff_failed'
+                ].includes(error.code)
             ) {
                 await clearPending();
             }

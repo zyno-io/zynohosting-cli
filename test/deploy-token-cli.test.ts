@@ -98,34 +98,50 @@ test('whoami with a deploy token describes the token and never prints it', async
     }
 });
 
-test('a tenant API key in CI warns once and points to deploy tokens; no warning outside CI or with a deploy token', async () => {
+test('a tenant API key in CI warns on stderr, so JSON stdout stays one parseable document', async () => {
     const server = await startFakeKeyServer();
     const base = { ZYNOHOSTING_CONFIG: '/nonexistent/c.json' };
     try {
-        const ci = await run(['--api-url', server.url, 'sites', 'get', 'example.com', '--json'], {
-            ...base,
-            ZYNOHOSTING_API_KEY: 'zak_x',
-            CI: 'true'
-        });
-        const warnings = ci.out
+        const ci = await run(['--api-url', server.url, 'sites', 'list', '--json'], { ...base, ZYNOHOSTING_API_KEY: 'zak_x', CI: 'true' });
+        const documents = JSON.parse(ci.out) as unknown;
+        assert(Array.isArray(documents), 'stdout is the single sites document');
+        const warnings = ci.err
             .trim()
             .split('\n')
+            .filter(Boolean)
             .map(line => JSON.parse(line) as Record<string, unknown>)
             .filter(event => event.type === 'warning');
         assert.equal(warnings.length, 1);
         assert.equal(warnings[0]!.code, 'api_key_in_ci');
+        assert(!ci.out.includes('api_key_in_ci'));
 
         const human = await run(['--api-url', server.url, 'sites', 'get', 'example.com'], { ...base, ZYNOHOSTING_API_KEY: 'zak_x', CI: 'true' });
         assert.match(human.err, /deploy token/);
         assert(!human.out.includes('api_key_in_ci'));
 
-        const local = await run(['--api-url', server.url, 'sites', 'get', 'example.com', '--json'], {
-            ...base,
-            ZYNOHOSTING_API_KEY: 'zak_x',
-            CI: ''
-        });
-        assert(!local.out.includes('api_key_in_ci'));
+        const local = await run(['--api-url', server.url, 'sites', 'list', '--json'], { ...base, ZYNOHOSTING_API_KEY: 'zak_x', CI: '' });
+        assert(!local.err.includes('api_key_in_ci'));
     } finally {
         await server.close();
+    }
+});
+
+test('deploy without a site fails like a missing required argument unless a deploy token supplies it', async () => {
+    const program = createProgram();
+    const deploy = program.commands.find(command => command.name() === 'deploy')!;
+    let message = '';
+    deploy.exitOverride().configureOutput({ writeErr: text => (message += text), outputError: text => (message += text) });
+    const saved = process.env.ZYNOHOSTING_API_KEY;
+    process.env.ZYNOHOSTING_API_KEY = 'zak_x';
+    try {
+        await assert.rejects(program.parseAsync(['node', 'zynohosting', 'deploy', '--dry-run']), (error: unknown) => {
+            const failure = error as { exitCode?: number };
+            assert.equal(failure.exitCode, 1);
+            return true;
+        });
+        assert.match(message, /missing required argument 'site'/);
+    } finally {
+        if (saved === undefined) delete process.env.ZYNOHOSTING_API_KEY;
+        else process.env.ZYNOHOSTING_API_KEY = saved;
     }
 });

@@ -381,13 +381,22 @@ export function createProgram(): Command {
         .option('--ignore-file <path>', 'use an alternate ignore file instead of .zynohostingignore')
         .addOption(new Option('--timeout <seconds>', 'inventory/hash request timeout').argParser(positiveInteger).default(600))
         .addOption(new Option('--hash-concurrency <count>', 'number of local files hashed concurrently').argParser(positiveInteger).default(8))
-        .action(async (siteRef: string | undefined, directory: string | undefined, commandOptions: DeploySiteOptions & { timeout: number }) => {
-            await deploySite(siteRef, directory, {
-                ...commandOptions,
-                ...commandContext(program, commandOptions),
-                timeoutSeconds: commandOptions.timeout
-            });
-        });
+        .action(
+            async (
+                siteRef: string | undefined,
+                directory: string | undefined,
+                commandOptions: DeploySiteOptions & { timeout: number },
+                command: Command
+            ) => {
+                // Only a deploy token knows its site. Without one the site is required, exactly as before it became optional.
+                if (siteRef === undefined && !process.env.ZYNOHOSTING_DEPLOY_TOKEN?.trim()) command.error("missing required argument 'site'");
+                await deploySite(siteRef, directory, {
+                    ...commandOptions,
+                    ...commandContext(program, commandOptions),
+                    timeoutSeconds: commandOptions.timeout
+                });
+            }
+        );
 
     program
         .command('promote')
@@ -502,8 +511,9 @@ function warnApiKeyInCi(action: Command): void {
     }
     const message =
         'A tenant API key is being used in CI. A leaked API key can reach the whole tenant. Use a deploy token instead (zynohosting deploy-tokens create <site> --production --github owner/repo).';
+    // Always stderr, like errors, so a command whose stdout is one JSON document stays parseable.
     if (action.optsWithGlobals<{ json?: boolean }>().json)
-        process.stdout.write(`${JSON.stringify({ type: 'warning', code: 'api_key_in_ci', message })}\n`);
+        process.stderr.write(`${JSON.stringify({ type: 'warning', code: 'api_key_in_ci', message })}\n`);
     else process.stderr.write(`Warning: ${message}\n`);
 }
 

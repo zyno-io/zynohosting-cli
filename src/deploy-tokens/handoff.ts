@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { access, mkdir, open, rm, stat } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 
 import type { HandoffKind } from '../api/key-request-client.js';
@@ -34,7 +35,8 @@ export interface HandoffDependencies {
 /** Spawns a program with the secret on stdin. A program that is not installed resolves with code 127. */
 export const runProcess: RunProcess = (command, args, options = {}) =>
     new Promise<ProcessResult>(resolvePromise => {
-        const child = spawn(command, args, { stdio: ['pipe', 'pipe', 'pipe'], ...(options.cwd ? { cwd: options.cwd } : {}) });
+        // A neutral directory, so no program in the current directory can be picked over the real one on Windows.
+        const child = spawn(command, args, { stdio: ['pipe', 'pipe', 'pipe'], cwd: options.cwd ?? tmpdir() });
         const out: Buffer[] = [];
         const err: Buffer[] = [];
         let settled = false;
@@ -105,8 +107,13 @@ function unavailable(message: string): CliError {
     return new CliError(message, 2, 'handoff_unavailable');
 }
 
+export interface HandoffPreflight {
+    /** The GitLab variable already exists, so it is updated rather than created. */
+    replacesExisting: boolean;
+}
+
 /** Checks, before any request is made, that the destination can take the key. Nothing secret exists yet. */
-export async function preflightHandoff(handoff: Handoff, dependencies: HandoffDependencies = {}): Promise<void> {
+export async function preflightHandoff(handoff: Handoff, dependencies: HandoffDependencies = {}): Promise<HandoffPreflight> {
     const run = dependencies.run ?? runProcess;
     if (handoff.kind === 'github') {
         if ((await run('gh', ['auth', 'status'])).code !== 0) {
@@ -126,6 +133,10 @@ export async function preflightHandoff(handoff: Handoff, dependencies: HandoffDe
                 `Cannot manage variables in ${handoff.project}. Check the project path and that your GitLab account may edit its CI/CD variables.`
             );
         }
+        // `glab variable set` fails when the variable exists, so a rotation must use `update`. Only the exit code is used;
+        // the old value that `get` prints stays in memory and is never shown.
+        const existing = await run('glab', ['variable', 'get', handoff.name, '-R', handoff.project]);
+        return { replacesExisting: existing.code === 0 };
     } else if (handoff.kind === 'file') {
         const path = resolve(handoff.path);
         const exists = await access(path).then(
@@ -136,6 +147,7 @@ export async function preflightHandoff(handoff: Handoff, dependencies: HandoffDe
         const parent = await stat(dirname(path)).catch(() => undefined);
         if (parent && !parent.isDirectory()) throw unavailable(`${dirname(path)} is not a directory`);
     }
+    return { replacesExisting: false };
 }
 
 /** Removes the secret from text that may echo it. */
@@ -155,7 +167,12 @@ export interface HandoffOutcome {
 }
 
 /** Puts the secret where the person chose. The secret travels on stdin or in a 0600 file, never in an argument. */
-export async function deliverSecret(handoff: Handoff, secret: string, dependencies: HandoffDependencies = {}): Promise<HandoffOutcome> {
+export async function deliverSecret(
+    handoff: Handoff,
+    secret: string,
+    dependencies: HandoffDependencies = {},
+    preflight: HandoffPreflight = { replacesExisting: false }
+): Promise<HandoffOutcome> {
     const run = dependencies.run ?? runProcess;
     const warnings: string[] = [];
     if (handoff.kind === 'github') {
@@ -163,7 +180,8 @@ export async function deliverSecret(handoff: Handoff, secret: string, dependenci
         const result = await run('gh', args, { input: secret });
         if (result.code !== 0) throw failure('Saving the GitHub secret', result, secret);
     } else if (handoff.kind === 'gitlab') {
-        const result = await run('glab', ['variable', 'set', handoff.name, '--masked', '-R', handoff.project], { input: secret });
+        const verb = preflight.replacesExisting ? 'update' : 'set';
+        const result = await run('glab', ['variable', verb, handoff.name, '--masked', '-R', handoff.project], { input: secret });
         if (result.code !== 0) throw failure('Saving the GitLab variable', result, secret);
     } else if (handoff.kind === 'file') {
         warnings.push(...(await writeSecretFile(resolve(handoff.path), secret, run)));

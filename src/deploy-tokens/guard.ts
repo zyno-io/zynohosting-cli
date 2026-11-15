@@ -10,6 +10,19 @@ export type KeyClientFactory = (authApiUrl: string) => Pick<KeyRequestClient, 's
 /** The hosting manager's wording for a preview-only token on a PHP site. */
 const PHP_PREVIEW_PREFIX = 'This site runs PHP, so preview code can reach production';
 
+/** The exact 403 messages the hosting manager and the shared capability guard use when a token's grant does not cover a request. */
+const CAPABILITY_DENIALS = [
+    'capability keys cannot use this route',
+    'capability key does not allow this request',
+    'deploy token is not bound to this site',
+    'deploy token can only request deploy access scopes',
+    'deploy token cannot perform this action'
+];
+
+export function isCapabilityDenial(message: string): boolean {
+    return CAPABILITY_DENIALS.includes(message) || /^deploy token does not include the (production|preview) environment$/.test(message);
+}
+
 function requiresProduction(): CliError {
     return new CliError(
         'This site runs PHP, so preview code can reach production. A deploy token for this site must include production (use --production or --both).',
@@ -92,9 +105,11 @@ export async function diagnoseDeployToken(config: ResolvedConfig, error: unknown
         }
         throw error;
     }
-    if (error.status === 403) {
+    // The token is valid. Only an authorization denial is about what the token may do; any other 403 (the site is not
+    // active, a transfer is in progress, ...) is the manager's own reason and is shown unchanged.
+    if (error.status === 403 && isCapabilityDenial(error.message)) {
         throw new CliError(
-            'This deploy token is valid but is not allowed to do that (a different site or environment than it was created for).',
+            `This deploy token is valid but is not allowed to do that (${error.message}). It may be for a different site or environment.`,
             3,
             'deploy_token_wrong_environment'
         );

@@ -151,6 +151,7 @@ test('a refused deploy token says whether it expired, was revoked, or is just no
         assert.equal(await code(prepareDeployment('example.com', dir, {}, undefined, resolved)), 'deploy_token_revoked');
 
         server.state.whoamiStatus = 403;
+        server.state.whoamiError = 'capability key does not allow this request';
         server.state.self = { httpStatus: 200, body: { id: KEY_ID, expiresAt: new Date(Date.now() + 86_400_000).toISOString() } };
         assert.equal(await code(prepareDeployment('example.com', dir, {}, undefined, resolved)), 'deploy_token_wrong_environment');
     } finally {
@@ -175,6 +176,37 @@ test('a preview-only token on a PHP site is refused up front and when the manage
             'http_error'
         );
         assert.equal(await code(diagnoseDeployToken(resolved, refusal)), 'deploy_token_requires_production');
+    } finally {
+        await server.close();
+    }
+});
+
+test('after a valid token, only capability denials are rewritten; any other 403 shows the manager message', async () => {
+    const server = await startFakeKeyServer();
+    const resolved = await config({ ZYNOHOSTING_DEPLOY_TOKEN: SECRET }, server.url);
+    const denied = (message: string) =>
+        diagnoseDeployToken(resolved, new HttpError(message, 403, 'http_error')).then(
+            () => undefined,
+            (error: unknown) => error
+        );
+    try {
+        for (const message of [
+            'capability key does not allow this request',
+            'capability keys cannot use this route',
+            'deploy token is not bound to this site',
+            'deploy token does not include the production environment',
+            'deploy token does not include the preview environment',
+            'deploy token can only request deploy access scopes'
+        ]) {
+            const error = await denied(message);
+            assert(error instanceof CliError && error.code === 'deploy_token_wrong_environment', message);
+        }
+        for (const message of ['site is not active', 'site tenant transfer is in progress', 'site cluster is not active']) {
+            const error = await denied(message);
+            assert(error instanceof HttpError, message);
+            assert.equal(error.message, message, 'the manager message is surfaced unchanged');
+            assert.equal(error.status, 403);
+        }
     } finally {
         await server.close();
     }

@@ -178,3 +178,19 @@ test('an MCP process holding a deploy token can use only the deploy-token tools'
         await server.close();
     }
 });
+
+test('set_runtime with php and no version keeps the version of a site already running PHP', async () => {
+    const server = await startFakeKeyServer();
+    server.state.phpVersion = '8.2';
+    const mcp = await connect(server.url, { ZYNOHOSTING_ACCESS_TOKEN: HUMAN_JWT });
+    try {
+        const result = await call(mcp.client, 'set_runtime', { site: 'example.com', runtime: 'php' });
+        assert(!result.called.isError, result.text);
+        assert.equal(result.called.structuredContent?.phpVersion, '8.2');
+        assert.equal(result.called.structuredContent?.status, 'unchanged');
+        assert.equal(server.count('PATCH', `/v1/sites/${SITE_ID}`), 0);
+    } finally {
+        await mcp.close();
+        await server.close();
+    }
+});
