@@ -87,6 +87,21 @@ Errors: `not_found_handling_requires_static` (exit 2, SPA on a PHP site), `not_f
 (exit 5, older manager), `reconciliation_failed` and `reconciliation_pending` (exit 7; the latter
 includes the operation ID, and re-running the same command resumes waiting).
 
+## Deploy token output
+
+`deploy-tokens create --json` writes one event per line. The deploy token and the request code never appear in any event, error, or log.
+
+| Event                                                                                                              | Meaning                                                      |
+| ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------ |
+| `{"type":"prompt","site","environments","userCode","verificationUri","verificationUriComplete","expiresAt","destination"}` | The approval link and code. Show them to the person.         |
+| `{"type":"warning","code":"deploy_token_file_in_worktree","message"}`                                              | A `--file` destination is in a git worktree and not ignored. |
+| `{"type":"result","status":"pending",...}`                                                                         | `--no-wait` saved the request. Finish it with `--resume`.    |
+| `{"type":"result","status":"created","site","siteId","environments","keyId","preview","expiresAt","destination","warnings"}` | The token was approved and handed off.                       |
+
+`sites runtime --yes --json` emits `runtime_plan`, progress events, then `runtime_result`.
+
+With `CI=true` and `ZYNOHOSTING_API_KEY` set, commands also emit `{"type":"warning","code":"api_key_in_ci","message"}` (stderr text without `--json`). Use a deploy token instead.
+
 ## Exit codes
 
 | Exit code | Category                                                                                                          |
@@ -130,6 +145,9 @@ The remote mutation already succeeded. Do not blindly retry the deployment as th
 | `login_selection_required`     | Several logins and none is the default (exit 2). Pass `--tenant`.                                                                                                          |
 | `login_not_found`              | No saved login matches `--tenant` (exit 2). See `zynohosting logins`.                                                                                                      |
 | `login_ambiguous`              | Several logins match, for example two accounts in one tenant (exit 2). The message lists each login id with its account and tenant; pass `--account` or the full login id. |
+| `deploy_token_not_allowed`     | A deploy token cannot run this command (exit 3). See [Deploy tokens](../cli/deploy-tokens#errors).                                                                         |
+| `conflicting_credentials`      | A deploy token was set with an API key or access token (exit 2).                                                                                                           |
+| `unsupported_php_version`      | `sites runtime` named a PHP version the platform does not support (exit 2).                                                                                                |
 | `invalid_environment`          | Use `production`, `alpha`, or `dev`.                                                                                                                                       |
 | `confirmation_required`        | Use a terminal, `--dry-run`, or reviewed `--yes`.                                                                                                                          |
 | `precondition_failed`          | Refresh the file listing and review the new ETag/content.                                                                                                                  |

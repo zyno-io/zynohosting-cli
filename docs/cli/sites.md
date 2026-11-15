@@ -54,9 +54,30 @@ zynohosting sites set example.com --not-found 404-page --yes
 
 Confirmation works like `promote`: without a terminal pass `--yes` or `--dry-run`. The command always submits and waits for serving reconciliation, even when the value is unchanged, so re-running after `reconciliation_pending` is safe. `--json` emits `site_settings_plan`, progress events, then `site_settings_result` (`siteId`, `site`, `notFoundHandling`, `previous`, `changed`, `operationId`, `status`). Failures are `reconciliation_failed` or `reconciliation_pending` (exit 7, with the operation ID).
 
+## Set the runtime
+
+```bash
+zynohosting sites runtime example.com php --dry-run
+zynohosting sites runtime example.com php@8.3 --yes
+zynohosting sites runtime example.com static --yes
+```
+
+The runtime is `static` (PHP off), `php` (PHP on at the platform default version), or `php@<version>` such as `php@8.3`. The CLI checks the version against the versions the platform supports and fails with `unsupported_php_version` (exit 2) before it changes anything.
+
+| Option                | Meaning                                                  |
+| --------------------- | -------------------------------------------------------- |
+| `-y, --yes`           | Apply without prompting.                                 |
+| `--dry-run`           | Show the change without applying it.                     |
+| `--json`              | Newline-delimited JSON; requires `--yes` or `--dry-run`. |
+| `--timeout <seconds>` | Update and reconciliation timeout (default 300).         |
+
+The change applies to production and preview at once. Turning PHP on while not-found handling is `single-page-application` puts it back to `404-page`, and the plan says so. If the runtime is already what you asked for, nothing is sent. `--json` emits `runtime_plan`, progress events, then `runtime_result` (`siteId`, `site`, `phpVersion`, `previous`, `changed`, `operationId`, `status`). `status` is `succeeded` or `unchanged`.
+
+A [deploy token](./deploy-tokens) may run `sites runtime` and `sites set` when it includes production, because both change live traffic.
+
 ## Permission
 
-`sites list` and `sites get` require `hosting.sitesRead`. Tenant administrators receive the permission through their normal admin grant. `sites set` also requires `hosting.deploy`.
+`sites list` and `sites get` require `hosting.sitesRead`. Tenant administrators receive the permission through their normal admin grant. `sites set` and `sites runtime` also require `hosting.deploy`.
 
 ## Example JSON
 

@@ -178,9 +178,21 @@ zynohosting logout --all              # every login in every environment
 
 For a saved scoped token, logout calls `POST /identity/scoped-tokens/revoke` with the scoped access token. That revokes only its own grant and clears the server-side renewal token. Local config and credential-store entries are removed only after revocation succeeds or the access/renewal credential is already unusable. Tenant API keys are only removed locally. After a logout, token-file entries that no saved login uses and that are more than an hour old are removed too.
 
+## Deploy tokens
+
+CI uses a deploy token, never a tenant API key. A deploy token is tied to one site. It can deploy, promote, clear the cache, and change the runtime and not-found handling. It expires after 30 to 365 days and you can revoke it at any time.
+
+```bash
+zynohosting deploy-tokens create example.com --production --github acme/web
+```
+
+In CI, set `ZYNOHOSTING_DEPLOY_TOKEN` and run `zynohosting deploy ./dist --yes`. Any other command fails with `deploy_token_not_allowed`. Do not set it together with `ZYNOHOSTING_API_KEY` or `ZYNOHOSTING_ACCESS_TOKEN`: that is `conflicting_credentials`.
+
+If a tenant API key is used when `CI=true`, the CLI warns with `api_key_in_ci`. See [Deploy tokens](../cli/deploy-tokens) for recipes for GitHub Actions and GitLab CI.
+
 ## Tenant API keys
 
-Use an environment variable in CI:
+Use a tenant API key for your own scripts on your own machine. Do not use one in CI; use a [deploy token](../cli/deploy-tokens) instead.
 
 ```bash
 export ZYNOHOSTING_API_KEY='your-tenant-api-key'
@@ -205,7 +217,7 @@ The first complete credential found wins:
 2. environment variables;
 3. saved configuration.
 
-Supplying both an API key and a user access token at the same precedence level is rejected as invalid configuration.
+Supplying both an API key and a user access token at the same precedence level is rejected as invalid configuration. `ZYNOHOSTING_DEPLOY_TOKEN` with any other injected credential is `conflicting_credentials`.
 
 ## Saved configuration
 

@@ -488,6 +488,51 @@ storage quota. Database changes from preview can affect the live site. See
 
 `single-page-application` serves `/index.html` with status 200 for unknown paths unless they end in a listed asset extension (`.js`, `.css`, images, fonts, `.json`, `.txt`, ...), which still return 404, so client-side routers can handle deep links. The change applies immediately to production and preview and clears the CDN cache, so ask the user first, and prefer pre-rendering every route. Static sites only: it fails with `not_found_handling_requires_static` on a PHP site. Older managers that do not report `notFoundHandling` fail with `not_found_handling_unavailable`. Idempotent; waits for serving reconciliation and returns `siteId`, `site`, `notFoundHandling`, `previous`, `changed`, `operationId`, and `status`. There is no plan step. Permission: `hosting.deploy` (plus `hosting.sitesRead`). `get_site` reports the current `notFoundHandling`.
 
+### `set_runtime`
+
+```json
+{ "site": "example.com", "runtime": "php", "phpVersion": "8.3" }
+```
+
+| Argument     | Required | Meaning                                                              |
+| ------------ | -------- | -------------------------------------------------------------------- |
+| `site`       | yes      | Site UUID or hostname.                                               |
+| `runtime`    | yes      | `static` (PHP off) or `php` (PHP on).                                |
+| `phpVersion` | no       | A version such as `8.3`, only with `php`. Omit for the platform default. |
+
+Applies immediately to production and preview and clears the CDN cache, so ask the user first. Turning PHP on while not-found handling is `single-page-application` resets it to `404-page`. An unsupported version fails with `unsupported_php_version`. Idempotent; waits for serving reconciliation and returns `siteId`, `site`, `phpVersion`, `previous`, `changed`, `status`. Permission: `hosting.deploy`.
+
+## Deploy tokens
+
+These tools request and manage [deploy tokens](../cli/deploy-tokens) for CI. They never receive a token, so they cannot show one to the model. The user sees the token once, on the approval page, and puts it in their CI settings.
+
+### `request_deploy_token`
+
+```json
+{ "site": "example.com", "environments": ["production"], "lifetimeDays": 90, "ci": "github" }
+```
+
+| Argument       | Required | Meaning                                                         |
+| -------------- | -------- | --------------------------------------------------------------- |
+| `site`         | yes      | Site UUID or hostname the user named.                           |
+| `environments` | yes      | `production`, `preview`, or both.                               |
+| `lifetimeDays` | no       | `30`, `90`, `180`, or `365`. The user chooses when approving.   |
+| `ci`           | no       | `github`, `gitlab`, or `other`, so the page shows the right steps. |
+
+Returns `requestId`, an approval link, and a short code. Give the user the link and code. They check the code, site, and environments, choose a lifetime, and approve. The agent never opens or approves the link, and never asks the user to paste a token into the chat.
+
+### `deploy_token_status`
+
+Input: `requestId`. Reports `pending`, `approved` (with `keyId`, a short `preview`, and `expiresAt`), `denied`, or `expired`. It never includes the token.
+
+### `list_deploy_tokens`
+
+Input: optional `site`. Lists token ids, previews, environments, approver, expiry, and last use.
+
+### `revoke_deploy_token`
+
+Input: `keyId`. Revokes the token. CI that uses it stops deploying at once. Ask the user first.
+
 ## Complete downloads
 
 ### `plan_download`
@@ -528,7 +573,8 @@ Treat these tools as follows:
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------- |
 | Remote read     | `list_sites`, `get_site`, `list_forms`, `get_form_integration`, `describe_form`                                                            | Safe for routine discovery.                                |
 | Local write     | `get_file`, `apply_download`                                                                                                               | Confirm the destination and overwrite behavior.            |
-| Remote mutation | `create_basic_form`, `update_form`, `update_form_bot_protection`, `update_form_origins`, `set_not_found_handling`, file/deploy apply tools | Review form/site, fields, origins, paths, and plans.       |
+| Remote mutation | `create_basic_form`, `update_form`, `update_form_bot_protection`, `update_form_origins`, `set_not_found_handling`, `set_runtime`, `revoke_deploy_token`, file/deploy apply tools | Review form/site, fields, origins, paths, and plans.       |
+| Token request | `request_deploy_token`, `deploy_token_status`, `list_deploy_tokens` | The user approves in ZynoSuite. Never ask them to paste a token. |
 | Plan only       | `plan_deploy`, `plan_download`, `plan_promote`                                                                                             | Inspect the returned target, scope, and URLs before apply. |
 
 The MCP server enforces technical boundaries, but the calling agent or user remains responsible for choosing the intended site and reviewing destructive operations. Never infer a deployment domain. If an explicitly named domain is unavailable, do not substitute another site; offer `login` so the user can switch contexts. Likewise, never select `plan_promote` `force: true` unless the user explicitly requests that override.

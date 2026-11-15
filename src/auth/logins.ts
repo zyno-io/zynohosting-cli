@@ -67,6 +67,34 @@ export interface PendingDeviceLogin {
     deliveryUncertain?: boolean;
 }
 
+/** Where a deploy token will be delivered, as saved with a pending key request. */
+export type StoredHandoff =
+    | { kind: 'github'; repo: string; environment?: string; name: string }
+    | { kind: 'gitlab'; project: string; name: string }
+    | { kind: 'file'; path: string }
+    | { kind: 'manual' };
+
+/** A deploy-token request that was started with `--no-wait` and is waiting for `--resume`. */
+export interface PendingKeyRequest {
+    requestCode: string;
+    userCode: string;
+    verificationUri: string;
+    verificationUriComplete?: string;
+    /** Epoch milliseconds. */
+    expiresAt: number;
+    /** Seconds between polls. */
+    interval: number;
+    authApiUrl: string;
+    delivery: 'poll' | 'display';
+    siteId: string;
+    siteName: string;
+    environments: Array<'production' | 'preview'>;
+    handoff: StoredHandoff;
+    createdAt?: number;
+    /** A poll failed in transit, so the key may already have been handed over. */
+    deliveryUncertain?: boolean;
+}
+
 export interface StoredConfig {
     apiUrl?: string;
     suiteApiUrl?: string;
@@ -75,6 +103,7 @@ export interface StoredConfig {
     logins?: Record<string, StoredLogin>;
     activeLogin?: string;
     pendingDeviceLogin?: PendingDeviceLogin;
+    pendingKeyRequest?: PendingKeyRequest;
     /** Logins displaced by a re-keying collision, kept until their grant is revoked and renewal token removed. */
     retiredLogins?: StoredLogin[];
     /**
@@ -166,6 +195,60 @@ function parsePending(value: unknown): PendingDeviceLogin | undefined {
     };
 }
 
+function parseHandoff(value: unknown): StoredHandoff | undefined {
+    if (!isObject(value)) return undefined;
+    if (value.kind === 'manual') return { kind: 'manual' };
+    if (value.kind === 'file') return text(value.path, 4096) ? { kind: 'file', path: text(value.path, 4096)! } : undefined;
+    const name = text(value.name, 100);
+    if (value.kind === 'github') {
+        const repo = text(value.repo, 200);
+        return repo && name
+            ? { kind: 'github', repo, name, ...(text(value.environment, 255) ? { environment: text(value.environment, 255)! } : {}) }
+            : undefined;
+    }
+    if (value.kind === 'gitlab') {
+        const project = text(value.project, 500);
+        return project && name ? { kind: 'gitlab', project, name } : undefined;
+    }
+    return undefined;
+}
+
+function parsePendingKeyRequest(value: unknown): PendingKeyRequest | undefined {
+    if (!isObject(value)) return undefined;
+    const requestCode = text(value.requestCode, 200);
+    const userCode = text(value.userCode, 64);
+    const verificationUri = text(value.verificationUri);
+    const authApiUrl = text(value.authApiUrl);
+    const siteId = text(value.siteId, 100);
+    const siteName = text(value.siteName, 255);
+    const expiresAt = number(value.expiresAt);
+    const interval = number(value.interval);
+    const handoff = parseHandoff(value.handoff);
+    const environments = Array.isArray(value.environments)
+        ? value.environments.filter((item): item is 'production' | 'preview' => item === 'production' || item === 'preview')
+        : [];
+    if (!requestCode || !userCode || !verificationUri || !authApiUrl || !siteId || !siteName || expiresAt === undefined || interval === undefined) {
+        return undefined;
+    }
+    if (!handoff || !environments.length || (value.delivery !== 'poll' && value.delivery !== 'display')) return undefined;
+    return {
+        requestCode,
+        userCode,
+        verificationUri,
+        ...(text(value.verificationUriComplete) ? { verificationUriComplete: text(value.verificationUriComplete)! } : {}),
+        expiresAt,
+        interval,
+        authApiUrl,
+        delivery: value.delivery,
+        siteId,
+        siteName,
+        environments,
+        handoff,
+        ...(value.deliveryUncertain === true ? { deliveryUncertain: true } : {}),
+        ...(number(value.createdAt) !== undefined ? { createdAt: number(value.createdAt)! } : {})
+    };
+}
+
 /** Reads one profile object from disk, accepting both the multi-login format and the older single-credential one. */
 export function parseStoredConfig(object: Record<string, unknown>): StoredConfig {
     const logins: Record<string, StoredLogin> = {};
@@ -176,6 +259,7 @@ export function parseStoredConfig(object: Record<string, unknown>): StoredConfig
         }
     }
     const pending = parsePending(object.pendingDeviceLogin);
+    const pendingKey = parsePendingKeyRequest(object.pendingKeyRequest);
     return normalizeStoredConfig({
         ...(typeof object.apiUrl === 'string' ? { apiUrl: object.apiUrl } : {}),
         ...(typeof object.suiteApiUrl === 'string' ? { suiteApiUrl: object.suiteApiUrl } : {}),
@@ -184,6 +268,7 @@ export function parseStoredConfig(object: Record<string, unknown>): StoredConfig
         ...(Object.keys(logins).length ? { logins } : {}),
         ...(typeof object.activeLogin === 'string' ? { activeLogin: object.activeLogin } : {}),
         ...(pending ? { pendingDeviceLogin: pending } : {}),
+        ...(pendingKey ? { pendingKeyRequest: pendingKey } : {}),
         ...(Array.isArray(object.retiredLogins)
             ? (() => {
                   const retired = object.retiredLogins

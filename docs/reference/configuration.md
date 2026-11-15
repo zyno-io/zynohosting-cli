@@ -26,7 +26,8 @@ Form tools resolve the ZynoSuite API URL from `--suite-api-url` or `ZYNO_SUITE_A
 
 | Variable                       | Sensitive | Purpose                                                                                                                        |
 | ------------------------------ | --------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `ZYNOHOSTING_API_KEY`          | yes       | Tenant API key for CLI, CI, or MCP.                                                                                            |
+| `ZYNOHOSTING_DEPLOY_TOKEN`     | yes       | Deploy token for CI: deploys one site and nothing else. Cannot be combined with an API key or access token.                    |
+| `ZYNOHOSTING_API_KEY`          | yes       | Tenant API key for your own scripts. Not for CI: CI uses a deploy token.                                                       |
 | `ZYNOHOSTING_ACCESS_TOKEN`     | yes       | Advanced user bearer-token injection.                                                                                          |
 | `ZYNOHOSTING_TENANT_ID`        | no        | Optional tenant metadata for an injected scoped token.                                                                         |
 | `ZYNOHOSTING_TOKEN_EXPIRES_AT` | no        | Optional bearer expiry as epoch milliseconds.                                                                                  |
@@ -158,9 +159,9 @@ Use `ZYNOHOSTING_CONFIG` to isolate credentials by environment or automation con
 
 For CI and unattended MCP processes:
 
-1. store a tenant API key in the platform secret manager;
-2. inject it as `ZYNOHOSTING_API_KEY`;
+1. create a [deploy token](../cli/deploy-tokens) for the one site (`zynohosting deploy-tokens create`) and keep it in the platform secret manager;
+2. inject it as `ZYNOHOSTING_DEPLOY_TOKEN`; do not use a tenant API key in CI;
 3. set `ZYNOHOSTING_ENVIRONMENT` explicitly;
 4. grant only the permissions required by the workflow;
-5. avoid `--api-key` because command-line arguments may be observable;
+5. never pass a credential as a command-line argument, because arguments may be observable;
 6. use `--json` and check the process exit code.

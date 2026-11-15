@@ -5,6 +5,7 @@ import type { HostingEnvironment } from './config.js';
 
 import { configureUserAgent } from './api/user-agent.js';
 import { deploySite, DeploySiteOptions } from './commands/deploy-site.js';
+import { createDeployToken, DeployTokenCreateOptions, listDeployTokens, revokeDeployToken } from './commands/deploy-tokens.js';
 import { downloadSite, DownloadSiteOptions } from './commands/download-site.js';
 import { deleteFile, getFile, listFiles, putFile } from './commands/files.js';
 import { runFormCommand, runFormsGuide } from './commands/forms.js';
@@ -12,7 +13,7 @@ import { login, LoginOptions } from './commands/login.js';
 import { listLogins, useLogin, whoami } from './commands/logins.js';
 import { logout, LogoutOptions } from './commands/logout.js';
 import { promoteSite, PromoteSiteOptions } from './commands/promote-site.js';
-import { setSiteSettings, SetSiteSettingsOptions } from './commands/site-settings.js';
+import { setRuntime, SetRuntimeOptions, setSiteSettings, SetSiteSettingsOptions } from './commands/site-settings.js';
 import { getSite, listSites } from './commands/sites.js';
 import { CliError } from './errors.js';
 import { FORM_OPERATIONS } from './mcp/forms.js';
@@ -41,6 +42,8 @@ export function createProgram(): Command {
         )
         .option('--account <email|id>', 'narrow --tenant when several accounts are signed in to one tenant (or set ZYNOHOSTING_ACCOUNT)')
         .option('--json', 'emit machine-readable JSON');
+
+    program.hook('preAction', (_program, action) => warnApiKeyInCi(action));
 
     program
         .command('login')
@@ -203,6 +206,86 @@ export function createProgram(): Command {
             await setSiteSettings(siteRef, { ...commandContext(program, commandOptions), ...commandOptions, timeoutSeconds: commandOptions.timeout });
         });
 
+    sites
+        .command('runtime')
+        .description('turn PHP on (php or php@8.3) or off (static) for a site')
+        .argument('<site>', 'site ID or hostname')
+        .argument('<runtime>', 'static, php (the default version), or php@<version>')
+        .addOption(environmentOption())
+        .option('-y, --yes', 'apply without prompting after displaying the change')
+        .option('--dry-run', 'show the change without applying it')
+        .option('--json', 'emit newline-delimited JSON output')
+        .addOption(new Option('--timeout <seconds>', 'update and reconciliation timeout').argParser(positiveInteger).default(300))
+        .action(async (siteRef: string, runtime: string, commandOptions: SetRuntimeOptions & { timeout: number }) => {
+            await setRuntime(siteRef, runtime, {
+                ...commandContext(program, commandOptions),
+                ...commandOptions,
+                timeoutSeconds: commandOptions.timeout
+            });
+        });
+
+    const deployTokens = program
+        .command('deploy-tokens')
+        .description('create, list, and revoke deploy tokens: keys for CI that can deploy one site and do nothing else');
+    deployTokens
+        .command('create')
+        .description('request a deploy token for one site, approve it in ZynoSuite, and save it where CI can read it')
+        .argument('[site]', 'site ID or hostname')
+        .option('--production', 'allow deploying to production')
+        .option('--preview', 'allow deploying to preview')
+        .option('--both', 'allow production and preview (needed to promote)')
+        .option('--lifetime <30d|90d|180d|365d>', 'suggest how long the token lasts; the approver decides (default 90d)')
+        .option('--github <owner/repo>', 'save it as a GitHub Actions secret with `gh`')
+        .option('--github-environment <name>', 'with --github: save it as an environment secret')
+        .option('--gitlab <group/project>', 'save it as a masked GitLab CI/CD variable with `glab`')
+        .option('--file <path>', 'save it to a new file (mode 0600); an existing file is never overwritten')
+        .option('--name <name>', 'secret or variable name with --github or --gitlab (default ZYNOHOSTING_DEPLOY_TOKEN)')
+        .option('--no-wait', 'with the approval page only: print the link and code, save the request, and exit; finish it with --resume')
+        .option('--resume', 'continue the request saved with --no-wait')
+        .option('--no-open', 'print the approval link instead of opening a browser')
+        .addOption(environmentOption())
+        .option('--json', 'emit machine-readable JSON events on stdout')
+        .addOption(new Option('--timeout <seconds>', 'how long to wait for approval (default: until the code expires)').argParser(positiveInteger))
+        .addHelpText(
+            'after',
+            [
+                '',
+                'With --github, --gitlab, or --file the token goes straight to that place and is never printed.',
+                'With none of them, you copy it once from the approval page.',
+                'Environments are required: --production, --preview, or --both.'
+            ].join('\n')
+        )
+        .action(async (siteRef: string | undefined, commandOptions: DeployTokenCreateOptions & { wait?: boolean; timeout?: number }) => {
+            const context = commandContext(program, commandOptions);
+            const { wait, timeout, ...rest } = commandOptions;
+            await createDeployToken(siteRef, {
+                ...rest,
+                ...context,
+                ...(wait === false ? { noWait: true } : {}),
+                ...(timeout === undefined ? {} : { timeoutSeconds: timeout }),
+                handleSigint: true
+            });
+        });
+    deployTokens
+        .command('list')
+        .description('list deploy tokens, for one site or for all of them')
+        .argument('[site]', 'site ID or hostname')
+        .addOption(environmentOption())
+        .option('--json', 'emit JSON')
+        .action(async (siteRef: string | undefined, commandOptions: { json?: boolean; environment?: HostingEnvironment }) => {
+            await listDeployTokens(siteRef, commandContext(program, commandOptions));
+        });
+    deployTokens
+        .command('revoke')
+        .description('revoke a deploy token by id, or the one in ZYNOHOSTING_DEPLOY_TOKEN with --self')
+        .argument('[keyId]', 'key id from `deploy-tokens list`')
+        .option('--self', 'revoke the deploy token in ZYNOHOSTING_DEPLOY_TOKEN (the only form that token may run)')
+        .addOption(environmentOption())
+        .option('--json', 'emit JSON')
+        .action(async (keyId: string | undefined, commandOptions: { self?: boolean; json?: boolean; environment?: HostingEnvironment }) => {
+            await revokeDeployToken(keyId, { ...commandContext(program, commandOptions), ...(commandOptions.self ? { self: true } : {}) });
+        });
+
     const files = program.command('files').description('list, download, upload, and delete individual files');
     files
         .command('list')
@@ -286,8 +369,8 @@ export function createProgram(): Command {
         .command('deploy')
         .alias('deploy-site')
         .description('plan and synchronize a local directory to production or preview')
-        .argument('<site>', 'site ID or hostname')
-        .argument('[directory]', 'local directory', '.')
+        .argument('[site]', 'site ID or hostname (optional with a deploy token, which knows its site)')
+        .argument('[directory]', 'local directory (default: the current directory)')
         .addOption(environmentOption())
         .option('-y, --yes', 'apply without prompting after displaying the plan')
         .option('--dry-run', 'display the exact plan without applying it')
@@ -298,7 +381,7 @@ export function createProgram(): Command {
         .option('--ignore-file <path>', 'use an alternate ignore file instead of .zynohostingignore')
         .addOption(new Option('--timeout <seconds>', 'inventory/hash request timeout').argParser(positiveInteger).default(600))
         .addOption(new Option('--hash-concurrency <count>', 'number of local files hashed concurrently').argParser(positiveInteger).default(8))
-        .action(async (siteRef: string, directory: string, commandOptions: DeploySiteOptions & { timeout: number }) => {
+        .action(async (siteRef: string | undefined, directory: string | undefined, commandOptions: DeploySiteOptions & { timeout: number }) => {
             await deploySite(siteRef, directory, {
                 ...commandOptions,
                 ...commandContext(program, commandOptions),
@@ -404,6 +487,24 @@ export function createProgram(): Command {
         .action(() => runFormsGuide());
 
     return program;
+}
+
+const API_KEY_IN_CI_EXEMPT = new Set(['login', 'logout', 'logins', 'use', 'mcp', 'install', 'guide']);
+
+/** CI should hold a deploy token, which can deploy one site and nothing else, not a tenant API key. */
+function warnApiKeyInCi(action: Command): void {
+    const env = process.env;
+    if (!env.ZYNOHOSTING_API_KEY || env.ZYNOHOSTING_DEPLOY_TOKEN || !['true', '1'].includes((env.CI ?? '').toLowerCase())) return;
+    let command: Command | null = action;
+    while (command) {
+        if (API_KEY_IN_CI_EXEMPT.has(command.name()) || command.name() === 'forms') return;
+        command = command.parent;
+    }
+    const message =
+        'A tenant API key is being used in CI. A leaked API key can reach the whole tenant. Use a deploy token instead (zynohosting deploy-tokens create <site> --production --github owner/repo).';
+    if (action.optsWithGlobals<{ json?: boolean }>().json)
+        process.stdout.write(`${JSON.stringify({ type: 'warning', code: 'api_key_in_ci', message })}\n`);
+    else process.stderr.write(`Warning: ${message}\n`);
 }
 
 function installAgentName(agent: McpInstallAgent): string {

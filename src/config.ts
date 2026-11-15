@@ -20,7 +20,7 @@ import { createRenewalTokenStore, type RenewalTokenStore } from './auth/renewal-
 import { CliError } from './errors.js';
 
 export { hasStoredCredential };
-export type { PendingDeviceLogin, StoredConfig, StoredLogin } from './auth/logins.js';
+export type { PendingDeviceLogin, PendingKeyRequest, StoredConfig, StoredHandoff, StoredLogin } from './auth/logins.js';
 
 export interface ApiKeyCredential {
     type: 'api-key';
@@ -38,15 +38,25 @@ export interface BearerCredential {
     deniedPermissionKeys?: string[];
 }
 
-export type ManagerCredential = ApiKeyCredential | BearerCredential;
+/** A capability key (`zck_...`) that can only deploy one site. Never saved; it comes from ZYNOHOSTING_DEPLOY_TOKEN. */
+export interface DeployTokenCredential {
+    type: 'deploy-token';
+    token: string;
+}
+
+export type ManagerCredential = ApiKeyCredential | BearerCredential | DeployTokenCredential;
+
+export const DEPLOY_TOKEN_PATTERN = /^zck_[A-Za-z0-9_-]{43}$/;
 export type HostingEnvironment = 'production' | 'alpha' | 'dev';
 
-export interface ConfigOverrides extends Omit<StoredConfig, 'logins' | 'activeLogin' | 'pendingDeviceLogin'> {
+export interface ConfigOverrides extends Omit<StoredConfig, 'logins' | 'activeLogin' | 'pendingDeviceLogin' | 'pendingKeyRequest'> {
     environment?: HostingEnvironment;
     /** Login id, tenant id, or tenant name of the saved login to use for this call only, instead of the active one. */
     tenant?: string;
     /** Account email or id that narrows `tenant` when several accounts are signed in to the same tenant. */
     account?: string;
+    /** Set by the few commands a deploy token may run. Any other command that resolves to a deploy token is refused. */
+    deployTokenAllowed?: boolean;
 }
 
 /** The saved login a resolved credential came from. */
@@ -413,7 +423,15 @@ async function resolveConfigWithSource(
               },
               'environment'
           );
-    const injected = overrideCredential ?? environmentCredential;
+    const deployToken = savedOnly ? undefined : deployTokenFromEnvironment(env, overrides);
+    const injected = deployToken ?? overrideCredential ?? environmentCredential;
+    if (deployToken && overrides.deployTokenAllowed !== true) {
+        throw new CliError(
+            'ZYNOHOSTING_DEPLOY_TOKEN is set, and a deploy token can only run deploy, promote, whoami, sites set, sites runtime, and deploy-tokens revoke --self. Unset it to run this command with a saved login.',
+            3,
+            'deploy_token_not_allowed'
+        );
+    }
     if (
         injected &&
         !forced &&
@@ -589,6 +607,34 @@ async function writeConfigFile(config: ConfigFile, path: string): Promise<void> 
         await rm(temporary, { force: true }).catch(() => {});
         throw error;
     }
+}
+
+/** Reads ZYNOHOSTING_DEPLOY_TOKEN. The value is never echoed in an error. */
+function deployTokenFromEnvironment(env: NodeJS.ProcessEnv, overrides: ConfigOverrides): DeployTokenCredential | undefined {
+    const token = env.ZYNOHOSTING_DEPLOY_TOKEN?.trim();
+    if (!token) return undefined;
+    if (overrides.apiKey || overrides.accessToken || env.ZYNOHOSTING_API_KEY || env.ZYNOHOSTING_ACCESS_TOKEN) {
+        throw new CliError(
+            'ZYNOHOSTING_DEPLOY_TOKEN cannot be combined with an API key or access token (ZYNOHOSTING_API_KEY, ZYNOHOSTING_ACCESS_TOKEN, --api-key). Remove all but one.',
+            2,
+            'conflicting_credentials'
+        );
+    }
+    if (token.startsWith('zak_')) {
+        throw new CliError(
+            'ZYNOHOSTING_DEPLOY_TOKEN holds a tenant API key, not a deploy token. Create a deploy token with `zynohosting deploy-tokens create`.',
+            2,
+            'invalid_deploy_token'
+        );
+    }
+    if (!DEPLOY_TOKEN_PATTERN.test(token)) {
+        throw new CliError(
+            'ZYNOHOSTING_DEPLOY_TOKEN is not a valid deploy token (expected zck_ followed by 43 characters).',
+            2,
+            'invalid_deploy_token'
+        );
+    }
+    return { type: 'deploy-token', token };
 }
 
 function injectedCredential(

@@ -40,13 +40,13 @@ Interactive users can sign in through ZynoSuite:
 zynohosting login --permission hosting.sitesRead
 ```
 
-CI jobs should inject a tenant API key rather than save a browser session:
+CI jobs should use a deploy token, which can deploy one site and nothing else. Create it from your login:
 
 ```bash
-export ZYNOHOSTING_API_KEY='your-tenant-api-key'
+zynohosting deploy-tokens create example.com --production --github acme/web
 ```
 
-See [Authentication](./authentication) for credential precedence, environments, and non-interactive setup.
+See [Deploy tokens](../cli/deploy-tokens) for CI recipes, and [Authentication](./authentication) for credential precedence and environments.
 
 ## Confirm site access
 

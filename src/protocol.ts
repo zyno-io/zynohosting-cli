@@ -290,6 +290,42 @@ export function parseSiteMutationAccepted(value: unknown, label = 'site update')
     return { result: parseAutomationSite(object.result), operation: parseReconciliation(object.operation) };
 }
 
+/** What `GET /v1/deploy-token` says about the token making the call. */
+export interface DeployTokenInfo {
+    site: AutomationSite;
+    environments: DeploymentTarget[];
+    /** ISO date. */
+    expiresAt: string;
+}
+
+/**
+ * The whoami response carries the site, its hostnames, the allowed environments, and the expiry. The site may be nested
+ * under `site` or sit at the top level next to `environments`; both are accepted.
+ */
+export function parseDeployTokenInfo(value: unknown): DeployTokenInfo {
+    const object = record(value, 'deploy token');
+    const site = parseAutomationSite(object.site === undefined ? object : object.site);
+    if (object.site !== undefined && site.hostnames === undefined && object.hostnames !== undefined) {
+        site.hostnames = parseAutomationSite({ ...(object.site as Record<string, unknown>), hostnames: object.hostnames }).hostnames!;
+    }
+    const environments = array(object.environments, 'environments').map(deploymentTarget);
+    if (!environments.length) throw new CliError('Manager returned a deploy token with no environments', 5, 'invalid_manager_response');
+    return { site, environments: [...new Set(environments)], expiresAt: isoDate(object.expiresAt, 'expiresAt') };
+}
+
+export interface PhpVersions {
+    versions: string[];
+    default: string;
+}
+
+export function parsePhpVersions(value: unknown): PhpVersions {
+    const object = record(value, 'PHP versions');
+    const versions = array(object.versions, 'versions').map((version, index) => string(version, `versions[${index}]`));
+    const fallback = string(object.default, 'default');
+    if (!versions.includes(fallback)) throw new CliError('Manager returned a default PHP version it does not support', 5, 'invalid_manager_response');
+    return { versions, default: fallback };
+}
+
 export function parsePromotionAccepted(value: unknown): PromotionAccepted {
     return parseSiteMutationAccepted(value, 'promotion');
 }

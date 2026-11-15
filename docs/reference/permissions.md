@@ -10,7 +10,7 @@ ZynoHosting and ZynoForms automation use tenant permissions at their APIs. Hosti
 | `hosting.filesRead`         | List files and download individual files.                                             |
 | `hosting.filesWrite`        | Create and replace individual files.                                                  |
 | `hosting.filesDelete`       | Delete individual files.                                                              |
-| `hosting.deploy`            | Deploy production/preview content, promote preview, and change missing-page handling. |
+| `hosting.deploy`            | Deploy production/preview content, promote preview, change missing-page handling and runtime, and approve or revoke deploy tokens. |
 | `hosting.download`          | Download the deployable snapshot.                                                     |
 | `hosting.downloadSensitive` | Include protected and user-generated content in a snapshot.                           |
 | `hosting.analyticsRead`     | Read hosting analytics.                                                               |
@@ -25,6 +25,21 @@ Browser login can issue a token only for permissions currently resolved for that
 Never request `msp.login`, `msp.impersonate`, `core.changePassword`, or `core.manageFingerprints`. Those capabilities cannot be delegated to scoped CLI tokens.
 
 Listing forms, describing their structure, and reading their integration details require an authenticated tenant identity. Authoring a form — creating or editing one — also requires a user identity: the Suite stamps every form mutation with the account that made it, so a workstation-only credential is refused. Expanding form origins from a ZynoHosting site additionally requires `hosting.sitesRead` because the tool reads that site’s primary, alias, vanity, and preview hostnames.
+
+## Deploy tokens
+
+A [deploy token](../cli/deploy-tokens) is not a tenant permission. It is a key tied to one site and to the environments you choose. It carries no tenant permissions at all.
+
+| Call                                            | Allowed                                                    |
+| ----------------------------------------------- | ---------------------------------------------------------- |
+| Deploy access sessions (`deploy:*` scopes only) | Environments the token includes.                           |
+| Promote preview to production                   | Only if the token includes both environments.              |
+| Clear the site cache, read its own site         | Yes.                                                       |
+| Runtime (PHP on or off) and not-found handling  | Only if the token includes production.                     |
+| Whoami, status of its own reconciliations       | Yes.                                                       |
+| Everything else                                 | No: other sites, files, downloads, forms, analytics.       |
+
+Whoever approves a token needs `hosting.deploy`. Listing tokens needs `hosting.sitesRead`. Revoking one needs `hosting.deploy`. The token's own approval does not depend on the approver staying in the tenant.
 
 ## Cluster capability scopes
 
@@ -64,7 +79,8 @@ Grant:
 
 Add `hosting.filesRead` only if the same workflow must inspect or download individual files.
 
-This same permission set covers `deploy --preview`, `promote`, `sites set`, and their MCP tools.
+This same permission set covers `deploy --preview`, `promote`, `sites set`, `sites runtime`, and their MCP tools.
+For CI, use a [deploy token](../cli/deploy-tokens) instead of a login or a tenant API key.
 No new permission is introduced for preview or promotion.
 
 ### Backup automation
