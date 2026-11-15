@@ -10,7 +10,7 @@ A deploy token is tied to one site and to the environments you choose: productio
 
 It can:
 
-- deploy to the environments it includes;
+- deploy to the environments it includes (a token for a PHP site must include production);
 - promote preview to production, if it includes both;
 - clear the site cache;
 - turn PHP on or off and change the PHP version, if it includes production;
@@ -20,6 +20,12 @@ It can:
 It cannot list other sites, read or write single files, download the site, edit forms, or create other tokens. Every token has an expiry: 30, 90 (the default), 180, or 365 days. There are no tokens that never expire.
 
 A deploy that is already running when you revoke the token can finish. That takes up to 20 minutes.
+
+## PHP sites need production
+
+On a site that runs PHP, code deployed to preview can reach production. So a deploy token for a PHP site must include production: use `--production` or `--both`. A preview-only token is refused for a PHP site.
+
+`deploy-tokens create --preview` fails at once, before anything is requested, with `deploy_token_requires_production`. If PHP is turned on after a preview-only token was approved, deploys with that token fail with the same code. Static sites can use preview-only tokens.
 
 ## Create a token
 
@@ -37,12 +43,12 @@ You must say which environments the token may use: `--production`, `--preview`, 
 
 ### Where the token goes
 
-| Option                        | Result                                                                         |
-| ----------------------------- | ------------------------------------------------------------------------------ |
-| `--github <owner/repo>`       | A GitHub Actions secret, set with `gh`. Add `--github-environment <name>` for an environment secret. |
-| `--gitlab <group/project>`    | A masked GitLab CI/CD variable, set with `glab`.                               |
-| `--file <path>`               | A new file with mode `0600`. An existing file is never overwritten.            |
-| none of these                 | You copy the token once from the approval page.                                |
+| Option                     | Result                                                                                               |
+| -------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `--github <owner/repo>`    | A GitHub Actions secret, set with `gh`. Add `--github-environment <name>` for an environment secret. |
+| `--gitlab <group/project>` | A masked GitLab CI/CD variable, set with `glab`.                                                     |
+| `--file <path>`            | A new file with mode `0600`. An existing file is never overwritten.                                  |
+| none of these              | You copy the token once from the approval page.                                                      |
 
 `--name <name>` changes the secret or variable name. The default is `ZYNOHOSTING_DEPLOY_TOKEN`.
 
@@ -56,14 +62,14 @@ A file inside a git repository that is not ignored gets a warning. Add it to `.g
 
 ### Other options
 
-| Option                      | Purpose                                                                          |
-| --------------------------- | -------------------------------------------------------------------------------- |
-| `--lifetime <30d\|90d\|180d\|365d>` | Suggest a lifetime. The approver chooses.                                |
-| `--no-wait`                 | With no destination: print the link and code, save the request, and exit.        |
-| `--resume`                  | Finish a request saved with `--no-wait`.                                         |
-| `--no-open`                 | Print the link instead of opening a browser.                                     |
-| `--timeout <seconds>`       | How long to wait for approval. The default is until the code expires.            |
-| `--json`                    | Newline-delimited JSON events. The token is never in them.                       |
+| Option                              | Purpose                                                                   |
+| ----------------------------------- | ------------------------------------------------------------------------- |
+| `--lifetime <30d\|90d\|180d\|365d>` | Suggest a lifetime. The approver chooses.                                 |
+| `--no-wait`                         | With no destination: print the link and code, save the request, and exit. |
+| `--resume`                          | Finish a request saved with `--no-wait`.                                  |
+| `--no-open`                         | Print the link instead of opening a browser.                              |
+| `--timeout <seconds>`               | How long to wait for approval. The default is until the code expires.     |
+| `--json`                            | Newline-delimited JSON events. The token is never in them.                |
 
 Where no browser can open, the CLI prints the link and code. Open it on any device.
 
@@ -174,23 +180,24 @@ To limit the variable to protected branches, mark it protected in the project's 
 
 ## Errors
 
-| Code                            | Meaning                                                                        |
-| ------------------------------- | ------------------------------------------------------------------------------ |
-| `deploy_token_not_allowed`      | A deploy token cannot run this command (exit 3).                               |
-| `conflicting_credentials`       | A deploy token was set together with an API key or access token (exit 2).      |
-| `invalid_deploy_token`          | The value is not a deploy token. A tenant API key gets its own message (exit 2). |
-| `deploy_token_wrong_site`       | The site is not the one the token was created for (exit 3).                    |
-| `deploy_token_wrong_environment`| The token does not include that environment (exit 3).                          |
-| `deploy_token_expired`          | The token expired. Create a new one (exit 3).                                  |
-| `deploy_token_revoked`          | The token was revoked or is no longer valid (exit 3).                          |
-| `ambiguous_deploy_argument`     | One argument is both the site and a directory. Give both (exit 2).             |
-| `handoff_unavailable`           | `gh`, `glab`, or the file path cannot take the token. Nothing was requested (exit 2). |
-| `handoff_failed`                | Saving the token failed. The new token was revoked if possible (exit 7).       |
-| `key_request_denied`            | The approver denied the request (exit 3).                                      |
-| `key_request_expired`           | The approval code ran out. Start again (exit 3).                               |
-| `key_request_pending`           | `--resume` timed out with nobody approving (exit 3).                           |
-| `no_pending_key_request`        | `--resume` with nothing saved (exit 2).                                        |
-| `key_credential_lost`           | The connection dropped as the token was handed over. List and revoke, then create again (exit 3). |
+| Code                               | Meaning                                                                                                |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `deploy_token_not_allowed`         | A deploy token cannot run this command (exit 3).                                                       |
+| `conflicting_credentials`          | A deploy token was set together with an API key or access token (exit 2).                              |
+| `invalid_deploy_token`             | The value is not a deploy token. A tenant API key gets its own message (exit 2).                       |
+| `deploy_token_wrong_site`          | The site is not the one the token was created for (exit 3).                                            |
+| `deploy_token_wrong_environment`   | The token does not include that environment (exit 3).                                                  |
+| `deploy_token_requires_production` | The site runs PHP, so its token must include production (exit 2 when creating, exit 3 when deploying). |
+| `deploy_token_expired`             | The token expired. Create a new one (exit 3).                                                          |
+| `deploy_token_revoked`             | The token was revoked or is no longer valid (exit 3).                                                  |
+| `ambiguous_deploy_argument`        | One argument is both the site and a directory. Give both (exit 2).                                     |
+| `handoff_unavailable`              | `gh`, `glab`, or the file path cannot take the token. Nothing was requested (exit 2).                  |
+| `handoff_failed`                   | Saving the token failed. The new token was revoked if possible (exit 7).                               |
+| `key_request_denied`               | The approver denied the request (exit 3).                                                              |
+| `key_request_expired`              | The approval code ran out. Start again (exit 3).                                                       |
+| `key_request_pending`              | `--resume` timed out with nobody approving (exit 3).                                                   |
+| `no_pending_key_request`           | `--resume` with nothing saved (exit 2).                                                                |
+| `key_credential_lost`              | The connection dropped as the token was handed over. List and revoke, then create again (exit 3).      |
 
 ## Permissions
 

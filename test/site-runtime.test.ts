@@ -108,3 +108,16 @@ test('a deploy token may change runtime and not-found handling only when it incl
         await server.close();
     }
 });
+
+test('a platform with no default PHP version cannot turn PHP on without a version', async () => {
+    const server = await startFakeKeyServer();
+    try {
+        server.state.phpDefault = null;
+        const config = await resolveConfig({ apiUrl: server.url }, env);
+        assert.equal(await code(prepareRuntime('example.com', parseRuntimeChoice('php'), {}, config)), 'php_unavailable');
+        assert.equal((await prepareRuntime('example.com', parseRuntimeChoice('php@8.3'), {}, config)).phpVersion, '8.3');
+        assert.equal(server.count('PATCH', `/v1/sites/${SITE_ID}`), 0);
+    } finally {
+        await server.close();
+    }
+});

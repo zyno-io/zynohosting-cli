@@ -91,11 +91,11 @@ includes the operation ID, and re-running the same command resumes waiting).
 
 `deploy-tokens create --json` writes one event per line. The deploy token and the request code never appear in any event, error, or log.
 
-| Event                                                                                                              | Meaning                                                      |
-| ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------ |
-| `{"type":"prompt","site","environments","userCode","verificationUri","verificationUriComplete","expiresAt","destination"}` | The approval link and code. Show them to the person.         |
-| `{"type":"warning","code":"deploy_token_file_in_worktree","message"}`                                              | A `--file` destination is in a git worktree and not ignored. |
-| `{"type":"result","status":"pending",...}`                                                                         | `--no-wait` saved the request. Finish it with `--resume`.    |
+| Event                                                                                                                        | Meaning                                                      |
+| ---------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| `{"type":"prompt","site","environments","userCode","verificationUri","verificationUriComplete","expiresAt","destination"}`   | The approval link and code. Show them to the person.         |
+| `{"type":"warning","code":"deploy_token_file_in_worktree","message"}`                                                        | A `--file` destination is in a git worktree and not ignored. |
+| `{"type":"result","status":"pending",...}`                                                                                   | `--no-wait` saved the request. Finish it with `--resume`.    |
 | `{"type":"result","status":"created","site","siteId","environments","keyId","preview","expiresAt","destination","warnings"}` | The token was approved and handed off.                       |
 
 `sites runtime --yes --json` emits `runtime_plan`, progress events, then `runtime_result`.
@@ -122,39 +122,41 @@ The remote mutation already succeeded. Do not blindly retry the deployment as th
 
 ## Common error codes
 
-| Code                           | Typical resolution                                                                                                                                                         |
-| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `missing_config`               | Run `zynohosting login` or provide an API key.                                                                                                                             |
-| `login_expired`                | Log in again, or use `--renewable` for a long-running client.                                                                                                              |
-| `renewal_invalid`              | The one-time renewal token is invalid/used; log in again.                                                                                                                  |
-| `renewal_forbidden`            | Tenant policy prohibits renewal; contact a tenant administrator.                                                                                                           |
-| `renewal_missing`              | The OS credential entry is unavailable; log in again.                                                                                                                      |
-| `credential_store_failed`      | Unlock or repair the operating system credential store.                                                                                                                    |
-| `credential_store_unavailable` | No system credential service. Use a non-renewable login, or on a computer only you use, `--credential-store file`.                                                         |
-| `credential_store_insecure`    | The token file is a symlink or readable by others; fix or delete it, then log in again.                                                                                    |
-| `invalid_credential_store`     | Use `system` or `file`, and only with `--renewable`.                                                                                                                       |
-| `invalid_lifetime`             | Use `1h`, `1d`, `7d` or `30d`; anything above `1h` needs `--renewable`.                                                                                                    |
-| `grant_expired`                | The approved lifetime ended (exit 3). Log in again.                                                                                                                        |
-| `login_denied`                 | The person denied the sign-in (exit 3).                                                                                                                                    |
-| `device_code_expired`          | The code ran out or was already used (exit 3). Log in again.                                                                                                               |
-| `device_credential_lost`       | The connection dropped while the approval was delivered (exit 3). Log in again.                                                                                            |
-| `login_pending`                | `login --resume` timed out with nobody approving (exit 3). Run it again.                                                                                                   |
-| `no_pending_login`             | `login --resume` with nothing started (exit 2). Start with `--device --no-wait`.                                                                                           |
-| `device_flow_unavailable`      | The server does not offer the link-and-code sign-in (exit 4). Use the browser flow.                                                                                        |
-| `unsupported_node`             | Node.js is older than 24 (exit 1). Install Node.js 24.                                                                                                                     |
-| `login_selection_required`     | Several logins and none is the default (exit 2). Pass `--tenant`.                                                                                                          |
-| `login_not_found`              | No saved login matches `--tenant` (exit 2). See `zynohosting logins`.                                                                                                      |
-| `login_ambiguous`              | Several logins match, for example two accounts in one tenant (exit 2). The message lists each login id with its account and tenant; pass `--account` or the full login id. |
-| `deploy_token_not_allowed`     | A deploy token cannot run this command (exit 3). See [Deploy tokens](../cli/deploy-tokens#errors).                                                                         |
-| `conflicting_credentials`      | A deploy token was set with an API key or access token (exit 2).                                                                                                           |
-| `unsupported_php_version`      | `sites runtime` named a PHP version the platform does not support (exit 2).                                                                                                |
-| `invalid_environment`          | Use `production`, `alpha`, or `dev`.                                                                                                                                       |
-| `confirmation_required`        | Use a terminal, `--dry-run`, or reviewed `--yes`.                                                                                                                          |
-| `precondition_failed`          | Refresh the file listing and review the new ETag/content.                                                                                                                  |
-| `plan_expired`                 | Create and review a new plan.                                                                                                                                              |
-| `unsafe_local_path`            | Choose an absolute destination inside an allowed MCP root.                                                                                                                 |
-| `unsupported_protocol`         | Upgrade the CLI or resolve cluster version skew.                                                                                                                           |
-| `cache_invalidation_failed`    | Treat the mutation as applied and investigate cache invalidation.                                                                                                          |
+| Code                               | Typical resolution                                                                                                                                                         |
+| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `missing_config`                   | Run `zynohosting login` or provide an API key.                                                                                                                             |
+| `login_expired`                    | Log in again, or use `--renewable` for a long-running client.                                                                                                              |
+| `renewal_invalid`                  | The one-time renewal token is invalid/used; log in again.                                                                                                                  |
+| `renewal_forbidden`                | Tenant policy prohibits renewal; contact a tenant administrator.                                                                                                           |
+| `renewal_missing`                  | The OS credential entry is unavailable; log in again.                                                                                                                      |
+| `credential_store_failed`          | Unlock or repair the operating system credential store.                                                                                                                    |
+| `credential_store_unavailable`     | No system credential service. Use a non-renewable login, or on a computer only you use, `--credential-store file`.                                                         |
+| `credential_store_insecure`        | The token file is a symlink or readable by others; fix or delete it, then log in again.                                                                                    |
+| `invalid_credential_store`         | Use `system` or `file`, and only with `--renewable`.                                                                                                                       |
+| `invalid_lifetime`                 | Use `1h`, `1d`, `7d` or `30d`; anything above `1h` needs `--renewable`.                                                                                                    |
+| `grant_expired`                    | The approved lifetime ended (exit 3). Log in again.                                                                                                                        |
+| `login_denied`                     | The person denied the sign-in (exit 3).                                                                                                                                    |
+| `device_code_expired`              | The code ran out or was already used (exit 3). Log in again.                                                                                                               |
+| `device_credential_lost`           | The connection dropped while the approval was delivered (exit 3). Log in again.                                                                                            |
+| `login_pending`                    | `login --resume` timed out with nobody approving (exit 3). Run it again.                                                                                                   |
+| `no_pending_login`                 | `login --resume` with nothing started (exit 2). Start with `--device --no-wait`.                                                                                           |
+| `device_flow_unavailable`          | The server does not offer the link-and-code sign-in (exit 4). Use the browser flow.                                                                                        |
+| `unsupported_node`                 | Node.js is older than 24 (exit 1). Install Node.js 24.                                                                                                                     |
+| `login_selection_required`         | Several logins and none is the default (exit 2). Pass `--tenant`.                                                                                                          |
+| `login_not_found`                  | No saved login matches `--tenant` (exit 2). See `zynohosting logins`.                                                                                                      |
+| `login_ambiguous`                  | Several logins match, for example two accounts in one tenant (exit 2). The message lists each login id with its account and tenant; pass `--account` or the full login id. |
+| `deploy_token_not_allowed`         | A deploy token cannot run this command (exit 3). See [Deploy tokens](../cli/deploy-tokens#errors).                                                                         |
+| `conflicting_credentials`          | A deploy token was set with an API key or access token (exit 2).                                                                                                           |
+| `deploy_token_requires_production` | A site that runs PHP needs a deploy token that includes production.                                                                                                        |
+| `php_unavailable`                  | The platform has no default PHP version; name one with `php@<version>` (exit 5).                                                                                           |
+| `unsupported_php_version`          | `sites runtime` named a PHP version the platform does not support (exit 2).                                                                                                |
+| `invalid_environment`              | Use `production`, `alpha`, or `dev`.                                                                                                                                       |
+| `confirmation_required`            | Use a terminal, `--dry-run`, or reviewed `--yes`.                                                                                                                          |
+| `precondition_failed`              | Refresh the file listing and review the new ETag/content.                                                                                                                  |
+| `plan_expired`                     | Create and review a new plan.                                                                                                                                              |
+| `unsafe_local_path`                | Choose an absolute destination inside an allowed MCP root.                                                                                                                 |
+| `unsupported_protocol`             | Upgrade the CLI or resolve cluster version skew.                                                                                                                           |
+| `cache_invalidation_failed`        | Treat the mutation as applied and investigate cache invalidation.                                                                                                          |
 
 ## Shell example
 

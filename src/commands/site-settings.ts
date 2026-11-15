@@ -215,7 +215,10 @@ export async function prepareRuntime(
     let phpVersion: string | null = null;
     if (runtime.kind === 'php') {
         const supported = await manager.getPhpVersions().catch(error => diagnoseDeployToken(config, error));
-        phpVersion = runtime.version ?? supported.default;
+        if (runtime.version === undefined && supported.default === null) {
+            throw new CliError('No PHP version is available on this platform right now', 5, 'php_unavailable');
+        }
+        phpVersion = runtime.version ?? supported.default!;
         if (!supported.versions.includes(phpVersion)) {
             throw new CliError(`PHP ${phpVersion} is not available; choose one of ${supported.versions.join(', ')}`, 2, 'unsupported_php_version');
         }

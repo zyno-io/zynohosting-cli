@@ -494,10 +494,10 @@ storage quota. Database changes from preview can affect the live site. See
 { "site": "example.com", "runtime": "php", "phpVersion": "8.3" }
 ```
 
-| Argument     | Required | Meaning                                                              |
-| ------------ | -------- | -------------------------------------------------------------------- |
-| `site`       | yes      | Site UUID or hostname.                                               |
-| `runtime`    | yes      | `static` (PHP off) or `php` (PHP on).                                |
+| Argument     | Required | Meaning                                                                  |
+| ------------ | -------- | ------------------------------------------------------------------------ |
+| `site`       | yes      | Site UUID or hostname.                                                   |
+| `runtime`    | yes      | `static` (PHP off) or `php` (PHP on).                                    |
 | `phpVersion` | no       | A version such as `8.3`, only with `php`. Omit for the platform default. |
 
 Applies immediately to production and preview and clears the CDN cache, so ask the user first. Turning PHP on while not-found handling is `single-page-application` resets it to `404-page`. An unsupported version fails with `unsupported_php_version`. Idempotent; waits for serving reconciliation and returns `siteId`, `site`, `phpVersion`, `previous`, `changed`, `status`. Permission: `hosting.deploy`.
@@ -512,11 +512,11 @@ These tools request and manage [deploy tokens](../cli/deploy-tokens) for CI. The
 { "site": "example.com", "environments": ["production"], "lifetimeDays": 90, "ci": "github" }
 ```
 
-| Argument       | Required | Meaning                                                         |
-| -------------- | -------- | --------------------------------------------------------------- |
-| `site`         | yes      | Site UUID or hostname the user named.                           |
-| `environments` | yes      | `production`, `preview`, or both.                               |
-| `lifetimeDays` | no       | `30`, `90`, `180`, or `365`. The user chooses when approving.   |
+| Argument       | Required | Meaning                                                            |
+| -------------- | -------- | ------------------------------------------------------------------ |
+| `site`         | yes      | Site UUID or hostname the user named.                              |
+| `environments` | yes      | `production`, `preview`, or both.                                  |
+| `lifetimeDays` | no       | `30`, `90`, `180`, or `365`. The user chooses when approving.      |
 | `ci`           | no       | `github`, `gitlab`, or `other`, so the page shows the right steps. |
 
 Returns `requestId`, an approval link, and a short code. Give the user the link and code. They check the code, site, and environments, choose a lifetime, and approve. The agent never opens or approves the link, and never asks the user to paste a token into the chat.
@@ -569,12 +569,12 @@ The plan must come from `plan_download` in the same MCP process. A successful ap
 
 Treat these tools as follows:
 
-| Category        | Tools                                                                                                                                      | Review expectation                                         |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------- |
-| Remote read     | `list_sites`, `get_site`, `list_forms`, `get_form_integration`, `describe_form`                                                            | Safe for routine discovery.                                |
-| Local write     | `get_file`, `apply_download`                                                                                                               | Confirm the destination and overwrite behavior.            |
-| Remote mutation | `create_basic_form`, `update_form`, `update_form_bot_protection`, `update_form_origins`, `set_not_found_handling`, `set_runtime`, `revoke_deploy_token`, file/deploy apply tools | Review form/site, fields, origins, paths, and plans.       |
-| Token request | `request_deploy_token`, `deploy_token_status`, `list_deploy_tokens` | The user approves in ZynoSuite. Never ask them to paste a token. |
-| Plan only       | `plan_deploy`, `plan_download`, `plan_promote`                                                                                             | Inspect the returned target, scope, and URLs before apply. |
+| Category        | Tools                                                                                                                                                                            | Review expectation                                               |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| Remote read     | `list_sites`, `get_site`, `list_forms`, `get_form_integration`, `describe_form`                                                                                                  | Safe for routine discovery.                                      |
+| Local write     | `get_file`, `apply_download`                                                                                                                                                     | Confirm the destination and overwrite behavior.                  |
+| Remote mutation | `create_basic_form`, `update_form`, `update_form_bot_protection`, `update_form_origins`, `set_not_found_handling`, `set_runtime`, `revoke_deploy_token`, file/deploy apply tools | Review form/site, fields, origins, paths, and plans.             |
+| Token request   | `request_deploy_token`, `deploy_token_status`, `list_deploy_tokens`                                                                                                              | The user approves in ZynoSuite. Never ask them to paste a token. |
+| Plan only       | `plan_deploy`, `plan_download`, `plan_promote`                                                                                                                                   | Inspect the returned target, scope, and URLs before apply.       |
 
 The MCP server enforces technical boundaries, but the calling agent or user remains responsible for choosing the intended site and reviewing destructive operations. Never infer a deployment domain. If an explicitly named domain is unavailable, do not substitute another site; offer `login` so the user can switch contexts. Likewise, never select `plan_promote` `force: true` unless the user explicitly requests that override.

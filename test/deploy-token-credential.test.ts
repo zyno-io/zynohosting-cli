@@ -8,8 +8,9 @@ import { authorizationHeaders, ManagerClient } from '../src/api/manager-client.j
 import { prepareDeployment, resolveDeployArguments } from '../src/commands/deploy-site.js';
 import { preparePromotion } from '../src/commands/promote-site.js';
 import { resolveConfig } from '../src/config.js';
-import { CliError } from '../src/errors.js';
-import { SECRET, SITE_ID, startFakeKeyServer } from './support/fake-key-server.js';
+import { diagnoseDeployToken } from '../src/deploy-tokens/guard.js';
+import { CliError, HttpError } from '../src/errors.js';
+import { KEY_ID, SECRET, SITE_ID, startFakeKeyServer } from './support/fake-key-server.js';
 
 const code = (promise: Promise<unknown>) =>
     promise.then(
@@ -143,18 +144,37 @@ test('a refused deploy token says whether it expired, was revoked, or is just no
     void manager;
     try {
         server.state.whoamiStatus = 401;
-        server.state.self = { httpStatus: 401, body: { message: 'The key has expired' } };
+        server.state.self = { httpStatus: 401, body: { error: 'Capability key has expired' } };
         assert.equal(await code(prepareDeployment('example.com', dir, {}, undefined, resolved)), 'deploy_token_expired');
 
-        server.state.self = { httpStatus: 401, body: { message: 'invalid key' } };
+        server.state.self = { httpStatus: 403, body: { error: 'Invalid API key' } };
         assert.equal(await code(prepareDeployment('example.com', dir, {}, undefined, resolved)), 'deploy_token_revoked');
 
-        server.state.self = { httpStatus: 200, body: { expiresAt: new Date(Date.now() - 1000).toISOString() } };
-        assert.equal(await code(prepareDeployment('example.com', dir, {}, undefined, resolved)), 'deploy_token_expired');
-
         server.state.whoamiStatus = 403;
-        server.state.self = { httpStatus: 200, body: { expiresAt: new Date(Date.now() + 86_400_000).toISOString() } };
+        server.state.self = { httpStatus: 200, body: { id: KEY_ID, expiresAt: new Date(Date.now() + 86_400_000).toISOString() } };
         assert.equal(await code(prepareDeployment('example.com', dir, {}, undefined, resolved)), 'deploy_token_wrong_environment');
+    } finally {
+        await server.close();
+    }
+});
+
+test('a preview-only token on a PHP site is refused up front and when the manager says so', async () => {
+    const server = await startFakeKeyServer();
+    const dir = await mkdtemp(join(tmpdir(), 'deploy-php-'));
+    const resolved = await config({ ZYNOHOSTING_DEPLOY_TOKEN: SECRET }, server.url);
+    try {
+        server.state.phpVersion = '8.4';
+        server.state.tokenEnvironments = ['preview'];
+        assert.equal(await code(prepareDeployment('example.com', dir, { preview: true }, undefined, resolved)), 'deploy_token_requires_production');
+        assert.equal(server.seen.filter(entry => entry.url.includes('access-sessions')).length, 0);
+
+        // The manager's own refusal (PHP enabled after approval) maps to the same code.
+        const refusal = new HttpError(
+            'This site runs PHP, so preview code can reach production; a deploy token for this site must include production.',
+            403,
+            'http_error'
+        );
+        assert.equal(await code(diagnoseDeployToken(resolved, refusal)), 'deploy_token_requires_production');
     } finally {
         await server.close();
     }

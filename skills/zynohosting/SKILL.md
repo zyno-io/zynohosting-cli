@@ -122,17 +122,17 @@ The CLI opens an approval page, or prints a link and a code. Give the user both 
 
 Where you cannot wait for the user, run `zynohosting deploy-tokens create ... --no-wait --json` (approval page only), tell the user the link and code, and finish with `zynohosting deploy-tokens create --resume --json` after they approve.
 
-In the workflow, set `ZYNOHOSTING_DEPLOY_TOKEN` from the CI secret and run `zynohosting deploy ./dist --yes --json`. The token knows its site, so the site argument is optional. It can run only `deploy`, `promote` (needs both environments), `whoami`, `sites set`, `sites runtime` (both need production), and `deploy-tokens revoke --self`; anything else fails with `deploy_token_not_allowed`. Use `--preview` tokens for pull requests. See `docs/cli/deploy-tokens.md` for full GitHub Actions and GitLab CI examples.
+In the workflow, set `ZYNOHOSTING_DEPLOY_TOKEN` from the CI secret and run `zynohosting deploy ./dist --yes --json`. The token knows its site, so the site argument is optional. It can run only `deploy`, `promote` (needs both environments), `whoami`, `sites set`, `sites runtime` (both need production), and `deploy-tokens revoke --self`; anything else fails with `deploy_token_not_allowed`. Use `--preview` tokens for pull requests, but only for static sites: a PHP site's token must include production (`deploy_token_requires_production`). See `docs/cli/deploy-tokens.md` for full GitHub Actions and GitLab CI examples.
 
 `zynohosting deploy-tokens list [site]` shows tokens; `deploy-tokens revoke <keyId>` revokes one. Ask the user before revoking. Tokens expire after 30 to 365 days (default 90).
 
-| Code | Do this |
-| --- | --- |
-| `deploy_token_expired`, `deploy_token_revoked` | Create a new token with `deploy-tokens create`. |
-| `deploy_token_wrong_site`, `deploy_token_wrong_environment` | The token is for another site or environment. Create the right one. |
-| `conflicting_credentials` | Unset all but one of `ZYNOHOSTING_DEPLOY_TOKEN`, `ZYNOHOSTING_API_KEY`, `ZYNOHOSTING_ACCESS_TOKEN`. |
-| `handoff_unavailable`, `handoff_failed` | `gh`, `glab`, or the file path could not take the token. Fix the sign-in or path and run again. A failed hand-off revokes the new token. |
-| `key_request_denied`, `key_request_expired` | The user declined or the code ran out. Ask before trying again. |
+| Code                                                        | Do this                                                                                                                                  |
+| ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `deploy_token_expired`, `deploy_token_revoked`              | Create a new token with `deploy-tokens create`.                                                                                          |
+| `deploy_token_wrong_site`, `deploy_token_wrong_environment` | The token is for another site or environment. Create the right one.                                                                      |
+| `conflicting_credentials`                                   | Unset all but one of `ZYNOHOSTING_DEPLOY_TOKEN`, `ZYNOHOSTING_API_KEY`, `ZYNOHOSTING_ACCESS_TOKEN`.                                      |
+| `handoff_unavailable`, `handoff_failed`                     | `gh`, `glab`, or the file path could not take the token. Fix the sign-in or path and run again. A failed hand-off revokes the new token. |
+| `key_request_denied`, `key_request_expired`                 | The user declined or the code ran out. Ask before trying again.                                                                          |
 
 If a tenant API key is used with `CI=true`, the CLI warns with `api_key_in_ci`. Replace it with a deploy token.
 

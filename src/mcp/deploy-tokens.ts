@@ -8,6 +8,7 @@ import type { ResolvedConfig } from '../config.js';
 
 import { KeyRequestClient } from '../api/key-request-client.js';
 import { normalizeSiteRef } from '../commands/deploy-site.js';
+import { assertTokenAllowedForSite } from '../deploy-tokens/guard.js';
 import { CliError } from '../errors.js';
 
 export interface DeployTokenMcpClients {
@@ -86,6 +87,7 @@ export function registerDeployTokensMcp(server: McpServer, getClients: () => Pro
             const found = await manager.getSite(normalizeSiteRef(site));
             if (found.status !== 'active') throw new CliError('Only an active site can have a deploy token', 2, 'site_inactive');
             const unique = [...new Set(environments)].sort() as Array<'production' | 'preview'>;
+            assertTokenAllowedForSite(found, unique);
             const client = new KeyRequestClient(config.authApiUrl);
             const start = await client.start(config.credential, {
                 siteId: found.id,
@@ -140,17 +142,13 @@ export function registerDeployTokensMcp(server: McpServer, getClients: () => Pro
                         'Still waiting for the user to approve. Give them the link and code again if needed, and wait a few seconds before checking again.'
                 });
             }
-            if (poll.status === 'approved' || poll.status === 'consumed') {
+            if (poll.status === 'approved') {
                 return safeResult({
                     ...base,
                     status: 'approved',
-                    ...(poll.status === 'approved' && poll.key
-                        ? {
-                              keyId: poll.key.id,
-                              ...(poll.key.preview ? { preview: poll.key.preview } : {}),
-                              ...(poll.key.expiresAt === undefined ? {} : { expiresAt: iso(poll.key.expiresAt) })
-                          }
-                        : {}),
+                    keyId: poll.key.id,
+                    preview: poll.key.preview,
+                    expiresAt: iso(poll.key.expiresAt),
                     message:
                         'Approved. The token was shown to the user once on the approval page, and they put it into their CI settings. Remind them it can deploy only this site, and that they can revoke it any time (list_deploy_tokens, revoke_deploy_token). Do not ask them to send you the token.'
                 });
@@ -162,7 +160,7 @@ export function registerDeployTokensMcp(server: McpServer, getClients: () => Pro
                 message:
                     poll.status === 'denied'
                         ? 'The user denied the request. Do not retry unless they ask.'
-                        : 'The request expired. Call request_deploy_token again if the user still wants a token.'
+                        : 'The request expired or was cancelled. Call request_deploy_token again if the user still wants a token.'
             });
         }
     );

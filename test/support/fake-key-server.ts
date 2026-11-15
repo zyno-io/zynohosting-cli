@@ -34,18 +34,36 @@ export interface FakeKeyServer {
         keys: unknown[];
         siteStatus: number;
         whoamiStatus: number;
+        /** `default` of GET /v1/php-versions; null when no PHP version is deployed. */
+        phpDefault: string | null;
     };
     count(method: string, path: string): number;
     close(): Promise<void>;
 }
 
-export function approvedPoll(extra: Record<string, unknown> = {}): Script {
+/** KeyInfo as ZynoAuth returns it. */
+export function keyInfo(environments: string[] = ['production']): Record<string, unknown> {
     return {
-        status: 'approved',
-        secret: SECRET,
-        key: { id: KEY_ID, preview: 'zck_A1b2…abc', expiresAt: new Date(Date.now() + 90 * 86_400_000).toISOString() },
-        ...extra
+        id: KEY_ID,
+        tenantId: '22222222-2222-4222-8222-222222222222',
+        description: 'CI',
+        keyPreview: 'zck_A1b2...abc',
+        capabilities: { hosting: { v: 1, siteId: SITE_ID, environments, siteOwnershipRevision: 3 } },
+        display: { hosting: { resourceLabel: 'example.com', facts: [] } },
+        handoff: null,
+        createdAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 90 * 86_400_000).toISOString()
     };
+}
+
+/** Poll delivery, approved: the secret is returned once. */
+export function approvedPoll(extra: Record<string, unknown> = {}): Script {
+    return { status: 'approved', delivery: 'poll', secret: SECRET, key: keyInfo(), ...extra };
+}
+
+/** Display delivery, approved: no secret. */
+export function displayApprovedPoll(extra: Record<string, unknown> = {}): Script {
+    return { status: 'approved', delivery: 'display', key: keyInfo(), ...extra };
 }
 
 /** One server that plays the hosting API and ZynoAuth, enough for deploy tokens. */
@@ -54,7 +72,7 @@ export async function startFakeKeyServer(): Promise<FakeKeyServer> {
     let pollIndex = 0;
     let baseUrl = '';
     const state: FakeKeyServer['state'] = {
-        polls: [{ status: 'pending' }, approvedPoll()],
+        polls: [{ status: 'pending', interval: 0.02 }, approvedPoll()],
         tokenEnvironments: ['production'],
         tokenExpiresAt: new Date(Date.now() + 30 * 86_400_000).toISOString(),
         self: { httpStatus: 200, body: { id: KEY_ID, expiresAt: new Date(Date.now() + 86_400_000).toISOString() } },
@@ -63,17 +81,19 @@ export async function startFakeKeyServer(): Promise<FakeKeyServer> {
         notFoundHandling: '404-page',
         keys: [],
         siteStatus: 200,
-        whoamiStatus: 200
+        whoamiStatus: 200,
+        phpDefault: '8.4'
     };
     const site = () => ({
         id: SITE_ID,
-        fqdn: 'example.com',
+        primaryHostnameId: '44444444-4444-4444-8444-444444444444',
+        primaryHostname: 'example.com',
         status: 'active',
         phpVersion: state.phpVersion,
         notFoundHandling: state.notFoundHandling,
         hostnames: [
-            { name: 'example.com', type: 'primary' },
-            { name: 'www.example.com', type: 'alias' }
+            { id: '44444444-4444-4444-8444-444444444444', name: 'example.com', kind: 'custom', isPrimary: true, subdomainDirectory: null },
+            { id: '55555555-5555-4555-8555-555555555555', name: 'www.example.com', kind: 'custom', isPrimary: false, subdomainDirectory: null }
         ]
     });
     const server = createServer(async (request, response) => {
@@ -92,10 +112,10 @@ export async function startFakeKeyServer(): Promise<FakeKeyServer> {
         const path = url.split('?')[0]!;
         if (method === 'GET' && (path === '/v1/sites/example.com' || path === `/v1/sites/${SITE_ID}`)) return send(site(), state.siteStatus);
         if (method === 'GET' && path === '/v1/deploy-token') {
-            if (state.whoamiStatus !== 200) return send({ message: 'unauthorized' }, state.whoamiStatus);
-            return send({ site: site(), environments: state.tokenEnvironments, expiresAt: state.tokenExpiresAt });
+            if (state.whoamiStatus !== 200) return send({ error: 'unauthorized' }, state.whoamiStatus);
+            return send({ keyId: KEY_ID, siteId: SITE_ID, environments: state.tokenEnvironments, expiresAt: state.tokenExpiresAt, site: site() });
         }
-        if (method === 'GET' && path === '/v1/php-versions') return send({ versions: ['8.2', '8.3', '8.4'], default: '8.4' });
+        if (method === 'GET' && path === '/v1/php-versions') return send({ versions: ['8.2', '8.3', '8.4'], default: state.phpDefault });
         if (method === 'PATCH' && path === `/v1/sites/${SITE_ID}`) {
             if ('phpVersion' in body) state.phpVersion = body.phpVersion as string | null;
             if (typeof body.notFoundHandling === 'string') state.notFoundHandling = body.notFoundHandling;
@@ -111,9 +131,11 @@ export async function startFakeKeyServer(): Promise<FakeKeyServer> {
             return send({
                 requestCode: REQUEST_CODE,
                 userCode: USER_CODE,
+                verificationUri: `${baseUrl}/keys/approve`,
                 verificationUriComplete: `${baseUrl}/keys/approve?code=${USER_CODE}`,
                 interval: 0.02,
-                expiresIn: 600
+                expiresIn: 600,
+                expiresAt: Date.now() + 600_000
             });
         }
         if (method === 'POST' && path === '/identity/key-requests/poll') {
@@ -123,8 +145,11 @@ export async function startFakeKeyServer(): Promise<FakeKeyServer> {
                 return;
             }
             if ('httpStatus' in script)
-                return send((script as { body?: unknown }).body ?? { message: 'error' }, (script as { httpStatus: number }).httpStatus);
+                return send((script as { body?: unknown }).body ?? { error: 'error' }, (script as { httpStatus: number }).httpStatus);
             // For display delivery a real server omits the secret; a test can script one that leaks it, which the client must drop.
+            // A real server always states the interval with pending and slow_down.
+            if ((script.status === 'pending' || script.status === 'slow_down') && script.interval === undefined)
+                return send({ ...script, interval: 0.02 });
             return send(script);
         }
         if (method === 'POST' && path === '/identity/key-requests/cancel') return send(null);
@@ -132,7 +157,7 @@ export async function startFakeKeyServer(): Promise<FakeKeyServer> {
         if (method === 'POST' && path === '/identity/tenant-keys/self-revoke') return send({ revoked: true }, state.selfRevokeStatus);
         if (method === 'GET' && path === '/tenant/capability-keys') return send(state.keys);
         if (method === 'DELETE' && path.startsWith('/tenant/capability-keys/')) return send(null);
-        send({ message: 'not found' }, 404);
+        send({ error: 'not found' }, 404);
     });
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
     const address = server.address();

@@ -8,7 +8,7 @@ import { test } from 'node:test';
 
 import { AllowedLocalRoots } from '../src/mcp/local-paths.js';
 import { createHostingMcpServer } from '../src/mcp/server.js';
-import { approvedPoll, HUMAN_JWT, KEY_ID, REQUEST_CODE, SECRET, SITE_ID, startFakeKeyServer } from './support/fake-key-server.js';
+import { displayApprovedPoll, HUMAN_JWT, KEY_ID, REQUEST_CODE, SECRET, SITE_ID, startFakeKeyServer } from './support/fake-key-server.js';
 
 async function connect(url: string, extraEnv: Record<string, string>) {
     const root = await mkdtemp(join(tmpdir(), 'mcp-deploy-tokens-'));
@@ -68,7 +68,7 @@ test('request_deploy_token returns a link and code, never the token or the reque
 
 test('deploy_token_status reports approval without the token, even when the server wrongly sends it', async () => {
     const server = await startFakeKeyServer();
-    server.state.polls = [{ status: 'pending' }, approvedPoll()];
+    server.state.polls = [{ status: 'pending' }, displayApprovedPoll({ secret: SECRET })];
     const mcp = await connect(server.url, { ZYNOHOSTING_ACCESS_TOKEN: HUMAN_JWT });
     try {
         const requested = await call(mcp.client, 'request_deploy_token', { site: 'example.com', environments: ['preview', 'production'] });
@@ -98,12 +98,23 @@ test('list_deploy_tokens and revoke_deploy_token never expose a token', async ()
     server.state.keys = [
         {
             id: KEY_ID,
+            tenantId: '22222222-2222-4222-8222-222222222222',
             description: 'CI',
-            preview: 'zck_A1b2…abc',
-            granted: { hosting: { v: 1, siteId: SITE_ID, environments: ['production'] } },
-            expiresAt: new Date(Date.now() + 86_400_000).toISOString()
+            keyPreview: 'zck_A1b2...abc',
+            namespaces: ['hosting'],
+            capabilities: { hosting: { v: 1, siteId: SITE_ID, environments: ['production'], siteOwnershipRevision: 3 } },
+            display: { hosting: { resourceLabel: 'example.com', facts: [] } },
+            handoff: null,
+            createdAt: new Date().toISOString(),
+            expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+            lastUsedAt: null,
+            createdByAccountId: null,
+            createdByEmail: 'owner@example.com',
+            requestedByAccountId: null,
+            status: 'active'
         }
     ];
+
     const mcp = await connect(server.url, { ZYNOHOSTING_ACCESS_TOKEN: HUMAN_JWT });
     try {
         const listed = await call(mcp.client, 'list_deploy_tokens', { site: 'example.com' });

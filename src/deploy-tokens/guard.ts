@@ -7,6 +7,22 @@ import { DeployTokenInfo, DeploymentTarget } from '../protocol.js';
 
 export type KeyClientFactory = (authApiUrl: string) => Pick<KeyRequestClient, 'self'>;
 
+/** The hosting manager's wording for a preview-only token on a PHP site. */
+const PHP_PREVIEW_PREFIX = 'This site runs PHP, so preview code can reach production';
+
+function requiresProduction(): CliError {
+    return new CliError(
+        'This site runs PHP, so preview code can reach production. A deploy token for this site must include production (use --production or --both).',
+        3,
+        'deploy_token_requires_production'
+    );
+}
+
+/** Refuses, before anything is requested, a preview-only token for a site that runs PHP. */
+export function assertTokenAllowedForSite(site: { phpVersion: string | null }, environments: readonly DeploymentTarget[]): void {
+    if (site.phpVersion !== null && !environments.includes('production')) throw requiresProduction();
+}
+
 /** True when `reference` (a site id or hostname) names the site the token is bound to. */
 export function tokenCoversSite(info: DeployTokenInfo, reference: string): boolean {
     const wanted = reference.trim().toLowerCase();
@@ -31,6 +47,8 @@ export async function verifyDeployToken(
             'deploy_token_wrong_site'
         );
     }
+    // The manager refuses a preview deploy by a preview-only token on a PHP site, so say why before any request.
+    if (need.environments?.includes('preview')) assertTokenAllowedForSite(info.site, info.environments);
     for (const environment of need.environments ?? []) {
         if (!info.environments.includes(environment)) {
             throw new CliError(
@@ -56,18 +74,18 @@ export async function diagnoseDeployToken(config: ResolvedConfig, error: unknown
     ) {
         throw error;
     }
+    if (error.status === 403 && error.message.startsWith(PHP_PREVIEW_PREFIX)) throw requiresProduction();
     const client = makeClient?.(config.authApiUrl) ?? new KeyRequestClient(config.authApiUrl);
-    const expired = (): CliError =>
-        new CliError('This deploy token has expired. Create a new one with `zynohosting deploy-tokens create`.', 3, 'deploy_token_expired');
     try {
-        const self = await client.self(config.credential.token);
-        if (self.expiresAt !== undefined && self.expiresAt <= Date.now()) throw expired();
+        await client.self(config.credential.token);
     } catch (selfError) {
-        if (selfError instanceof CliError && selfError.code === 'deploy_token_expired') throw selfError;
-        if (selfError instanceof HttpError && (selfError.status === 401 || selfError.status === 403)) {
-            if (/expired/i.test(selfError.message)) throw expired();
+        // ZynoAuth answers 401 for an expired key and 403 for one that was revoked or never existed.
+        if (selfError instanceof HttpError && selfError.status === 401) {
+            throw new CliError('This deploy token has expired. Create a new one with `zynohosting deploy-tokens create`.', 3, 'deploy_token_expired');
+        }
+        if (selfError instanceof HttpError && selfError.status === 403) {
             throw new CliError(
-                'This deploy token has been revoked or is no longer valid. Create a new one with `zynohosting deploy-tokens create`.',
+                'This deploy token has been revoked or is not valid. Create a new one with `zynohosting deploy-tokens create`.',
                 3,
                 'deploy_token_revoked'
             );

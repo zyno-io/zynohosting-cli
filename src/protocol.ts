@@ -292,37 +292,44 @@ export function parseSiteMutationAccepted(value: unknown, label = 'site update')
 
 /** What `GET /v1/deploy-token` says about the token making the call. */
 export interface DeployTokenInfo {
+    keyId: string;
+    siteId: string;
     site: AutomationSite;
     environments: DeploymentTarget[];
     /** ISO date. */
     expiresAt: string;
 }
 
-/**
- * The whoami response carries the site, its hostnames, the allowed environments, and the expiry. The site may be nested
- * under `site` or sit at the top level next to `environments`; both are accepted.
- */
 export function parseDeployTokenInfo(value: unknown): DeployTokenInfo {
     const object = record(value, 'deploy token');
-    const site = parseAutomationSite(object.site === undefined ? object : object.site);
-    if (object.site !== undefined && site.hostnames === undefined && object.hostnames !== undefined) {
-        site.hostnames = parseAutomationSite({ ...(object.site as Record<string, unknown>), hostnames: object.hostnames }).hostnames!;
-    }
+    const site = parseAutomationSite(object.site);
+    const siteId = uuid(object.siteId, 'siteId');
+    if (site.id.toLowerCase() !== siteId.toLowerCase())
+        throw new CliError('Manager returned a deploy token for another site', 5, 'invalid_manager_response');
     const environments = array(object.environments, 'environments').map(deploymentTarget);
     if (!environments.length) throw new CliError('Manager returned a deploy token with no environments', 5, 'invalid_manager_response');
-    return { site, environments: [...new Set(environments)], expiresAt: isoDate(object.expiresAt, 'expiresAt') };
+    return {
+        keyId: string(object.keyId, 'keyId'),
+        siteId,
+        site,
+        environments: [...new Set(environments)],
+        expiresAt: isoDate(object.expiresAt, 'expiresAt')
+    };
 }
 
 export interface PhpVersions {
     versions: string[];
-    default: string;
+    /** Null when the platform has no PHP version deployed. */
+    default: string | null;
 }
 
 export function parsePhpVersions(value: unknown): PhpVersions {
     const object = record(value, 'PHP versions');
     const versions = array(object.versions, 'versions').map((version, index) => string(version, `versions[${index}]`));
-    const fallback = string(object.default, 'default');
-    if (!versions.includes(fallback)) throw new CliError('Manager returned a default PHP version it does not support', 5, 'invalid_manager_response');
+    const fallback = object.default === null ? null : string(object.default, 'default');
+    if (fallback !== null && !versions.includes(fallback)) {
+        throw new CliError('Manager returned a default PHP version it does not support', 5, 'invalid_manager_response');
+    }
     return { versions, default: fallback };
 }
 

@@ -10,7 +10,16 @@ import { createDeployToken, listDeployTokens, revokeDeployToken } from '../src/c
 import { loadStoredConfig } from '../src/config.js';
 import { deliverSecret } from '../src/deploy-tokens/handoff.js';
 import { CliError } from '../src/errors.js';
-import { approvedPoll, HUMAN_JWT, KEY_ID, REQUEST_CODE, SECRET, SITE_ID, startFakeKeyServer } from './support/fake-key-server.js';
+import {
+    approvedPoll,
+    displayApprovedPoll,
+    HUMAN_JWT,
+    KEY_ID,
+    REQUEST_CODE,
+    SECRET,
+    SITE_ID,
+    startFakeKeyServer
+} from './support/fake-key-server.js';
 
 interface Call {
     command: string;
@@ -224,7 +233,7 @@ test('a file that appears after the preflight is not overwritten, and the token 
 test('without a destination the token is shown on the approval page only, and a leaked secret is dropped', async () => {
     const context = await setup();
     // A server that wrongly included the secret for display delivery.
-    context.server.state.polls = [approvedPoll()];
+    context.server.state.polls = [displayApprovedPoll({ secret: SECRET })];
     try {
         const result = await createDeployToken('example.com', { ...context.options, both: true, production: false }, context.dependencies);
         assert.equal(result.status, 'created');
@@ -256,7 +265,7 @@ test('a denied request fails with key_request_denied and hands nothing off', asy
 
 test('--no-wait saves the request and --resume finishes it without asking for anything again', async () => {
     const context = await setup();
-    context.server.state.polls = [{ status: 'pending' }, { status: 'approved', key: { id: KEY_ID } }];
+    context.server.state.polls = [{ status: 'pending' }, displayApprovedPoll()];
     try {
         const first = await createDeployToken('example.com', { ...context.options, noWait: true }, context.dependencies);
         assert.equal(first.status, 'pending');
@@ -375,14 +384,23 @@ test('list filters by site and prints no secret; revoke by id calls the tenant e
     context.server.state.keys = [
         {
             id: KEY_ID,
+            tenantId: '22222222-2222-4222-8222-222222222222',
             description: 'CI for example.com',
-            preview: 'zck_A1b2…abc',
-            granted: { hosting: { v: 1, siteId: SITE_ID, environments: ['production'] } },
+            keyPreview: 'zck_A1b2...abc',
+            namespaces: ['hosting'],
+            capabilities: { hosting: { v: 1, siteId: SITE_ID, environments: ['production'], siteOwnershipRevision: 3 } },
+            display: { hosting: { resourceLabel: 'example.com', facts: [] } },
+            handoff: null,
+            createdAt: new Date().toISOString(),
             expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
             lastUsedAt: null,
-            approvedBy: { email: 'owner@example.com' }
+            createdByAccountId: null,
+            createdByEmail: 'owner@example.com',
+            requestedByAccountId: null,
+            status: 'active'
         }
     ];
+
     try {
         const keys = await listDeployTokens('example.com', context.options, context.dependencies);
         assert.equal(keys.length, 1);
@@ -417,5 +435,45 @@ test('the real hand-off passes the token on stdin and never in an argument', { s
         assert.equal(await readFile(stdinFile, 'utf8'), SECRET);
     } finally {
         process.env.PATH = original;
+    }
+});
+
+test('a preview-only token for a site that runs PHP fails before any request, with the reason', async () => {
+    const context = await setup();
+    context.server.state.phpVersion = '8.4';
+    try {
+        await assert.rejects(
+            createDeployToken('example.com', { ...context.options, production: false, preview: true, github: 'acme/web' }, context.dependencies),
+            (error: unknown) => error instanceof CliError && error.code === 'deploy_token_requires_production' && /PHP/.test(error.message)
+        );
+        assert.equal(context.server.count('POST', '/identity/key-requests'), 0);
+        assert.equal(context.calls.length, 0, 'not even the hand-off preflight ran');
+    } finally {
+        await context.server.close();
+    }
+});
+
+test('ZynoAuth responses are parsed strictly: a malformed start, poll, or list is rejected', async () => {
+    const { KeyRequestClient } = await import('../src/api/key-request-client.js');
+    const context = await setup();
+    try {
+        const client = new KeyRequestClient(context.server.url);
+        const bad = async (script: Record<string, unknown>, delivery: 'poll' | 'display' = 'poll') => {
+            context.server.state.polls = [script as never];
+            return client.poll(REQUEST_CODE, delivery).then(
+                () => 'ok',
+                (error: unknown) => (error instanceof CliError ? error.code : 'other')
+            );
+        };
+        // Poll delivery without a secret, with a malformed one, and answered as the other delivery.
+        assert.equal(await bad({ status: 'approved', delivery: 'poll', key: (approvedPoll() as { key: unknown }).key }), 'invalid_auth_response');
+        assert.equal(await bad({ ...(approvedPoll() as object), secret: 'zck_short' }), 'invalid_auth_response');
+        assert.equal(await bad({ ...(approvedPoll() as object), delivery: 'display' }), 'invalid_auth_response');
+        assert.equal(await bad({ ...(displayApprovedPoll() as object) }), 'invalid_auth_response');
+        assert.equal(await bad({ status: 'mystery' }), 'invalid_auth_response');
+        // A key without its fields.
+        assert.equal(await bad({ status: 'approved', delivery: 'poll', secret: SECRET, key: { id: KEY_ID } }), 'invalid_auth_response');
+    } finally {
+        await context.server.close();
     }
 });

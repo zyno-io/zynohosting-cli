@@ -9,6 +9,7 @@ import type { LoginFlow } from '../login/flow.js';
 import { CapabilityKeySummary, KeyRequestClient } from '../api/key-request-client.js';
 import { ManagerClient } from '../api/manager-client.js';
 import { configLocation, describeProfileKey, loadConfigFile, mutateProfile, resolveConfig, selectProfile } from '../config.js';
+import { assertTokenAllowedForSite } from '../deploy-tokens/guard.js';
 import {
     DEFAULT_SECRET_NAME,
     deliverSecret,
@@ -219,7 +220,7 @@ export async function createDeployToken(
             requestCode: pending.requestCode,
             userCode: pending.userCode,
             verificationUri: pending.verificationUri,
-            ...(pending.verificationUriComplete ? { verificationUriComplete: pending.verificationUriComplete } : {}),
+            verificationUriComplete: pending.verificationUriComplete ?? pending.verificationUri,
             interval: pending.interval,
             expiresAt: pending.expiresAt
         };
@@ -248,6 +249,8 @@ export async function createDeployToken(
         siteId = site.id;
         siteName = site.fqdn;
         delivery = handoff.kind === 'manual' ? 'display' : 'poll';
+        // A preview-only token cannot deploy to a site that runs PHP, so fail here instead of after approval.
+        assertTokenAllowedForSite(site, environments);
         await preflightHandoff(handoff, dependencies);
         const input: KeyRequestInput = {
             siteId,

@@ -24,7 +24,7 @@ export interface KeyRequestStart {
     requestCode: string;
     userCode: string;
     verificationUri: string;
-    verificationUriComplete?: string | undefined;
+    verificationUriComplete: string;
     /** Seconds between polls. */
     interval: number;
     /** Epoch milliseconds. */
@@ -34,49 +34,63 @@ export interface KeyRequestStart {
 /** What is known about an issued key. The secret is never part of it. */
 export interface IssuedKey {
     id: string;
-    preview?: string | undefined;
+    preview: string;
     /** Epoch milliseconds. */
-    expiresAt?: number | undefined;
+    expiresAt: number;
     siteId?: string | undefined;
     environments?: KeyEnvironment[] | undefined;
 }
 
 export type KeyRequestPoll =
-    | { status: 'pending' | 'slow_down'; interval?: number | undefined }
+    | { status: 'pending' | 'slow_down'; interval: number }
     | { status: 'denied' | 'expired' | 'consumed' }
-    | { status: 'approved'; key?: IssuedKey | undefined; secret?: string | undefined };
+    | { status: 'approved'; key: IssuedKey; secret?: string | undefined };
 
 export interface CapabilityKeySummary {
     id: string;
-    description?: string | undefined;
-    preview?: string | undefined;
+    description: string;
+    preview: string;
+    status: 'active' | 'expired';
     siteId?: string | undefined;
     environments?: KeyEnvironment[] | undefined;
     approvedBy?: string | undefined;
-    createdAt?: number | undefined;
-    expiresAt?: number | undefined;
+    /** Epoch milliseconds. */
+    createdAt: number;
+    expiresAt: number;
     lastUsedAt?: number | undefined;
 }
 
 /** What the key says about itself at `GET /identity/tenant-keys/self`. */
 export interface SelfKey {
-    id?: string | undefined;
-    expiresAt?: number | undefined;
+    id: string;
+    /** Epoch milliseconds. */
+    expiresAt: number;
 }
 
-const REQUEST_CODE = /^zkr_[A-Za-z0-9_-]{20,100}$/;
-const USER_CODE = /^[A-Z0-9][A-Z0-9-]{2,30}$/;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const REQUEST_CODE = /^zkr_[A-Za-z0-9_-]{43}$/;
+const USER_CODE = /^[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$/;
 
-const time = z
-    .union([z.number(), z.string().max(64)])
-    .transform(value => (typeof value === 'number' ? value : Date.parse(value)))
-    .pipe(z.number().finite());
-const optionalTime = time.optional().catch(undefined);
-const optionalText = z.string().max(500).optional().catch(undefined);
-const environments = z
-    .array(z.enum(['production', 'preview']))
-    .optional()
-    .catch(undefined);
+/** An ISO date string converted to epoch milliseconds. */
+const isoMilliseconds = z
+    .string()
+    .max(64)
+    .transform((value, context) => {
+        const parsed = Date.parse(value);
+        if (Number.isNaN(parsed)) {
+            context.addIssue({ code: 'custom', message: 'must be a date' });
+            return z.NEVER;
+        }
+        return parsed;
+    });
+
+/** Display text with control characters removed, so a hostile server cannot inject terminal escapes. */
+function displayText(max: number) {
+    return z
+        .string()
+        .transform(value => value.replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ').trim())
+        .pipe(z.string().max(max));
+}
 
 function isLocalHttp(url: URL): boolean {
     return url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
@@ -97,61 +111,47 @@ const verificationUrl = z
 const startSchema = z.object({
     requestCode: z.string().regex(REQUEST_CODE),
     userCode: z.string().regex(USER_CODE),
-    verificationUri: verificationUrl.optional(),
-    verificationUriComplete: verificationUrl.optional().catch(undefined),
+    verificationUri: verificationUrl,
+    verificationUriComplete: verificationUrl,
     interval: z.number().positive().max(300),
-    expiresIn: z.number().positive().optional(),
-    expiresAt: time.optional()
+    /** Epoch milliseconds. */
+    expiresAt: z.number().positive()
 });
 
-/** `granted` as the server stores it: `{ hosting: { v: 1, siteId, environments } }`, or that namespace on its own. */
-function hostingGrant(value: unknown): { siteId?: string; environments?: KeyEnvironment[] } {
-    if (!value || typeof value !== 'object') return {};
-    const object = value as Record<string, unknown>;
-    const hosting = (object.hosting && typeof object.hosting === 'object' ? object.hosting : object) as Record<string, unknown>;
-    const parsed = z.object({ siteId: z.string().max(100).optional().catch(undefined), environments }).safeParse(hosting);
-    return parsed.success
-        ? {
-              ...(parsed.data.siteId ? { siteId: parsed.data.siteId } : {}),
-              ...(parsed.data.environments ? { environments: parsed.data.environments } : {})
-          }
-        : {};
-}
+const environmentsSchema = z.array(z.enum(['production', 'preview'])).min(1);
+const hostingGrantSchema = z.object({ v: z.literal(1), siteId: z.string().regex(UUID), environments: environmentsSchema });
+/** `{ hosting?: {...} }`; namespaces this CLI does not know about are ignored. */
+const capabilitiesSchema = z.object({ hosting: hostingGrantSchema.loose().optional() }).loose();
 
-const keySchema = z
-    .object({
-        id: z.string().min(1).max(100),
-        preview: optionalText,
-        expiresAt: optionalTime,
-        granted: z.unknown().optional(),
-        capabilities: z.unknown().optional()
-    })
-    .loose();
+const keyInfoSchema = z.object({
+    id: z.string().regex(UUID),
+    keyPreview: displayText(100),
+    capabilities: capabilitiesSchema,
+    createdAt: isoMilliseconds,
+    expiresAt: isoMilliseconds
+});
 
 const pollSchema = z.object({
     status: z.enum(['pending', 'slow_down', 'approved', 'denied', 'expired', 'consumed']),
-    interval: z.number().positive().max(300).optional().catch(undefined),
-    key: keySchema.optional().catch(undefined),
+    interval: z.number().positive().max(300).optional(),
+    delivery: z.enum(['poll', 'display']).optional(),
+    key: keyInfoSchema.optional(),
     secret: z.string().max(256).optional()
 });
 
-const summarySchema = z
-    .object({
-        id: z.string().min(1).max(100),
-        description: optionalText,
-        preview: optionalText,
-        createdAt: optionalTime,
-        expiresAt: optionalTime,
-        lastUsedAt: optionalTime,
-        approvedBy: z
-            .union([z.string(), z.object({ email: z.string().optional() }).loose()])
-            .transform(value => (typeof value === 'string' ? value : value.email))
-            .optional()
-            .catch(undefined),
-        granted: z.unknown().optional(),
-        capabilities: z.unknown().optional()
-    })
-    .loose();
+const summarySchema = z.object({
+    id: z.string().regex(UUID),
+    description: displayText(500),
+    keyPreview: displayText(100),
+    capabilities: capabilitiesSchema,
+    createdAt: isoMilliseconds,
+    expiresAt: isoMilliseconds,
+    lastUsedAt: isoMilliseconds.nullable(),
+    createdByEmail: displayText(320).nullable(),
+    status: z.enum(['active', 'expired'])
+});
+
+const selfSchema = z.object({ id: z.string().regex(UUID), expiresAt: isoMilliseconds });
 
 function invalid(error: z.ZodError, what: string): CliError {
     // Issue paths only: a response value (a request code, a key) must never reach a message.
@@ -159,14 +159,9 @@ function invalid(error: z.ZodError, what: string): CliError {
     return new CliError(`ZynoAuth returned an invalid ${what} response (${where})`, 5, 'invalid_auth_response');
 }
 
-function issuedKey(key: z.infer<typeof keySchema>): IssuedKey {
-    const grant = hostingGrant(key.granted ?? key.capabilities);
-    return {
-        id: key.id,
-        ...(key.preview ? { preview: key.preview } : {}),
-        ...(key.expiresAt === undefined ? {} : { expiresAt: key.expiresAt }),
-        ...grant
-    };
+function grantOf(capabilities: z.infer<typeof capabilitiesSchema>): { siteId?: string; environments?: KeyEnvironment[] } {
+    const hosting = capabilities.hosting;
+    return hosting ? { siteId: hosting.siteId, environments: hosting.environments } : {};
 }
 
 export class KeyRequestClient {
@@ -201,30 +196,25 @@ export class KeyRequestClient {
                 })
             });
         } catch (error) {
-            if (error instanceof HttpError && (error.status === 404 || error.status === 503)) {
-                throw new CliError(
-                    'Deploy tokens are not available on this ZynoSuite server right now. Try again later.',
-                    4,
-                    'deploy_tokens_unavailable'
-                );
+            // 503 is the owning app or ZynoAuth being unavailable; its message says which. 404 is the site not being found, so it passes through.
+            if (error instanceof HttpError && error.status === 503) {
+                throw new CliError(`Deploy tokens are not available right now: ${error.message}`, 4, 'deploy_tokens_unavailable');
             }
             throw error;
         }
         const parsed = startSchema.safeParse(value);
         if (!parsed.success) throw invalid(parsed.error, 'key request');
-        const { expiresAt, expiresIn, verificationUri, verificationUriComplete, ...rest } = parsed.data;
-        const deadline = expiresAt ?? (expiresIn === undefined ? undefined : Date.now() + expiresIn * 1000);
-        const link = verificationUri ?? verificationUriComplete;
-        if (deadline === undefined || !link)
-            throw new CliError('ZynoAuth returned an invalid key request response (expiry or link)', 5, 'invalid_auth_response');
-        const complete =
-            verificationUriComplete && new URL(verificationUriComplete).origin === new URL(link).origin ? verificationUriComplete : undefined;
-        return { ...rest, verificationUri: link, ...(complete ? { verificationUriComplete: complete } : {}), expiresAt: deadline };
+        const start = parsed.data;
+        // The approval link must stay on the origin ZynoAuth named, so a response cannot send the person elsewhere.
+        if (new URL(start.verificationUriComplete).origin !== new URL(start.verificationUri).origin) {
+            throw new CliError('ZynoAuth returned an invalid key request response (verificationUriComplete)', 5, 'invalid_auth_response');
+        }
+        return start;
     }
 
     /**
      * Asks whether the person approved. With `poll` delivery the secret arrives exactly once, here, and must match the key
-     * format. With `display` delivery the response is read for key details only: any secret in it is dropped unread.
+     * format. With `display` delivery the response must carry no secret; if one is there it is dropped unread.
      */
     async poll(requestCode: string, delivery: KeyDelivery): Promise<KeyRequestPoll> {
         const value = await requestJson(`${this.apiUrl}/identity/key-requests/poll`, {
@@ -235,18 +225,23 @@ export class KeyRequestClient {
         });
         const parsed = pollSchema.safeParse(value);
         if (!parsed.success) throw invalid(parsed.error, 'key request poll');
-        const { status, interval, key, secret } = parsed.data;
+        const { status, interval, key, secret, delivery: answered } = parsed.data;
         if (status === 'approved') {
-            const fromKey =
-                key && typeof (key as Record<string, unknown>).secret === 'string' ? ((key as Record<string, unknown>).secret as string) : undefined;
-            const found = secret ?? fromKey;
-            if (delivery === 'display') return { status, ...(key ? { key: issuedKey(key) } : {}) };
-            if (!found || !DEPLOY_TOKEN_PATTERN.test(found)) {
+            if (!key || answered !== delivery) {
+                throw new CliError('ZynoAuth returned an invalid key request poll response (delivery or key)', 5, 'invalid_auth_response');
+            }
+            const issued: IssuedKey = { id: key.id, preview: key.keyPreview, expiresAt: key.expiresAt, ...grantOf(key.capabilities) };
+            if (delivery === 'display') return { status, key: issued };
+            if (!secret || !DEPLOY_TOKEN_PATTERN.test(secret)) {
                 throw new CliError('ZynoAuth returned an approved key request without a valid key', 5, 'invalid_auth_response');
             }
-            return { status, secret: found, ...(key ? { key: issuedKey(key) } : {}) };
+            return { status, key: issued, secret };
         }
-        if (status === 'pending' || status === 'slow_down') return { status, interval };
+        if (status === 'pending' || status === 'slow_down') {
+            if (interval === undefined)
+                throw new CliError('ZynoAuth returned an invalid key request poll response (interval)', 5, 'invalid_auth_response');
+            return { status, interval };
+        }
         return { status };
     }
 
@@ -266,25 +261,21 @@ export class KeyRequestClient {
             timeoutMs: this.timeoutMs,
             headers: { ...(await authorizationHeaders(credential)), Accept: 'application/json' }
         });
-        const rows = Array.isArray(value)
-            ? value
-            : value && typeof value === 'object'
-              ? ((value as Record<string, unknown>).keys ?? (value as Record<string, unknown>).items ?? (value as Record<string, unknown>).data)
-              : undefined;
-        if (!Array.isArray(rows)) throw new CliError('ZynoAuth returned an invalid key list response', 5, 'invalid_auth_response');
-        return rows.map(row => {
+        if (!Array.isArray(value)) throw new CliError('ZynoAuth returned an invalid key list response', 5, 'invalid_auth_response');
+        return value.map(row => {
             const parsed = summarySchema.safeParse(row);
             if (!parsed.success) throw invalid(parsed.error, 'key list');
             const item = parsed.data;
             return {
                 id: item.id,
-                ...(item.description ? { description: item.description } : {}),
-                ...(item.preview ? { preview: item.preview } : {}),
-                ...(item.approvedBy ? { approvedBy: item.approvedBy } : {}),
-                ...(item.createdAt === undefined ? {} : { createdAt: item.createdAt }),
-                ...(item.expiresAt === undefined ? {} : { expiresAt: item.expiresAt }),
-                ...(item.lastUsedAt === undefined ? {} : { lastUsedAt: item.lastUsedAt }),
-                ...hostingGrant(item.granted ?? item.capabilities)
+                description: item.description,
+                preview: item.keyPreview,
+                status: item.status,
+                ...(item.createdByEmail ? { approvedBy: item.createdByEmail } : {}),
+                createdAt: item.createdAt,
+                expiresAt: item.expiresAt,
+                ...(item.lastUsedAt === null ? {} : { lastUsedAt: item.lastUsedAt }),
+                ...grantOf(item.capabilities)
             };
         });
     }
@@ -303,11 +294,9 @@ export class KeyRequestClient {
             timeoutMs: this.timeoutMs,
             headers: { Authorization: basicAuthorization(key), Accept: 'application/json' }
         });
-        const parsed = z
-            .object({ id: z.string().max(100).optional().catch(undefined), expiresAt: optionalTime })
-            .loose()
-            .safeParse(value ?? {});
-        return parsed.success ? parsed.data : {};
+        const parsed = selfSchema.safeParse(value);
+        if (!parsed.success) throw invalid(parsed.error, 'key');
+        return parsed.data;
     }
 
     /** The key revoking itself: for a deploy-tokens revoke --self, and to undo a key whose hand-off failed. */
