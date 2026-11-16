@@ -28,7 +28,7 @@ Listing forms, describing their structure, and reading their integration details
 
 ## Deploy tokens
 
-A [deploy token](../cli/deploy-tokens) is not a tenant permission. It is a key tied to one site and to the environments you choose. It carries no tenant permissions at all.
+A [deploy token](../cli/deploy-tokens) is not a tenant permission. It is a restricted API key whose site grants live in hosting. It holds only the bare `hosting` app permission, plus any you add with `deploy-tokens create --permission <key>`; the approver can remove those.
 
 | Call                                            | Allowed                                                                           |
 | ----------------------------------------------- | --------------------------------------------------------------------------------- |

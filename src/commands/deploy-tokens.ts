@@ -9,7 +9,7 @@ import type { LoginFlow } from '../login/flow.js';
 import { CapabilityKeySummary, KeyRequestClient } from '../api/key-request-client.js';
 import { ManagerClient } from '../api/manager-client.js';
 import { configLocation, describeProfileKey, loadConfigFile, mutateProfile, resolveConfig, selectProfile } from '../config.js';
-import { assertTokenAllowedForSite } from '../deploy-tokens/guard.js';
+import { assertTokenAllowedForSite, diagnoseDeployToken } from '../deploy-tokens/guard.js';
 import {
     DEFAULT_SECRET_NAME,
     deliverSecret,
@@ -34,6 +34,8 @@ export interface DeployTokenCreateOptions extends ConfigOverrides {
     production?: boolean;
     preview?: boolean;
     both?: boolean;
+    /** Extra permission keys for the token (for example `hosting.sitesRead`), each a separate `--permission`. */
+    permission?: string[];
     lifetime?: string;
     github?: string;
     githubEnvironment?: string;
@@ -62,7 +64,7 @@ export interface DeployTokenDependencies extends HandoffDependencies {
 }
 
 export type DeployTokenCreateResult =
-    | { status: 'pending'; site: string; userCode: string; verificationUri: string; expiresAt: string }
+    | { status: 'pending'; site: string; userCode: string; verificationUri: string; expiresAt: string; permissions: string[] }
     | {
           status: 'created';
           site: string;
@@ -70,6 +72,7 @@ export type DeployTokenCreateResult =
           environments: KeyEnvironment[];
           keyId?: string;
           preview?: string;
+          permissionKeys?: string[];
           expiresAt?: string;
           destination: string;
           warnings: string[];
@@ -101,6 +104,20 @@ function environmentsFrom(options: Pick<DeployTokenCreateOptions, 'production' |
     }
     if (chosen > 1) throw new CliError('Choose one of --production, --preview, or --both.', 2, 'invalid_input');
     return options.both ? ['preview', 'production'] : options.preview ? ['preview'] : ['production'];
+}
+
+/** A permission key (`hosting.sitesRead`) or a bare app (`hosting`). Checked loosely here; ZynoAuth knows the real catalogue. */
+const PERMISSION_KEY = /^[a-z][A-Za-z0-9]*(\.[A-Za-z][A-Za-z0-9]*)*$/;
+
+function permissionsFrom(values: readonly string[] | undefined): string[] {
+    const keys = [...new Set((values ?? []).map(value => value.trim()))];
+    if (keys.length > 100) throw new CliError('Give at most 100 --permission options.', 2, 'invalid_input');
+    for (const key of keys) {
+        if (key.length > 100 || !PERMISSION_KEY.test(key)) {
+            throw new CliError(`Invalid --permission "${key.slice(0, 60)}"; use a permission key such as hosting.sitesRead.`, 2, 'invalid_input');
+        }
+    }
+    return keys;
 }
 
 function handoffFrom(options: DeployTokenCreateOptions): Handoff {
@@ -192,6 +209,7 @@ export async function createDeployToken(
     let siteName: string;
     let environments: KeyEnvironment[];
     let handoffPlan: HandoffPreflight = { replacesExisting: false };
+    let requestedPermissions: string[] = [];
 
     if (options.resume) {
         if (
@@ -199,6 +217,7 @@ export async function createDeployToken(
             options.production ||
             options.preview ||
             options.both ||
+            options.permission?.length ||
             options.github ||
             options.gitlab ||
             options.file ||
@@ -237,6 +256,7 @@ export async function createDeployToken(
             throw new CliError('Name the site: zynohosting deploy-tokens create <site> --production --github owner/repo', 2, 'invalid_input');
         environments = environmentsFrom(options);
         handoff = handoffFrom(options);
+        const permissions = permissionsFrom(options.permission);
         const lifetime = lifetimeSeconds(options.lifetime);
         if (options.noWait && handoff.kind !== 'manual') {
             throw new CliError(
@@ -255,23 +275,32 @@ export async function createDeployToken(
         assertTokenAllowedForSite(site, environments);
         handoffPlan = await preflightHandoff(handoff, dependencies);
         const input: KeyRequestInput = {
-            siteId,
-            environments,
+            permissions,
+            sites: [{ siteId, environments }],
             description: description(siteName),
             ...(lifetime === undefined ? {} : { requestedLifetimeSecs: lifetime }),
             delivery,
             handoff: { kind: handoffKind(handoff), target: handoffTarget(handoff) }
         };
         start = await client.start(config.credential, input);
+        // What ZynoAuth normalized the request to is what the approver will see.
+        requestedPermissions = start.requested?.permissions ?? permissions;
     }
     return finishRequest(client, authApiUrl);
 
     async function finishRequest(activeClient: KeyRequestClient, activeAuthUrl: string): Promise<DeployTokenCreateResult> {
         const link = start.verificationUriComplete ?? start.verificationUri;
         if (!pending) {
-            const prompt = { userCode: start.userCode, verificationUri: start.verificationUri, expiresAt: new Date(start.expiresAt).toISOString() };
+            const prompt = {
+                userCode: start.userCode,
+                verificationUri: start.verificationUri,
+                expiresAt: new Date(start.expiresAt).toISOString(),
+                permissions: requestedPermissions
+            };
+            // The bare `hosting` key only means "access to hosting"; show the ones the person asked for beyond it.
+            const extra = requestedPermissions.filter(key => key !== 'hosting');
             write(
-                `\nApprove the deploy token for ${siteName} (${environments.join(' and ')}).\nOpen: ${link}\nCode: ${start.userCode}\nCheck that the page shows the same code and your site.\n`
+                `\nApprove the deploy token for ${siteName} (${environments.join(' and ')})${extra.length ? ` with ${extra.join(', ')}` : ''}.\nOpen: ${link}\nCode: ${start.userCode}\nCheck that the page shows the same code and your site.\n`
             );
             emit({
                 type: 'prompt',
@@ -399,6 +428,7 @@ export async function createDeployToken(
                 environments,
                 ...(approved.key?.id ? { keyId: approved.key.id } : {}),
                 ...(approved.key?.preview ? { preview: approved.key.preview } : {}),
+                ...(approved.key ? { permissionKeys: approved.key.permissionKeys } : {}),
                 ...(keyExpiry ? { expiresAt: keyExpiry } : {}),
                 destination,
                 warnings
@@ -480,7 +510,8 @@ export async function listDeployTokens(
         const parts = [
             key.id,
             key.preview ?? '',
-            key.environments?.join('+') ?? '',
+            key.sites.map(site => `${site.label} (${site.environments.join('+')})`).join(', '),
+            key.permissionKeys.filter(permission => !key.apps.includes(permission)).join(','),
             key.expiresAt === undefined ? '' : `expires ${iso(key.expiresAt)}`,
             key.lastUsedAt === undefined ? 'never used' : `last used ${iso(key.lastUsedAt)}`,
             key.approvedBy ? `approved by ${key.approvedBy}` : '',
@@ -516,18 +547,41 @@ export async function revokeDeployToken(
     emit({ type: 'result', status: 'revoked', keyId });
 }
 
-/** `whoami` for a deploy token: the site, environments, and expiry it holds. */
+/** `whoami` for a deploy token: the sites and environments it holds, and its expiry (which only ZynoAuth knows). */
 export async function describeDeployToken(options: ConfigOverrides & { json?: boolean }, dependencies: DeployTokenDependencies = {}): Promise<void> {
     const { json, env } = context(options, dependencies);
     const write = dependencies.write ?? ((message: string) => process.stdout.write(message));
     const config = await resolveConfig({ ...options, deployTokenAllowed: true }, env);
     if (config.credential.type !== 'deploy-token') throw new CliError('ZYNOHOSTING_DEPLOY_TOKEN is not set.', 2, 'invalid_input');
-    const info = await new ManagerClient(config.apiUrl, config.credential).getDeployTokenInfo();
+    const token = config.credential.token;
+    let info;
+    try {
+        info = await new ManagerClient(config.apiUrl, config.credential).getDeployTokenInfo();
+    } catch (error) {
+        return diagnoseDeployToken(config, error);
+    }
+    // Hosting reports no expiry. A token that expired or was revoked never reaches here: hosting refuses it first.
+    const self = await new KeyRequestClient(requireAuthApiUrl(config)).self(token);
+    const expiresAt = iso(self.expiresAt);
     if (json) {
         write(
-            `${JSON.stringify({ profile: describeProfileKey(selectProfile(options, env).key), deployToken: { site: info.site.fqdn, siteId: info.site.id, environments: info.environments, expiresAt: info.expiresAt } })}\n`
+            `${JSON.stringify({
+                profile: describeProfileKey(selectProfile(options, env).key),
+                deployToken: {
+                    keyId: info.keyId,
+                    sites: info.sites.map(entry => ({ site: entry.site.fqdn, siteId: entry.siteId, environments: entry.environments })),
+                    permissionKeys: self.permissionKeys,
+                    expiresAt
+                }
+            })}\n`
         );
         return;
     }
-    write(`Deploy token for ${info.site.fqdn} (${info.environments.join(' and ')}); expires ${info.expiresAt}.\n`);
+    if (!info.sites.length) {
+        write(`Deploy token ${info.keyId} no longer covers any site (deleted or transferred); expires ${expiresAt}.\n`);
+        return;
+    }
+    write(
+        `Deploy token for ${info.sites.map(entry => `${entry.site.fqdn} (${entry.environments.join(' and ')})`).join(', ')}; expires ${expiresAt}.\n`
+    );
 }

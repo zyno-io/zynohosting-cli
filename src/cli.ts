@@ -234,6 +234,7 @@ export function createProgram(): Command {
         .option('--production', 'allow deploying to production')
         .option('--preview', 'allow deploying to preview')
         .option('--both', 'allow production and preview (needed to promote)')
+        .option('--permission <key>', 'also grant this permission key, such as hosting.sitesRead (repeatable)', collect, [])
         .option('--lifetime <30d|90d|180d|365d>', 'suggest how long the token lasts; the approver decides (default 90d)')
         .option('--github <owner/repo>', 'save it as a GitHub Actions secret with `gh`')
         .option('--github-environment <name>', 'with --github: save it as an environment secret')

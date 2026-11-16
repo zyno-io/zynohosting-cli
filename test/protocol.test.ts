@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { parseAutomationSite, parseCapabilities, parseDeploymentSession, parseFinalPlan, parseSiteMutationAccepted } from '../src/protocol.js';
+import {
+    parseAutomationSite,
+    parseCapabilities,
+    parseDeployTokenInfo,
+    parseDeploymentSession,
+    parseFinalPlan,
+    parseSiteMutationAccepted
+} from '../src/protocol.js';
 
 test('parses a valid manager session and rejects unsafe remote URLs', () => {
     const session = parseDeploymentSession({
@@ -120,4 +127,33 @@ test('parses the accepted-operation shape shared by promote and site updates', (
     });
     assert.equal(accepted.operation.id, operationId);
     assert.equal(accepted.result.notFoundHandling, '404-page');
+});
+
+test('parses the deploy token whoami: sites with their environments, and no expiry', () => {
+    const site = (id: string, fqdn: string) => ({ id, fqdn, primaryHostname: fqdn, status: 'active', phpVersion: null, hostnames: [] });
+    const A = '11111111-1111-4111-8111-111111111111';
+    const B = '22222222-2222-4222-8222-222222222222';
+    const info = parseDeployTokenInfo({
+        keyId: 'key-1',
+        sites: [
+            { siteId: A, environments: ['production', 'preview'], site: site(A, 'a.example.com') },
+            { siteId: B, environments: ['preview', 'preview'], site: site(B, 'b.example.com') }
+        ]
+    });
+    assert.equal(info.keyId, 'key-1');
+    assert.deepEqual(
+        info.sites.map(entry => [entry.siteId, entry.site.fqdn, entry.environments]),
+        [
+            [A, 'a.example.com', ['production', 'preview']],
+            [B, 'b.example.com', ['preview']]
+        ]
+    );
+    assert.equal('expiresAt' in info, false);
+    // An empty list is valid: the sites were deleted or transferred.
+    assert.deepEqual(parseDeployTokenInfo({ keyId: 'key-1', sites: [] }).sites, []);
+    // The release 1 shape (one site, an expiry, no list) is not accepted.
+    assert.throws(() => parseDeployTokenInfo({ keyId: 'key-1', siteId: A, environments: ['production'], site: site(A, 'a.example.com') }));
+    // A site entry for another site, or with no environments.
+    assert.throws(() => parseDeployTokenInfo({ keyId: 'k', sites: [{ siteId: A, environments: ['production'], site: site(B, 'b.example.com') }] }));
+    assert.throws(() => parseDeployTokenInfo({ keyId: 'k', sites: [{ siteId: A, environments: [], site: site(A, 'a.example.com') }] }));
 });

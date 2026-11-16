@@ -13,11 +13,16 @@ import { CliError } from '../src/errors.js';
 import {
     approvedPoll,
     displayApprovedPoll,
+    grantDisplay,
     HUMAN_JWT,
     KEY_ID,
+    keyInfo,
+    listRow,
+    OTHER_SITE_ID,
     REQUEST_CODE,
     SECRET,
     SITE_ID,
+    selfRow,
     startFakeKeyServer
 } from './support/fake-key-server.js';
 
@@ -84,7 +89,9 @@ test('a GitHub hand-off puts the token on stdin of gh secret set and nowhere els
 
         const start = context.server.seen.find(entry => entry.url === '/identity/key-requests')!;
         assert.equal(start.authorization, `Bearer ${HUMAN_JWT}`);
-        assert.deepEqual(start.body.capabilities, { hosting: { v: 1, siteId: SITE_ID, environments: ['production'] } });
+        assert.deepEqual(start.body.permissions, []);
+        assert.deepEqual(start.body.grants, { hosting: [{ v: 1, siteId: SITE_ID, environments: ['production'] }] });
+        assert.equal('capabilities' in start.body, false);
         assert.equal(start.body.delivery, 'poll');
         assert.deepEqual(start.body.handoff, { kind: 'github-secret', target: 'acme/web' });
         assert.equal(typeof start.body.description, 'string');
@@ -124,7 +131,7 @@ test('a GitLab hand-off creates a masked variable with the token on stdin', asyn
         assert.deepEqual(set?.args, ['variable', 'set', 'ZYNOHOSTING_DEPLOY_TOKEN', '--masked', '-R', 'group/sub/project']);
         assert.equal(set?.input, SECRET);
         const start = context.server.seen.find(entry => entry.url === '/identity/key-requests')!;
-        assert.deepEqual((start.body.capabilities as { hosting: { environments: string[] } }).hosting.environments, ['preview']);
+        assert.deepEqual((start.body.grants as { hosting: Array<{ environments: string[] }> }).hosting[0]!.environments, ['preview']);
         assert.deepEqual(start.body.handoff, { kind: 'gitlab-variable', target: 'group/sub/project' });
         assertNoSecret(visible(context));
     } finally {
@@ -240,7 +247,7 @@ test('without a destination the token is shown on the approval page only, and a 
         const start = context.server.seen.find(entry => entry.url === '/identity/key-requests')!;
         assert.equal(start.body.delivery, 'display');
         assert.deepEqual(start.body.handoff, { kind: 'manual' });
-        assert.deepEqual((start.body.capabilities as { hosting: { environments: string[] } }).hosting.environments, ['preview', 'production']);
+        assert.deepEqual((start.body.grants as { hosting: Array<{ environments: string[] }> }).hosting[0]!.environments, ['preview', 'production']);
         assert.equal(context.calls.length, 0);
         assertNoSecret(visible(context, JSON.stringify(result)));
         assert.match(context.output.join(''), /approval page/);
@@ -381,33 +388,20 @@ test('revoke --self uses the token as its own credential, and the token never re
 
 test('list filters by site and prints no secret; revoke by id calls the tenant endpoint', async () => {
     const context = await setup();
-    context.server.state.keys = [
-        {
-            id: KEY_ID,
-            tenantId: '22222222-2222-4222-8222-222222222222',
-            description: 'CI for example.com',
-            keyPreview: 'zck_A1b2...abc',
-            namespaces: ['hosting'],
-            capabilities: { hosting: { v: 1, siteId: SITE_ID, environments: ['production'], siteOwnershipRevision: 3 } },
-            display: { hosting: { resourceLabel: 'example.com', facts: [] } },
-            handoff: null,
-            createdAt: new Date().toISOString(),
-            expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
-            lastUsedAt: null,
-            createdByAccountId: null,
-            createdByEmail: 'owner@example.com',
-            requestedByAccountId: null,
-            status: 'active'
-        }
-    ];
+    context.server.state.keys = [listRow({ description: 'CI for example.com', createdByEmail: 'owner@example.com' })];
 
     try {
         const keys = await listDeployTokens('example.com', context.options, context.dependencies);
         assert.equal(keys.length, 1);
-        assert.deepEqual(keys[0]!.environments, ['production']);
+        assert.deepEqual(keys[0]!.sites, [{ siteId: SITE_ID, label: 'example.com', environments: ['production'] }]);
+        assert.deepEqual(keys[0]!.permissionKeys, ['hosting']);
         const request = context.server.seen.find(entry => entry.url.startsWith('/tenant/capability-keys'))!;
-        assert.equal(new URL(request.url, 'http://x').searchParams.get('ref'), `site:${SITE_ID}`);
-        assert.equal(new URL(request.url, 'http://x').searchParams.get('namespace'), 'hosting');
+        const query = new URL(request.url, 'http://x').searchParams;
+        assert.equal(query.get('app'), 'hosting');
+        assert.equal(query.has('ref') || query.has('namespace'), false);
+        // The site filter is applied to the key's site grants: another site's list is empty.
+        context.server.state.keys = [listRow({ display: grantDisplay([[OTHER_SITE_ID, 'other.example', ['preview']]]) })];
+        assert.deepEqual(await listDeployTokens('example.com', context.options, context.dependencies), []);
         assertNoSecret(visible(context));
 
         await revokeDeployToken(KEY_ID, context.options, context.dependencies);
@@ -579,4 +573,190 @@ test('hand-off programs run from a neutral directory', { skip: process.platform 
     const { realpath } = await import('node:fs/promises');
     const result = await runProcess('pwd', []);
     assert.equal(result.stdout.trim(), await realpath(tmpdir()));
+});
+
+test('--permission is sent with the request, deduplicated, and shown to the approver as ZynoAuth normalized it', async () => {
+    const context = await setup();
+    try {
+        const result = await createDeployToken(
+            'example.com',
+            { ...context.options, permission: ['hosting.sitesRead', 'hosting.sitesRead', 'hosting.deploy'], noWait: true },
+            context.dependencies
+        );
+        const start = context.server.seen.find(entry => entry.url === '/identity/key-requests')!;
+        assert.deepEqual(start.body.permissions, ['hosting.sitesRead', 'hosting.deploy']);
+        assert.deepEqual(start.body.grants, { hosting: [{ v: 1, siteId: SITE_ID, environments: ['production'] }] });
+        assert.equal(result.status, 'pending');
+        // The server adds the bare app key and sorts; that is what is reported, not what was sent.
+        assert.deepEqual(result.status === 'pending' && result.permissions, ['hosting', 'hosting.deploy', 'hosting.sitesRead']);
+        assert.match(context.output.join(''), /with hosting\.deploy, hosting\.sitesRead/);
+    } finally {
+        await context.server.close();
+    }
+});
+
+test('--permission is checked loosely before anything is requested, and does not combine with --resume', async () => {
+    const context = await setup();
+    try {
+        for (const bad of ['', 'Hosting', 'hosting..deploy', 'hosting.sites read', '.hosting', '1hosting', 'x'.repeat(101)]) {
+            await assert.rejects(
+                createDeployToken('example.com', { ...context.options, permission: [bad] }, context.dependencies),
+                (error: unknown) => error instanceof CliError && error.code === 'invalid_input' && /--permission/.test(error.message),
+                bad
+            );
+        }
+        // Unknown but well-formed keys are left to the server, which is authoritative.
+        await createDeployToken('example.com', { ...context.options, permission: ['somefuture.key'], noWait: true }, context.dependencies);
+        assert.equal(context.server.count('POST', '/identity/key-requests'), 1);
+        await assert.rejects(
+            createDeployToken(undefined, { ...context.options, resume: true, permission: ['hosting.sitesRead'] }, context.dependencies),
+            (error: unknown) => error instanceof CliError && error.code === 'invalid_input'
+        );
+    } finally {
+        await context.server.close();
+    }
+});
+
+test('an approved key reports its permission keys and sites', async () => {
+    const context = await setup();
+    context.server.state.polls = [approvedPollWith(['hosting', 'hosting.sitesRead'])];
+    try {
+        const result = await createDeployToken('example.com', { ...context.options, github: 'acme/web' }, context.dependencies);
+        assert.equal(result.status, 'created');
+        assert.deepEqual(result.status === 'created' && result.permissionKeys, ['hosting', 'hosting.sitesRead']);
+        assertNoSecret(visible(context, JSON.stringify(result)));
+    } finally {
+        await context.server.close();
+    }
+});
+
+function approvedPollWith(permissionKeys: string[]) {
+    return { status: 'approved', delivery: 'poll', secret: SECRET, key: keyInfo(['production'], permissionKeys) } as never;
+}
+
+test('the new ZynoAuth shapes are parsed strictly: start, key info, list rows, and the key itself', async () => {
+    const { KeyRequestClient } = await import('../src/api/key-request-client.js');
+    const context = await setup();
+    try {
+        const client = new KeyRequestClient(context.server.url);
+        const input = {
+            permissions: [],
+            sites: [{ siteId: SITE_ID, environments: ['production' as const] }],
+            description: 'CI',
+            delivery: 'poll' as const
+        };
+        const start = await client.start({ type: 'bearer', token: HUMAN_JWT } as never, input);
+        assert.deepEqual(start.requested, { permissions: ['hosting'], sites: [{ siteId: SITE_ID, environments: ['production'] }] });
+
+        const state = context.server.state;
+        const verdict = async (call: () => Promise<unknown>) =>
+            call().then(
+                () => 'ok',
+                (error: unknown) => (error instanceof CliError ? error.code : `other: ${String(error)}`)
+            );
+        const poll = (script: Record<string, unknown>) => {
+            state.polls = [script as never];
+            return verdict(() => client.poll(REQUEST_CODE, 'display'));
+        };
+        const info = keyInfo();
+        assert.equal(await poll({ status: 'approved', delivery: 'display', key: info }), 'ok');
+        // The old `capabilities` envelope is not a key.
+        const { display: _display, permissionKeys: _permissionKeys, ...old } = info;
+        assert.equal(
+            await poll({ status: 'approved', delivery: 'display', key: { ...old, capabilities: { hosting: {} } } }),
+            'invalid_auth_response'
+        );
+        // Each required field of the new shape.
+        for (const field of ['permissionKeys', 'display', 'handoff', 'tenantId', 'description']) {
+            const { [field]: _removed, ...partial } = info;
+            assert.equal(await poll({ status: 'approved', delivery: 'display', key: partial }), 'invalid_auth_response', field);
+        }
+        // A hosting view whose grant is not a hosting grant.
+        const bad = keyInfo();
+        (bad.display as { hosting: { views: Array<{ grant: unknown }> } }).hosting.views[0]!.grant = { v: 2, siteId: 'nope', environments: [] };
+        assert.equal(await poll({ status: 'approved', delivery: 'display', key: bad }), 'invalid_auth_response');
+
+        // List rows and the self answer.
+        const list = (rows: unknown[]) => {
+            state.keys = rows;
+            return verdict(() => client.list({ type: 'bearer', token: HUMAN_JWT } as never));
+        };
+        assert.equal(await list([listRow()]), 'ok');
+        for (const field of ['apps', 'permissionKeys', 'display', 'status', 'lastUsedAt', 'createdByEmail', 'requestedByAccountId']) {
+            const { [field]: _removed, ...partial } = listRow();
+            assert.equal(await list([partial]), 'invalid_auth_response', field);
+        }
+        assert.equal(await list([listRow({ status: 'revoked' })]), 'invalid_auth_response');
+        assert.equal(await list([listRow({ expiresAt: 'tomorrow' })]), 'invalid_auth_response');
+
+        const self = await client.self(SECRET);
+        assert.deepEqual(self.permissionKeys, ['hosting']);
+        assert.deepEqual(self.apps, ['hosting']);
+        for (const field of ['id', 'permissionKeys', 'expiresAt', 'display']) {
+            const { [field]: _removed, ...partial } = selfRow(new Date().toISOString());
+            state.self = { httpStatus: 200, body: partial };
+            assert.equal(await verdict(() => client.self(SECRET)), 'invalid_auth_response', field);
+        }
+    } finally {
+        await context.server.close();
+    }
+});
+
+test('a start response that does not match the contract is rejected', async () => {
+    const { KeyRequestClient } = await import('../src/api/key-request-client.js');
+    const { createServer } = await import('node:http');
+    const answers: Record<string, unknown>[] = [];
+    const server = createServer((_request, response) => {
+        response.setHeader('Content-Type', 'application/json');
+        response.end(JSON.stringify(answers.shift()));
+    });
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address() as { port: number };
+    const base = `http://127.0.0.1:${address.port}`;
+    const good = {
+        requestId: '77777777-7777-4777-8777-777777777777',
+        requestCode: REQUEST_CODE,
+        userCode: 'ABCD-EFGH',
+        verificationUri: `${base}/keys/approve`,
+        verificationUriComplete: `${base}/keys/approve?code=ABCD-EFGH`,
+        interval: 5,
+        expiresIn: 600,
+        expiresAt: Date.now() + 600_000,
+        apps: ['hosting'],
+        requested: { permissions: ['hosting'], grants: { hosting: [{ v: 1, siteId: SITE_ID, environments: ['production'] }] } },
+        views: { hosting: [] },
+        lifetime: { optionsSecs: [2592000], defaultSecs: 2592000 }
+    };
+    try {
+        const client = new KeyRequestClient(base);
+        const credential = { type: 'bearer', token: HUMAN_JWT } as never;
+        const input = {
+            permissions: [],
+            sites: [{ siteId: SITE_ID, environments: ['production' as const] }],
+            description: 'CI',
+            delivery: 'poll' as const
+        };
+        answers.push(good);
+        assert.equal((await client.start(credential, input)).userCode, 'ABCD-EFGH');
+        for (const field of ['requested', 'apps', 'views', 'lifetime', 'requestId', 'expiresIn']) {
+            const { [field]: _removed, ...partial } = good as Record<string, unknown>;
+            answers.push(partial);
+            await assert.rejects(
+                client.start(credential, input),
+                (error: unknown) => error instanceof CliError && error.code === 'invalid_auth_response',
+                field
+            );
+        }
+        // A grant in the wrong shape (the old namespace and ref fields are not part of it).
+        answers.push({
+            ...good,
+            requested: { permissions: ['hosting'], grants: { hosting: [{ v: 1, siteId: 'x', environments: ['production'] }] } }
+        });
+        await assert.rejects(
+            client.start(credential, input),
+            (error: unknown) => error instanceof CliError && error.code === 'invalid_auth_response'
+        );
+    } finally {
+        await new Promise<void>(resolve => server.close(() => resolve()));
+    }
 });

@@ -6,7 +6,7 @@ If a deploy token leaks, an attacker can deploy to that one site until you revok
 
 ## What a token can do
 
-A deploy token is tied to one site and to the environments you choose: production, preview, or both.
+A deploy token is an ordinary restricted API key with the `hosting` app permission and nothing else by default. Its access to sites is a grant stored in hosting: one or more sites, each with the environments you choose (production, preview, or both). `deploy-tokens create` asks for one site.
 
 It can:
 
@@ -17,7 +17,7 @@ It can:
 - change not-found handling, if it includes production;
 - say what it is (`zynohosting whoami`) and revoke itself.
 
-It cannot list other sites, read or write single files, download the site, edit forms, or create other tokens. Every token has an expiry: 30, 90 (the default), 180, or 365 days. There are no tokens that never expire.
+It can list and read only the sites it is granted. It cannot read other sites, read or write single files, download the site, edit forms, or create other tokens. Hosting does not know a token's expiry; the CLI reads it from ZynoAuth. Every token has an expiry: 30, 90 (the default), 180, or 365 days. There are no tokens that never expire.
 
 A deploy that is already running when you revoke the token can finish. That takes up to 20 minutes.
 
@@ -40,6 +40,16 @@ The CLI opens an approval page in your browser. Check that the code, site, and e
 The CLI saves the token to GitHub for you. It never prints it.
 
 You must say which environments the token may use: `--production`, `--preview`, or `--both`.
+
+### Extra permissions
+
+A token gets the `hosting` app permission for its site grant. To also give it an ordinary permission, repeat `--permission <key>`:
+
+```bash
+zynohosting deploy-tokens create example.com --production --github acme/web --permission hosting.sitesRead
+```
+
+The CLI checks only that each key is well formed. ZynoAuth is authoritative: an unknown key is refused when the request starts. The approver sees the permissions on the approval page and can remove any of them. The approver must hold every permission that is approved.
 
 ### Where the token goes
 
@@ -66,6 +76,7 @@ A file inside a git repository that is not ignored gets a warning. Add it to `.g
 
 | Option                              | Purpose                                                                   |
 | ----------------------------------- | ------------------------------------------------------------------------- |
+| `--permission <key>`                | Also grant a permission key such as `hosting.sitesRead`. Repeatable.      |
 | `--lifetime <30d\|90d\|180d\|365d>` | Suggest a lifetime. The approver chooses.                                 |
 | `--no-wait`                         | With no destination: print the link and code, save the request, and exit. |
 | `--resume`                          | Finish a request saved with `--no-wait`.                                  |
@@ -83,7 +94,7 @@ zynohosting deploy-tokens list example.com
 zynohosting deploy-tokens revoke <keyId>
 ```
 
-The list shows each token's id, short preview, environments, who approved it, expiry, and last use. It never shows a token.
+The list shows each token's id, short preview, sites and environments, extra permission keys, who approved it, expiry, and last use. It never shows a token. `list <site>` keeps the tokens granted that site. The list comes from ZynoAuth's `app=hosting` filter, so it holds hosting tokens only. A login that lacks `hosting.sitesRead` sees none.
 
 CI can revoke its own token:
 
@@ -93,7 +104,7 @@ zynohosting deploy-tokens revoke --self
 
 ## Use a token in CI
 
-Set `ZYNOHOSTING_DEPLOY_TOKEN`. The CLI knows the site from the token, so you can leave it out:
+Set `ZYNOHOSTING_DEPLOY_TOKEN`. A token that covers one site lets you leave the site out:
 
 ```bash
 export ZYNOHOSTING_DEPLOY_TOKEN='...'
@@ -108,6 +119,12 @@ With a token, `deploy` takes the site and the directory in either form:
 - `deploy example.com ./dist` names both.
 
 If one argument is both the site and a directory, the CLI stops and asks for both. If the site or environment does not match the token, it fails before it uploads anything.
+
+A token that covers several sites always needs the site named: `deploy` or `deploy ./dist` fails with `deploy_token_site_required`, and a site the token does not cover fails with `deploy_token_wrong_site` and lists the sites it does cover.
+
+If every site the token was approved for was deleted or moved to another tenant, hosting lists no sites for it. Commands fail with `deploy_token_no_sites`; create a new token.
+
+`zynohosting whoami` with a token prints its sites, environments, and expiry (read from ZynoAuth), so it needs the ZynoAuth API URL (`--auth-api-url` or `ZYNO_AUTH_API_URL`).
 
 A token only runs `deploy`, `promote`, `whoami`, `sites set`, `sites runtime`, and `deploy-tokens revoke --self`. Every other command fails with `deploy_token_not_allowed`.
 
@@ -187,8 +204,11 @@ To limit the variable to protected branches, mark it protected in the project's 
 | `deploy_token_not_allowed`         | A deploy token cannot run this command (exit 3).                                                  |
 | `conflicting_credentials`          | A deploy token was set together with an API key or access token (exit 2).                         |
 | `invalid_deploy_token`             | The value is not a deploy token. A tenant API key gets its own message (exit 2).                  |
-| `deploy_token_wrong_site`          | The site is not the one the token was created for (exit 3).                                       |
-| `deploy_token_wrong_environment`   | The token does not include that environment (exit 3).                                             |
+| `deploy_token_wrong_site`          | The site is not one the token covers (exit 3, or 2 for a deploy argument).                        |
+| `deploy_token_site_required`       | The token covers several sites: name the one to deploy (exit 2).                                  |
+| `deploy_token_no_sites`            | Every site of the token was deleted or transferred. Create a new token (exit 3).                  |
+| `deploy_token_wrong_environment`   | The token's grant for that site does not include that environment (exit 3). Checked before the request. |
+| `deploy_token_denied`              | The token is valid, but hosting refused the call (`not bound to this site`, wrong scope, and so on). The message quotes hosting (exit 3). |
 | `deploy_token_requires_production` | The site runs PHP, so its token must include production (exit 3).                                 |
 | `deploy_token_expired`             | The token expired. Create a new one (exit 3).                                                     |
 | `deploy_token_revoked`             | The token was revoked or is no longer valid (exit 3).                                             |

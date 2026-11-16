@@ -509,7 +509,7 @@ These tools request and manage [deploy tokens](../cli/deploy-tokens) for CI. The
 ### `request_deploy_token`
 
 ```json
-{ "site": "example.com", "environments": ["production"], "lifetimeDays": 90, "ci": "github" }
+{ "site": "example.com", "environments": ["production"], "lifetimeDays": 90, "permissions": ["hosting.sitesRead"], "ci": "github" }
 ```
 
 | Argument       | Required | Meaning                                                            |
@@ -517,17 +517,18 @@ These tools request and manage [deploy tokens](../cli/deploy-tokens) for CI. The
 | `site`         | yes      | Site UUID or hostname the user named.                              |
 | `environments` | yes      | `production`, `preview`, or both.                                  |
 | `lifetimeDays` | no       | `30`, `90`, `180`, or `365`. The user chooses when approving.      |
+| `permissions`  | no       | Extra permission keys such as `hosting.sitesRead`. Leave out unless the user asked; the approver can remove any. |
 | `ci`           | no       | `github`, `gitlab`, or `other`, so the page shows the right steps. |
 
 Returns `requestId`, an approval link, and a short code. Give the user the link and code. They check the code, site, and environments, choose a lifetime, and approve. The agent never opens or approves the link, and never asks the user to paste a token into the chat.
 
 ### `deploy_token_status`
 
-Input: `requestId`. Reports `pending`, `approved` (with `keyId`, a short `preview`, and `expiresAt`), `denied`, or `expired`. It never includes the token.
+Input: `requestId`. Reports `pending`, `approved` (with `keyId`, `permissionKeys`, a short `preview`, and `expiresAt`), `denied`, or `expired`. It never includes the token.
 
 ### `list_deploy_tokens`
 
-Input: optional `site`. Lists token ids, previews, environments, approver, expiry, and last use.
+Input: optional `site`. Lists token ids, previews, sites and environments, permission keys, approver, expiry, and last use.
 
 ### `revoke_deploy_token`
 

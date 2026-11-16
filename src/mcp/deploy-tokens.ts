@@ -66,6 +66,19 @@ export function registerDeployTokensMcp(server: McpServer, getClients: () => Pro
                     .union([z.literal(30), z.literal(90), z.literal(180), z.literal(365)])
                     .optional()
                     .describe('Suggested lifetime in days; the user chooses when approving. Default 90.'),
+                permissions: z
+                    .array(
+                        z
+                            .string()
+                            .min(1)
+                            .max(100)
+                            .regex(/^[a-z][A-Za-z0-9]*(\.[A-Za-z][A-Za-z0-9]*)*$/)
+                    )
+                    .max(20)
+                    .optional()
+                    .describe(
+                        'Extra permission keys to grant the token beyond deploying the site, such as hosting.sitesRead. Omit unless the user asked for one: the token already gets hosting access for the site. The approver can remove any of them.'
+                    ),
                 ci: z
                     .enum(['github', 'gitlab', 'other'])
                     .optional()
@@ -73,7 +86,7 @@ export function registerDeployTokensMcp(server: McpServer, getClients: () => Pro
             },
             annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true }
         },
-        async ({ site, environments, lifetimeDays, ci }) => {
+        async ({ site, environments, lifetimeDays, permissions, ci }) => {
             const { config, manager } = await getClients();
             if (!config.authApiUrl) {
                 throw new CliError(
@@ -90,8 +103,8 @@ export function registerDeployTokensMcp(server: McpServer, getClients: () => Pro
             assertTokenAllowedForSite(found, unique);
             const client = new KeyRequestClient(config.authApiUrl);
             const start = await client.start(config.credential, {
-                siteId: found.id,
-                environments: unique,
+                permissions: [...new Set(permissions ?? [])],
+                sites: [{ siteId: found.id, environments: unique }],
                 description: `ZynoHosting MCP: deploy token for ${found.fqdn}`.slice(0, 255),
                 ...(lifetimeDays === undefined ? {} : { requestedLifetimeSecs: lifetimeDays * 86_400 }),
                 delivery: 'display',
@@ -113,6 +126,7 @@ export function registerDeployTokensMcp(server: McpServer, getClients: () => Pro
                 verificationUri: start.verificationUri,
                 ...(start.verificationUriComplete ? { verificationUriComplete: start.verificationUriComplete } : {}),
                 userCode: start.userCode,
+                permissions: start.requested?.permissions ?? [],
                 expiresAt: new Date(start.expiresAt).toISOString(),
                 message: `Give the user the link (${start.verificationUriComplete ?? start.verificationUri}) and the code ${start.userCode} verbatim. They open it, check the code, site (${found.fqdn}) and environments (${unique.join(' and ')}), pick a lifetime and approve. The page then shows the deploy token once; they copy it into their CI secret settings themselves. You will never see the token. Do not open the link or approve it yourself. Call deploy_token_status with requestId ${requestId} until it reports approved.`
             });
@@ -147,6 +161,7 @@ export function registerDeployTokensMcp(server: McpServer, getClients: () => Pro
                     ...base,
                     status: 'approved',
                     keyId: poll.key.id,
+                    permissionKeys: poll.key.permissionKeys,
                     preview: poll.key.preview,
                     expiresAt: iso(poll.key.expiresAt),
                     message:
@@ -170,7 +185,7 @@ export function registerDeployTokensMcp(server: McpServer, getClients: () => Pro
         {
             title: 'List deploy tokens',
             description:
-                'List deploy tokens for one site or all sites: id, short preview, environments, who approved it, when it expires and was last used. Never includes the token itself. Requires hosting.sitesRead.',
+                'List deploy tokens for one site or all sites: id, short preview, sites and environments, permission keys, who approved it, when it expires and was last used. Never includes the token itself. Requires hosting.sitesRead.',
             inputSchema: { site: z.string().min(1).optional().describe('Site hostname or ID. Omit to list every site.') },
             annotations: { readOnlyHint: true, openWorldHint: false }
         },

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { createProgram } from '../src/cli.js';
-import { SECRET, startFakeKeyServer } from './support/fake-key-server.js';
+import { KEY_ID, OTHER_SITE_ID, SECRET, SITE_ID, selfRow, startFakeKeyServer } from './support/fake-key-server.js';
 
 async function run(args: string[], env: Record<string, string>): Promise<{ out: string; err: string }> {
     const original = { out: process.stdout.write.bind(process.stdout), err: process.stderr.write.bind(process.stderr) };
@@ -43,6 +43,7 @@ test('the deploy-tokens command group and sites runtime are registered', () => {
         '--production',
         '--preview',
         '--both',
+        '--permission',
         '--lifetime',
         '--github',
         '--github-environment',
@@ -82,17 +83,42 @@ test('sites runtime changes the runtime from the CLI', async () => {
     }
 });
 
-test('whoami with a deploy token describes the token and never prints it', async () => {
+test('whoami with a deploy token lists its sites and takes the expiry from ZynoAuth, and never prints the token', async () => {
     const server = await startFakeKeyServer();
+    const expiresAt = new Date(Date.now() + 5 * 86_400_000).toISOString();
+    server.state.self = { httpStatus: 200, body: selfRow(expiresAt) };
+    server.state.extraSites = [{ siteId: OTHER_SITE_ID, hostname: 'shop.example.org', environments: ['preview'] }];
+    const args = ['--api-url', server.url, '--auth-api-url', server.url, 'whoami'];
+    const env = { ZYNOHOSTING_DEPLOY_TOKEN: SECRET, ZYNOHOSTING_CONFIG: '/nonexistent/c.json' };
     try {
-        const { out, err } = await run(['--api-url', server.url, 'whoami', '--json'], {
-            ZYNOHOSTING_DEPLOY_TOKEN: SECRET,
-            ZYNOHOSTING_CONFIG: '/nonexistent/c.json'
-        });
-        const parsed = JSON.parse(out.trim()) as { deployToken: { site: string; environments: string[] } };
-        assert.equal(parsed.deployToken.site, 'example.com');
-        assert.deepEqual(parsed.deployToken.environments, ['production']);
+        const { out, err } = await run([...args, '--json'], env);
+        const parsed = JSON.parse(out.trim()) as {
+            deployToken: {
+                keyId: string;
+                sites: Array<{ site: string; siteId: string; environments: string[] }>;
+                permissionKeys: string[];
+                expiresAt: string;
+            };
+        };
+        assert.equal(parsed.deployToken.keyId, KEY_ID);
+        assert.deepEqual(parsed.deployToken.sites, [
+            { site: 'example.com', siteId: SITE_ID, environments: ['production'] },
+            { site: 'shop.example.org', siteId: OTHER_SITE_ID, environments: ['preview'] }
+        ]);
+        assert.deepEqual(parsed.deployToken.permissionKeys, ['hosting']);
+        assert.equal(parsed.deployToken.expiresAt, new Date(expiresAt).toISOString());
         assert(!out.includes(SECRET) && !err.includes(SECRET));
+        assert.equal(server.count('GET', '/identity/tenant-keys/self'), 1, 'the expiry comes from ZynoAuth');
+        const self = server.seen.find(entry => entry.url === '/identity/tenant-keys/self')!;
+        assert.equal(self.authorization, `Basic ${Buffer.from(`api:${SECRET}`).toString('base64')}`);
+
+        const human = await run(args, env);
+        assert.match(human.out, /example\.com \(production\), shop\.example\.org \(preview\); expires /);
+
+        // Every granted site was deleted or transferred: whoami still answers, and says so.
+        server.state.noSites = true;
+        const empty = await run(args, env);
+        assert.match(empty.out, /no longer covers any site/);
     } finally {
         await server.close();
     }

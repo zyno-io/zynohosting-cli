@@ -3,20 +3,23 @@ import type { ResolvedConfig } from '../config.js';
 import { KeyRequestClient } from '../api/key-request-client.js';
 import { ManagerClient } from '../api/manager-client.js';
 import { CliError, HttpError } from '../errors.js';
-import { DeployTokenInfo, DeploymentTarget } from '../protocol.js';
+import { DeployTokenInfo, DeployTokenSite, DeploymentTarget } from '../protocol.js';
 
 export type KeyClientFactory = (authApiUrl: string) => Pick<KeyRequestClient, 'self'>;
 
 /** The hosting manager's wording for a preview-only token on a PHP site. */
 const PHP_PREVIEW_PREFIX = 'This site runs PHP, so preview code can reach production';
 
-/** The exact 403 messages the hosting manager and the shared capability guard use when a token's grant does not cover a request. */
+/**
+ * The exact 403 messages the hosting manager uses when a deploy token's grants do not cover a request. An unknown site, another
+ * tenant's site and an ungranted site all answer `is not bound to this site` (403, never 404).
+ */
 const CAPABILITY_DENIALS = [
-    'capability keys cannot use this route',
-    'capability key does not allow this request',
     'deploy token is not bound to this site',
     'deploy token can only request deploy access scopes',
-    'deploy token cannot perform this action'
+    'deploy token cannot perform this action',
+    'deploy token does not allow this request',
+    'This credential can only use its hosting grants'
 ];
 
 export function isCapabilityDenial(message: string): boolean {
@@ -36,42 +39,67 @@ export function assertTokenAllowedForSite(site: { phpVersion: string | null }, e
     if (site.phpVersion !== null && !environments.includes('production')) throw requiresProduction();
 }
 
-/** True when `reference` (a site id or hostname) names the site the token is bound to. */
-export function tokenCoversSite(info: DeployTokenInfo, reference: string): boolean {
+function siteNames(site: DeployTokenSite['site']): string[] {
+    return [site.fqdn, ...(site.hostnames ?? []).map(hostname => hostname.name)];
+}
+
+/** The site grant of the token that `reference` (a site id or any hostname of the site) names. */
+export function findTokenSite(info: DeployTokenInfo, reference: string): DeployTokenSite | undefined {
     const wanted = reference.trim().toLowerCase();
-    if (wanted === info.site.id.toLowerCase()) return true;
-    const names = [info.site.fqdn, ...(info.site.hostnames ?? []).map(hostname => hostname.name)];
-    return names.some(name => name.toLowerCase() === wanted);
+    return info.sites.find(entry => entry.siteId.toLowerCase() === wanted || siteNames(entry.site).some(name => name.toLowerCase() === wanted));
+}
+
+/** True when `reference` (a site id or hostname) names a site the token is granted. */
+export function tokenCoversSite(info: DeployTokenInfo, reference: string): boolean {
+    return findTokenSite(info, reference) !== undefined;
+}
+
+/** The primary hostnames of the sites a token covers, for messages. */
+export function describeTokenSites(info: DeployTokenInfo): string {
+    return info.sites.map(entry => entry.site.fqdn).join(', ');
+}
+
+/** An empty site list means every site the token was approved for was deleted or moved to another tenant. */
+export function assertTokenHasSites(info: DeployTokenInfo): void {
+    if (info.sites.length === 0) {
+        throw new CliError(
+            'This deploy token no longer covers any site: the site was deleted or transferred to another tenant after the token was approved. Create a new token with `zynohosting deploy-tokens create`.',
+            3,
+            'deploy_token_no_sites'
+        );
+    }
+}
+
+/** The error for a site the token does not cover. */
+export function siteNotCovered(info: DeployTokenInfo, site: string): CliError {
+    return new CliError(
+        `This deploy token does not cover ${site}. It covers: ${describeTokenSites(info)}. Use the token created for that site.`,
+        3,
+        'deploy_token_wrong_site'
+    );
 }
 
 /**
  * Reads what the deploy token allows and checks the request against it before anything is uploaded. `site` and
- * `environments` are what the command is about to touch.
+ * `environments` are what the command is about to touch. Returns the token's grant for that site.
  */
-export async function verifyDeployToken(
-    manager: ManagerClient,
-    need: { site?: string | undefined; environments?: DeploymentTarget[] }
-): Promise<DeployTokenInfo> {
+export async function verifyDeployToken(manager: ManagerClient, need: { site: string; environments?: DeploymentTarget[] }): Promise<DeployTokenSite> {
     const info = await manager.getDeployTokenInfo();
-    if (need.site !== undefined && !tokenCoversSite(info, need.site)) {
-        throw new CliError(
-            `This deploy token is for ${info.site.fqdn}, not ${need.site}. Use the token created for that site.`,
-            3,
-            'deploy_token_wrong_site'
-        );
-    }
+    assertTokenHasSites(info);
+    const grant = findTokenSite(info, need.site);
+    if (!grant) throw siteNotCovered(info, need.site);
     // The manager refuses a preview deploy by a preview-only token on a PHP site, so say why before any request.
-    if (need.environments?.includes('preview')) assertTokenAllowedForSite(info.site, info.environments);
+    if (need.environments?.includes('preview')) assertTokenAllowedForSite(grant.site, grant.environments);
     for (const environment of need.environments ?? []) {
-        if (!info.environments.includes(environment)) {
+        if (!grant.environments.includes(environment)) {
             throw new CliError(
-                `This deploy token cannot change ${environment} (it allows ${info.environments.join(' and ')}). Create a token that includes ${environment}.`,
+                `This deploy token cannot change ${environment} on ${grant.site.fqdn} (it allows ${grant.environments.join(' and ')}). Create a token that includes ${environment}.`,
                 3,
                 'deploy_token_wrong_environment'
             );
         }
     }
-    return info;
+    return grant;
 }
 
 /**
@@ -111,7 +139,7 @@ export async function diagnoseDeployToken(config: ResolvedConfig, error: unknown
         throw new CliError(
             `This deploy token is valid but is not allowed to do that (${error.message}). It may be for a different site or environment.`,
             3,
-            'deploy_token_wrong_environment'
+            'deploy_token_denied'
         );
     }
     throw error;

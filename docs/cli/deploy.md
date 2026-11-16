@@ -158,7 +158,7 @@ Always inspect the dry-run plan before using `--allow-empty`.
 
 ## CI example
 
-CI uses a [deploy token](./deploy-tokens), not a tenant API key. The token knows its site, so the site argument is optional:
+CI uses a [deploy token](./deploy-tokens), not a tenant API key. A token that covers one site knows it, so the site argument is optional:
 
 ```bash
 set -euo pipefail

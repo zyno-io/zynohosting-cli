@@ -10,7 +10,7 @@ import { preparePromotion } from '../src/commands/promote-site.js';
 import { resolveConfig } from '../src/config.js';
 import { diagnoseDeployToken } from '../src/deploy-tokens/guard.js';
 import { CliError, HttpError } from '../src/errors.js';
-import { KEY_ID, SECRET, SITE_ID, startFakeKeyServer } from './support/fake-key-server.js';
+import { OTHER_SITE_ID, SECRET, SITE_ID, selfRow, startFakeKeyServer } from './support/fake-key-server.js';
 
 const code = (promise: Promise<unknown>) =>
     promise.then(
@@ -151,9 +151,9 @@ test('a refused deploy token says whether it expired, was revoked, or is just no
         assert.equal(await code(prepareDeployment('example.com', dir, {}, undefined, resolved)), 'deploy_token_revoked');
 
         server.state.whoamiStatus = 403;
-        server.state.whoamiError = 'capability key does not allow this request';
-        server.state.self = { httpStatus: 200, body: { id: KEY_ID, expiresAt: new Date(Date.now() + 86_400_000).toISOString() } };
-        assert.equal(await code(prepareDeployment('example.com', dir, {}, undefined, resolved)), 'deploy_token_wrong_environment');
+        server.state.whoamiError = 'deploy token does not allow this request';
+        server.state.self = { httpStatus: 200, body: selfRow(new Date(Date.now() + 86_400_000).toISOString()) };
+        assert.equal(await code(prepareDeployment('example.com', dir, {}, undefined, resolved)), 'deploy_token_denied');
     } finally {
         await server.close();
     }
@@ -191,22 +191,107 @@ test('after a valid token, only capability denials are rewritten; any other 403 
         );
     try {
         for (const message of [
-            'capability key does not allow this request',
-            'capability keys cannot use this route',
+            'deploy token does not allow this request',
             'deploy token is not bound to this site',
+            'deploy token cannot perform this action',
+            'This credential can only use its hosting grants',
             'deploy token does not include the production environment',
             'deploy token does not include the preview environment',
             'deploy token can only request deploy access scopes'
         ]) {
             const error = await denied(message);
-            assert(error instanceof CliError && error.code === 'deploy_token_wrong_environment', message);
+            assert(error instanceof CliError && error.code === 'deploy_token_denied', message);
         }
-        for (const message of ['site is not active', 'site tenant transfer is in progress', 'site cluster is not active']) {
+        // The old capability-key wording is gone, and a refusal that is not about the token's grants is never rewritten.
+        for (const message of [
+            'site is not active',
+            'site tenant transfer is in progress',
+            'site cluster is not active',
+            'capability key does not allow this request',
+            'identity is not an API key',
+            'This credential has no access to hosting'
+        ]) {
             const error = await denied(message);
             assert(error instanceof HttpError, message);
             assert.equal(error.message, message, 'the manager message is surfaced unchanged');
             assert.equal(error.status, 403);
         }
+    } finally {
+        await server.close();
+    }
+});
+
+test('a token that covers several sites needs the site named, and says which sites it covers', async () => {
+    const server = await startFakeKeyServer();
+    server.state.extraSites = [{ siteId: OTHER_SITE_ID, hostname: 'shop.example.org', environments: ['production', 'preview'] }];
+    const dir = await mkdtemp(join(tmpdir(), 'deploy-multi-'));
+    const dist = join(dir, 'dist');
+    await mkdir(dist);
+    const resolved = await config({ ZYNOHOSTING_DEPLOY_TOKEN: SECRET }, server.url);
+    try {
+        // No site, or a directory only: the site is required.
+        assert.equal(await code(resolveDeployArguments(undefined, undefined, resolved)), 'deploy_token_site_required');
+        assert.equal(await code(resolveDeployArguments(dist, undefined, resolved)), 'deploy_token_site_required');
+        await assert.rejects(resolveDeployArguments(undefined, undefined, resolved), /example\.com, shop\.example\.org/);
+        // Either covered site, by hostname, alias or id.
+        assert.deepEqual(await resolveDeployArguments('shop.example.org', undefined, resolved), { site: 'shop.example.org', directory: '.' });
+        assert.deepEqual(await resolveDeployArguments(`${OTHER_SITE_ID}`, dist, resolved), { site: OTHER_SITE_ID, directory: dist });
+        assert.deepEqual(await resolveDeployArguments('www.shop.example.org', undefined, resolved), { site: 'www.shop.example.org', directory: '.' });
+        // Not covered: neither a directory nor a covered site.
+        assert.equal(await code(resolveDeployArguments(join(dir, 'missing'), undefined, resolved)), 'deploy_token_wrong_site');
+        // A site that is not covered fails before any upload, naming the ones that are; each site keeps its own environments.
+        await assert.rejects(prepareDeployment('other.example.net', dir, {}, undefined, resolved), (error: unknown) => {
+            assert(error instanceof CliError);
+            assert.equal(error.code, 'deploy_token_wrong_site');
+            assert.match(error.message, /example\.com, shop\.example\.org/);
+            return true;
+        });
+        assert.equal(await code(prepareDeployment('example.com', dir, { preview: true }, undefined, resolved)), 'deploy_token_wrong_environment');
+        assert.equal(await code(preparePromotion('example.com', {}, resolved)), 'deploy_token_wrong_environment');
+        assert.equal(server.seen.filter(entry => entry.url.includes('access-sessions')).length, 0);
+    } finally {
+        await server.close();
+    }
+});
+
+test('a token whose sites were all deleted or transferred gets a clear error', async () => {
+    const server = await startFakeKeyServer();
+    server.state.noSites = true;
+    const dir = await mkdtemp(join(tmpdir(), 'deploy-nosites-'));
+    const resolved = await config({ ZYNOHOSTING_DEPLOY_TOKEN: SECRET }, server.url);
+    try {
+        for (const attempt of [
+            resolveDeployArguments(undefined, undefined, resolved),
+            resolveDeployArguments('example.com', dir, resolved).then(() => prepareDeployment('example.com', dir, {}, undefined, resolved)),
+            preparePromotion('example.com', {}, resolved)
+        ]) {
+            await assert.rejects(attempt, (error: unknown) => {
+                assert(error instanceof CliError);
+                assert.equal(error.code, 'deploy_token_no_sites');
+                assert.match(error.message, /deleted or transferred/);
+                return true;
+            });
+        }
+        assert.equal(server.seen.filter(entry => entry.url.includes('access-sessions')).length, 0);
+    } finally {
+        await server.close();
+    }
+});
+
+test('a 403 for an unknown or ungranted site is explained as the token not covering it, once the token is valid', async () => {
+    const server = await startFakeKeyServer();
+    const resolved = await config({ ZYNOHOSTING_DEPLOY_TOKEN: SECRET }, server.url);
+    try {
+        // Hosting answers 403, not 404, for a site a token cannot see.
+        const error = await diagnoseDeployToken(resolved, new HttpError('deploy token is not bound to this site', 403, 'http_error')).catch(
+            (caught: unknown) => caught
+        );
+        assert(error instanceof CliError);
+        assert.equal(error.code, 'deploy_token_denied');
+        assert.match(error.message, /not bound to this site/);
+        // A 404 is not a token denial and passes through unchanged.
+        const notFound = new HttpError('site not found', 404, 'http_error');
+        assert.equal(await diagnoseDeployToken(resolved, notFound).catch((caught: unknown) => caught), notFound);
     } finally {
         await server.close();
     }

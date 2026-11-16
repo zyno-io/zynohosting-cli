@@ -4,7 +4,7 @@ import { domainToASCII } from 'node:url';
 import { AgentClient } from '../api/agent-client.js';
 import { ManagerClient } from '../api/manager-client.js';
 import { ConfigOverrides, ResolvedConfig, resolveConfig } from '../config.js';
-import { diagnoseDeployToken, tokenCoversSite, verifyDeployToken } from '../deploy-tokens/guard.js';
+import { assertTokenHasSites, describeTokenSites, diagnoseDeployToken, tokenCoversSite, verifyDeployToken } from '../deploy-tokens/guard.js';
 import { createDeploymentArchive } from '../deploy/archive.js';
 import { coalesceOperations, DisplayOperation } from '../deploy/coalesce.js';
 import { hashInventoryFiles } from '../deploy/hash.js';
@@ -66,7 +66,8 @@ function deployConfigOverrides(options: DeploySiteOptions): ConfigOverrides {
 
 /**
  * Works out which positional argument is the site and which the directory. Without a deploy token the site is required.
- * With one, the site is optional: a single argument is the site when it names the token's site, otherwise the directory.
+ * With a token that covers one site, the site is optional: a single argument is the site when it names the token's site,
+ * otherwise the directory. A token that covers several sites always needs the site named.
  */
 export async function resolveDeployArguments(
     first: string | undefined,
@@ -85,8 +86,20 @@ export async function resolveDeployArguments(
     } catch (error) {
         return diagnoseDeployToken(config, error);
     }
-    const tokenSite = info.site.fqdn;
-    if (first === undefined) return { site: tokenSite, directory: '.' };
+    assertTokenHasSites(info);
+    const covered = describeTokenSites(info);
+    const several = info.sites.length > 1;
+    const tokenSite = info.sites[0]!.site.fqdn;
+    const siteRequired = () =>
+        new CliError(
+            `This deploy token covers several sites (${covered}). Name the one to deploy: zynohosting deploy <site> [directory]`,
+            2,
+            'deploy_token_site_required'
+        );
+    if (first === undefined) {
+        if (several) throw siteRequired();
+        return { site: tokenSite, directory: '.' };
+    }
     if (second !== undefined) return { site: first, directory: second };
     const asSite = tokenCoversSite(info, first);
     const asDirectory = await stat(first).then(
@@ -95,14 +108,15 @@ export async function resolveDeployArguments(
     );
     if (asSite && asDirectory) {
         throw new CliError(
-            `"${first}" is both the token's site and a local directory. Give both arguments: zynohosting deploy ${tokenSite} <directory>`,
+            `"${first}" is both a site this deploy token covers and a local directory. Give both arguments: zynohosting deploy ${several ? '<site>' : tokenSite} <directory>`,
             2,
             'ambiguous_deploy_argument'
         );
     }
     if (asSite) return { site: first, directory: '.' };
+    if (asDirectory && several) throw siteRequired();
     if (asDirectory) return { site: tokenSite, directory: first };
-    throw new CliError(`"${first}" is neither a directory nor the site this deploy token is for (${tokenSite}).`, 2, 'deploy_token_wrong_site');
+    throw new CliError(`"${first}" is neither a directory nor a site this deploy token covers (${covered}).`, 2, 'deploy_token_wrong_site');
 }
 
 export async function deploySite(siteArgument: string | undefined, directoryArgument: string | undefined, options: DeploySiteOptions): Promise<void> {

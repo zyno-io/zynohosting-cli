@@ -93,10 +93,10 @@ includes the operation ID, and re-running the same command resumes waiting).
 
 | Event                                                                                                                        | Meaning                                                      |
 | ---------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
-| `{"type":"prompt","site","environments","userCode","verificationUri","verificationUriComplete","expiresAt","destination"}`   | The approval link and code. Show them to the person.         |
+| `{"type":"prompt","site","environments","userCode","verificationUri","verificationUriComplete","expiresAt","permissions","destination"}` | The approval link and code. Show them to the person.         |
 | `{"type":"warning","code":"deploy_token_file_in_worktree","message"}`                                                        | A `--file` destination is in a git worktree and not ignored. |
 | `{"type":"result","status":"pending",...}`                                                                                   | `--no-wait` saved the request. Finish it with `--resume`.    |
-| `{"type":"result","status":"created","site","siteId","environments","keyId","preview","expiresAt","destination","warnings"}` | The token was approved and handed off.                       |
+| `{"type":"result","status":"created","site","siteId","environments","keyId","preview","permissionKeys","expiresAt","destination","warnings"}` | The token was approved and handed off.                       |
 
 `sites runtime --yes --json` emits `runtime_plan`, progress events, then `runtime_result`.
 

@@ -11,9 +11,23 @@ export type KeyEnvironment = 'production' | 'preview';
 export type KeyDelivery = 'poll' | 'display';
 export type HandoffKind = 'github-secret' | 'gitlab-variable' | 'file' | 'manual';
 
-export interface KeyRequestInput {
+/** One site a key is granted, and the environments it may deploy to. */
+export interface KeySiteGrant {
     siteId: string;
     environments: KeyEnvironment[];
+}
+
+/** A site grant as ZynoAuth displays it on an issued key or a listed key. */
+export interface KeySite extends KeySiteGrant {
+    /** The site's primary hostname, as the owning app labelled it. */
+    label: string;
+}
+
+export interface KeyRequestInput {
+    /** Extra permission keys beyond the bare `hosting` app key the server adds for the grants. May be empty. */
+    permissions: string[];
+    /** The sites the key may deploy to. */
+    sites: KeySiteGrant[];
     description: string;
     requestedLifetimeSecs?: number | undefined;
     delivery: KeyDelivery;
@@ -29,6 +43,8 @@ export interface KeyRequestStart {
     interval: number;
     /** Epoch milliseconds. */
     expiresAt: number;
+    /** What ZynoAuth normalized the request to (not what was sent). Absent when a saved request is resumed. */
+    requested?: { permissions: string[]; sites: KeySiteGrant[] } | undefined;
 }
 
 /** What is known about an issued key. The secret is never part of it. */
@@ -37,8 +53,8 @@ export interface IssuedKey {
     preview: string;
     /** Epoch milliseconds. */
     expiresAt: number;
-    siteId?: string | undefined;
-    environments?: KeyEnvironment[] | undefined;
+    permissionKeys: string[];
+    sites: KeySite[];
 }
 
 export type KeyRequestPoll =
@@ -51,8 +67,9 @@ export interface CapabilityKeySummary {
     description: string;
     preview: string;
     status: 'active' | 'expired';
-    siteId?: string | undefined;
-    environments?: KeyEnvironment[] | undefined;
+    apps: string[];
+    permissionKeys: string[];
+    sites: KeySite[];
     approvedBy?: string | undefined;
     /** Epoch milliseconds. */
     createdAt: number;
@@ -65,6 +82,9 @@ export interface SelfKey {
     id: string;
     /** Epoch milliseconds. */
     expiresAt: number;
+    description: string;
+    apps: string[];
+    permissionKeys: string[];
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -108,25 +128,63 @@ const verificationUrl = z
         }
     }, 'must be an https URL');
 
+const permissionKeySchema = z.string().min(1).max(100);
+const environmentsSchema = z.array(z.enum(['production', 'preview'])).min(1);
+const hostingGrantSchema = z.object({ v: z.literal(1), siteId: z.string().regex(UUID), environments: environmentsSchema });
+/** `{ hosting?: [...] }`; apps this CLI does not know about are ignored. */
+const grantMapSchema = z.object({ hosting: z.array(hostingGrantSchema).optional() }).loose();
+const requestedSchema = z.object({ permissions: z.array(permissionKeySchema), grants: grantMapSchema });
+
+const viewSchema = z.object({
+    /** An app's own grant shape; the hosting ones are parsed with `hostingGrantSchema` after. */
+    grant: z.record(z.string(), z.unknown()),
+    display: z.object({
+        resourceLabel: displayText(255),
+        facts: z.array(z.object({ label: displayText(100), value: displayText(500) })).max(8)
+    })
+});
+
+/** `KeyGrantDisplayMap`: per app, a title, the owner's views of each grant, and what the key can and cannot do. */
+const displayMapSchema = z.record(
+    z.string(),
+    z.object({
+        title: displayText(200),
+        views: z.array(viewSchema),
+        statements: z.object({ can: z.array(displayText(500)), cannot: z.array(displayText(500)) })
+    })
+);
+
+const lifetimeSchema = z.object({ optionsSecs: z.array(z.number().int().positive()).min(1), defaultSecs: z.number().int().positive() });
+
+const handoffSchema = z.object({
+    kind: z.enum(['github-secret', 'gitlab-variable', 'file', 'manual']),
+    target: displayText(200).nullable().optional()
+});
+
 const startSchema = z.object({
+    requestId: z.string().regex(UUID),
     requestCode: z.string().regex(REQUEST_CODE),
     userCode: z.string().regex(USER_CODE),
     verificationUri: verificationUrl,
     verificationUriComplete: verificationUrl,
     interval: z.number().positive().max(300),
+    expiresIn: z.number().positive(),
     /** Epoch milliseconds. */
-    expiresAt: z.number().positive()
+    expiresAt: z.number().positive(),
+    apps: z.array(z.string().max(64)),
+    requested: requestedSchema,
+    views: z.record(z.string(), z.array(viewSchema)),
+    lifetime: lifetimeSchema
 });
-
-const environmentsSchema = z.array(z.enum(['production', 'preview'])).min(1);
-const hostingGrantSchema = z.object({ v: z.literal(1), siteId: z.string().regex(UUID), environments: environmentsSchema });
-/** `{ hosting?: {...} }`; namespaces this CLI does not know about are ignored. */
-const capabilitiesSchema = z.object({ hosting: hostingGrantSchema.loose().optional() }).loose();
 
 const keyInfoSchema = z.object({
     id: z.string().regex(UUID),
+    tenantId: z.string().regex(UUID),
+    description: displayText(500),
     keyPreview: displayText(100),
-    capabilities: capabilitiesSchema,
+    permissionKeys: z.array(permissionKeySchema),
+    display: displayMapSchema,
+    handoff: handoffSchema.nullable(),
     createdAt: isoMilliseconds,
     expiresAt: isoMilliseconds
 });
@@ -139,19 +197,27 @@ const pollSchema = z.object({
     secret: z.string().max(256).optional()
 });
 
-const summarySchema = z.object({
+/** The fields a listed key and the key's own `self` answer share. */
+const keyRowShape = {
     id: z.string().regex(UUID),
+    tenantId: z.string().regex(UUID),
     description: displayText(500),
     keyPreview: displayText(100),
-    capabilities: capabilitiesSchema,
+    apps: z.array(z.string().max(64)),
+    permissionKeys: z.array(permissionKeySchema),
+    display: displayMapSchema,
+    handoff: handoffSchema.nullable(),
     createdAt: isoMilliseconds,
     expiresAt: isoMilliseconds,
     lastUsedAt: isoMilliseconds.nullable(),
-    createdByEmail: displayText(320).nullable(),
-    status: z.enum(['active', 'expired'])
-});
+    createdByAccountId: z.string().regex(UUID).nullable(),
+    requestedByAccountId: z.string().regex(UUID).nullable()
+};
 
-const selfSchema = z.object({ id: z.string().regex(UUID), expiresAt: isoMilliseconds });
+const summarySchema = z.object({ ...keyRowShape, createdByEmail: displayText(320).nullable(), status: z.enum(['active', 'expired']) });
+
+/** The self answer is the list row without `status` and `createdByEmail`. */
+const selfSchema = z.object(keyRowShape);
 
 function invalid(error: z.ZodError, what: string): CliError {
     // Issue paths only: a response value (a request code, a key) must never reach a message.
@@ -159,9 +225,13 @@ function invalid(error: z.ZodError, what: string): CliError {
     return new CliError(`ZynoAuth returned an invalid ${what} response (${where})`, 5, 'invalid_auth_response');
 }
 
-function grantOf(capabilities: z.infer<typeof capabilitiesSchema>): { siteId?: string; environments?: KeyEnvironment[] } {
-    const hosting = capabilities.hosting;
-    return hosting ? { siteId: hosting.siteId, environments: hosting.environments } : {};
+/** The hosting sites in a key's display map, each parsed against the hosting grant shape. */
+function sitesOf(display: z.infer<typeof displayMapSchema>, what: string): KeySite[] {
+    return (display.hosting?.views ?? []).map(view => {
+        const grant = hostingGrantSchema.safeParse(view.grant);
+        if (!grant.success) throw invalid(grant.error, what);
+        return { siteId: grant.data.siteId, label: view.display.resourceLabel, environments: grant.data.environments };
+    });
 }
 
 /** Reads one poll answer. Throws `invalid_auth_response` for anything the contract does not allow. */
@@ -173,7 +243,13 @@ function parsePoll(value: unknown, delivery: KeyDelivery): KeyRequestPoll {
         if (!key || answered !== delivery) {
             throw new CliError('ZynoAuth returned an invalid key request poll response (delivery or key)', 5, 'invalid_auth_response');
         }
-        const issued: IssuedKey = { id: key.id, preview: key.keyPreview, expiresAt: key.expiresAt, ...grantOf(key.capabilities) };
+        const issued: IssuedKey = {
+            id: key.id,
+            preview: key.keyPreview,
+            expiresAt: key.expiresAt,
+            permissionKeys: key.permissionKeys,
+            sites: sitesOf(key.display, 'key request poll')
+        };
         if (delivery === 'display') return { status, key: issued };
         if (!secret || !DEPLOY_TOKEN_PATTERN.test(secret)) {
             throw new CliError('ZynoAuth returned an approved key request without a valid key', 5, 'invalid_auth_response');
@@ -226,7 +302,8 @@ export class KeyRequestClient {
                 timeoutMs: this.timeoutMs,
                 headers: { ...(await authorizationHeaders(credential)), Accept: 'application/json', 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    capabilities: { hosting: { v: 1, siteId: input.siteId, environments: input.environments } },
+                    permissions: input.permissions,
+                    grants: { hosting: input.sites.map(site => ({ v: 1, siteId: site.siteId, environments: site.environments })) },
                     description: input.description,
                     ...(input.requestedLifetimeSecs === undefined ? {} : { requestedLifetimeSecs: input.requestedLifetimeSecs }),
                     delivery: input.delivery,
@@ -236,7 +313,7 @@ export class KeyRequestClient {
                 })
             });
         } catch (error) {
-            // 503 is the owning app or ZynoAuth being unavailable; its message says which. 404 is the site not being found, so it passes through.
+            // 503 is the owning app or ZynoAuth being unavailable; its message says which. Other statuses (403, 404, 429) carry the server's own message and pass through.
             if (error instanceof HttpError && error.status === 503) {
                 throw new CliError(`Deploy tokens are not available right now: ${error.message}`, 4, 'deploy_tokens_unavailable');
             }
@@ -249,7 +326,18 @@ export class KeyRequestClient {
         if (new URL(start.verificationUriComplete).origin !== new URL(start.verificationUri).origin) {
             throw new CliError('ZynoAuth returned an invalid key request response (verificationUriComplete)', 5, 'invalid_auth_response');
         }
-        return start;
+        return {
+            requestCode: start.requestCode,
+            userCode: start.userCode,
+            verificationUri: start.verificationUri,
+            verificationUriComplete: start.verificationUriComplete,
+            interval: start.interval,
+            expiresAt: start.expiresAt,
+            requested: {
+                permissions: start.requested.permissions,
+                sites: (start.requested.grants.hosting ?? []).map(grant => ({ siteId: grant.siteId, environments: grant.environments }))
+            }
+        };
     }
 
     /**
@@ -312,17 +400,17 @@ export class KeyRequestClient {
     }
 
     async list(credential: ManagerCredential, filter: { siteId?: string | undefined } = {}): Promise<CapabilityKeySummary[]> {
-        const query = new URLSearchParams({ namespace: 'hosting', ...(filter.siteId ? { ref: `site:${filter.siteId}` } : {}) });
+        const query = new URLSearchParams({ app: 'hosting' });
         const value = await requestJson(`${this.apiUrl}/tenant/capability-keys?${query}`, {
             timeoutMs: this.timeoutMs,
             headers: { ...(await authorizationHeaders(credential)), Accept: 'application/json' }
         });
         if (!Array.isArray(value)) throw new CliError('ZynoAuth returned an invalid key list response', 5, 'invalid_auth_response');
-        return value.map(row => {
+        const keys = value.map(row => {
             const parsed = summarySchema.safeParse(row);
             if (!parsed.success) throw invalid(parsed.error, 'key list');
             const item = parsed.data;
-            return {
+            const summary: CapabilityKeySummary = {
                 id: item.id,
                 description: item.description,
                 preview: item.keyPreview,
@@ -331,9 +419,15 @@ export class KeyRequestClient {
                 createdAt: item.createdAt,
                 expiresAt: item.expiresAt,
                 ...(item.lastUsedAt === null ? {} : { lastUsedAt: item.lastUsedAt }),
-                ...grantOf(item.capabilities)
+                apps: item.apps,
+                permissionKeys: item.permissionKeys,
+                sites: sitesOf(item.display, 'key list')
             };
+            return summary;
         });
+        // ZynoAuth has no per-site filter: the site grants are in each key's display snapshot.
+        const siteId = filter.siteId?.toLowerCase();
+        return siteId ? keys.filter(key => key.sites.some(site => site.siteId.toLowerCase() === siteId)) : keys;
     }
 
     async revoke(credential: ManagerCredential, keyId: string): Promise<void> {
@@ -344,7 +438,7 @@ export class KeyRequestClient {
         });
     }
 
-    /** The key describing itself. Used to say why a deploy was refused. */
+    /** The key describing itself: its expiry (hosting does not report one) and why a deploy was refused. */
     async self(key: string): Promise<SelfKey> {
         const value = await requestJson(`${this.apiUrl}/identity/tenant-keys/self`, {
             timeoutMs: this.timeoutMs,
@@ -352,7 +446,8 @@ export class KeyRequestClient {
         });
         const parsed = selfSchema.safeParse(value);
         if (!parsed.success) throw invalid(parsed.error, 'key');
-        return parsed.data;
+        const { id, expiresAt, description, apps, permissionKeys } = parsed.data;
+        return { id, expiresAt, description, apps, permissionKeys };
     }
 
     /** The key revoking itself: for a deploy-tokens revoke --self, and to undo a key whose hand-off failed. */

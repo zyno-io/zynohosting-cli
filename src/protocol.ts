@@ -290,31 +290,36 @@ export function parseSiteMutationAccepted(value: unknown, label = 'site update')
     return { result: parseAutomationSite(object.result), operation: parseReconciliation(object.operation) };
 }
 
-/** What `GET /v1/deploy-token` says about the token making the call. */
-export interface DeployTokenInfo {
-    keyId: string;
+/** One site a deploy token is granted, with the environments it may deploy to. */
+export interface DeployTokenSite {
     siteId: string;
     site: AutomationSite;
     environments: DeploymentTarget[];
-    /** ISO date. */
-    expiresAt: string;
+}
+
+/**
+ * What `GET /v1/deploy-token` says about the token making the call. There is no expiry: hosting does not know it, and
+ * ZynoAuth reports it at `/identity/tenant-keys/self`. `sites` is empty when every granted site was deleted or transferred.
+ */
+export interface DeployTokenInfo {
+    keyId: string;
+    sites: DeployTokenSite[];
 }
 
 export function parseDeployTokenInfo(value: unknown): DeployTokenInfo {
     const object = record(value, 'deploy token');
-    const site = parseAutomationSite(object.site);
-    const siteId = uuid(object.siteId, 'siteId');
-    if (site.id.toLowerCase() !== siteId.toLowerCase())
-        throw new CliError('Manager returned a deploy token for another site', 5, 'invalid_manager_response');
-    const environments = array(object.environments, 'environments').map(deploymentTarget);
-    if (!environments.length) throw new CliError('Manager returned a deploy token with no environments', 5, 'invalid_manager_response');
-    return {
-        keyId: string(object.keyId, 'keyId'),
-        siteId,
-        site,
-        environments: [...new Set(environments)],
-        expiresAt: isoDate(object.expiresAt, 'expiresAt')
-    };
+    const sites = array(object.sites, 'sites').map((entry, index): DeployTokenSite => {
+        const item = record(entry, `sites[${index}]`);
+        const site = parseAutomationSite(item.site);
+        const siteId = uuid(item.siteId, 'siteId');
+        if (site.id.toLowerCase() !== siteId.toLowerCase()) {
+            throw new CliError('Manager returned a deploy token for another site', 5, 'invalid_manager_response');
+        }
+        const environments = array(item.environments, 'environments').map(deploymentTarget);
+        if (!environments.length) throw new CliError('Manager returned a deploy token with no environments', 5, 'invalid_manager_response');
+        return { siteId, site, environments: [...new Set(environments)] };
+    });
+    return { keyId: string(object.keyId, 'keyId'), sites };
 }
 
 export interface PhpVersions {

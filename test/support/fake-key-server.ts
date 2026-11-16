@@ -24,8 +24,12 @@ export interface FakeKeyServer {
     seen: Seen[];
     state: {
         polls: Script[];
-        /** Environments the deploy token whoami reports. */
+        /** Environments the deploy token whoami reports for the first site. */
         tokenEnvironments: string[];
+        /** Further sites the whoami reports (a token can cover several). */
+        extraSites: Array<{ siteId: string; hostname: string; environments: string[] }>;
+        /** When true the whoami lists no sites (all deleted or transferred). */
+        noSites: boolean;
         tokenExpiresAt: string;
         self: { httpStatus: number; body?: unknown };
         selfRevokeStatus: number;
@@ -42,15 +46,32 @@ export interface FakeKeyServer {
     close(): Promise<void>;
 }
 
+export const TENANT_ID = '22222222-2222-4222-8222-222222222222';
+export const OTHER_SITE_ID = '66666666-6666-4666-8666-666666666666';
+
+/** `KeyGrantDisplayMap` as ZynoAuth returns it, for the given sites (id, label, environments). */
+export function grantDisplay(sites: Array<[string, string, string[]]> = [[SITE_ID, 'example.com', ['production']]]): Record<string, unknown> {
+    return {
+        hosting: {
+            title: 'Hosting deploy token',
+            views: sites.map(([siteId, label, environments]) => ({
+                grant: { v: 1, siteId, environments },
+                display: { resourceLabel: label, facts: [{ label: 'Environments', value: environments.join(', ') }] }
+            })),
+            statements: { can: ['Deploy the site'], cannot: ['Read other sites'] }
+        }
+    };
+}
+
 /** KeyInfo as ZynoAuth returns it. */
-export function keyInfo(environments: string[] = ['production']): Record<string, unknown> {
+export function keyInfo(environments: string[] = ['production'], permissionKeys: string[] = ['hosting']): Record<string, unknown> {
     return {
         id: KEY_ID,
-        tenantId: '22222222-2222-4222-8222-222222222222',
+        tenantId: TENANT_ID,
         description: 'CI',
         keyPreview: 'zck_A1b2...abc',
-        capabilities: { hosting: { v: 1, siteId: SITE_ID, environments, siteOwnershipRevision: 3 } },
-        display: { hosting: { resourceLabel: 'example.com', facts: [] } },
+        permissionKeys,
+        display: grantDisplay([[SITE_ID, 'example.com', environments]]),
         handoff: null,
         createdAt: new Date().toISOString(),
         expiresAt: new Date(Date.now() + 90 * 86_400_000).toISOString()
@@ -67,6 +88,30 @@ export function displayApprovedPoll(extra: Record<string, unknown> = {}): Script
     return { status: 'approved', delivery: 'display', key: keyInfo(), ...extra };
 }
 
+/** The key's own `GET /identity/tenant-keys/self` answer: a list row without `status` and `createdByEmail`. */
+export function selfRow(expiresAt: string, environments: string[] = ['production']): Record<string, unknown> {
+    return {
+        id: KEY_ID,
+        tenantId: TENANT_ID,
+        description: 'CI',
+        keyPreview: 'zck_A1b2...abc',
+        apps: ['hosting'],
+        permissionKeys: ['hosting'],
+        display: grantDisplay([[SITE_ID, 'example.com', environments]]),
+        handoff: null,
+        createdAt: new Date().toISOString(),
+        expiresAt,
+        lastUsedAt: null,
+        createdByAccountId: null,
+        requestedByAccountId: null
+    };
+}
+
+/** A listed key as `GET /tenant/capability-keys` returns it. */
+export function listRow(extra: Record<string, unknown> = {}): Record<string, unknown> {
+    return { ...selfRow(new Date(Date.now() + 86_400_000).toISOString()), createdByEmail: 'a@example.com', status: 'active', ...extra };
+}
+
 /** One server that plays the hosting API and ZynoAuth, enough for deploy tokens. */
 export async function startFakeKeyServer(): Promise<FakeKeyServer> {
     const seen: Seen[] = [];
@@ -76,8 +121,10 @@ export async function startFakeKeyServer(): Promise<FakeKeyServer> {
     const state: FakeKeyServer['state'] = {
         polls: [{ status: 'pending', interval: 0.02 }, approvedPoll()],
         tokenEnvironments: ['production'],
+        extraSites: [],
+        noSites: false,
         tokenExpiresAt: new Date(Date.now() + 30 * 86_400_000).toISOString(),
-        self: { httpStatus: 200, body: { id: KEY_ID, expiresAt: new Date(Date.now() + 86_400_000).toISOString() } },
+        self: { httpStatus: 200, body: selfRow(new Date(Date.now() + 86_400_000).toISOString()) },
         selfRevokeStatus: 200,
         phpVersion: null,
         notFoundHandling: '404-page',
@@ -87,18 +134,19 @@ export async function startFakeKeyServer(): Promise<FakeKeyServer> {
         whoamiError: 'unauthorized',
         phpDefault: '8.4'
     };
-    const site = () => ({
-        id: SITE_ID,
+    const siteFor = (id: string, name: string) => ({
+        id,
         primaryHostnameId: '44444444-4444-4444-8444-444444444444',
-        primaryHostname: 'example.com',
+        primaryHostname: name,
         status: 'active',
         phpVersion: state.phpVersion,
         notFoundHandling: state.notFoundHandling,
         hostnames: [
-            { id: '44444444-4444-4444-8444-444444444444', name: 'example.com', kind: 'custom', isPrimary: true, subdomainDirectory: null },
-            { id: '55555555-5555-4555-8555-555555555555', name: 'www.example.com', kind: 'custom', isPrimary: false, subdomainDirectory: null }
+            { id: '44444444-4444-4444-8444-444444444444', name, kind: 'custom', isPrimary: true, subdomainDirectory: null },
+            { id: '55555555-5555-4555-8555-555555555555', name: `www.${name}`, kind: 'custom', isPrimary: false, subdomainDirectory: null }
         ]
     });
+    const site = () => siteFor(SITE_ID, 'example.com');
     const server = createServer(async (request, response) => {
         const chunks: Buffer[] = [];
         for await (const chunk of request) chunks.push(Buffer.from(chunk as Buffer));
@@ -116,7 +164,18 @@ export async function startFakeKeyServer(): Promise<FakeKeyServer> {
         if (method === 'GET' && (path === '/v1/sites/example.com' || path === `/v1/sites/${SITE_ID}`)) return send(site(), state.siteStatus);
         if (method === 'GET' && path === '/v1/deploy-token') {
             if (state.whoamiStatus !== 200) return send({ error: state.whoamiError }, state.whoamiStatus);
-            return send({ keyId: KEY_ID, siteId: SITE_ID, environments: state.tokenEnvironments, expiresAt: state.tokenExpiresAt, site: site() });
+            // No expiry: hosting does not know it. Sites are ordered by primary hostname.
+            const sites = state.noSites
+                ? []
+                : [
+                      { siteId: SITE_ID, environments: state.tokenEnvironments, site: site() },
+                      ...state.extraSites.map(extra => ({
+                          siteId: extra.siteId,
+                          environments: extra.environments,
+                          site: siteFor(extra.siteId, extra.hostname)
+                      }))
+                  ];
+            return send({ keyId: KEY_ID, sites });
         }
         if (method === 'GET' && path === '/v1/php-versions') return send({ versions: ['8.2', '8.3', '8.4'], default: state.phpDefault });
         if (method === 'PATCH' && path === `/v1/sites/${SITE_ID}`) {
@@ -140,8 +199,20 @@ export async function startFakeKeyServer(): Promise<FakeKeyServer> {
                 verificationUri: `${baseUrl}/keys/approve`,
                 verificationUriComplete: `${baseUrl}/keys/approve?code=${USER_CODE}`,
                 interval: 0.02,
+                requestId: '77777777-7777-4777-8777-777777777777',
                 expiresIn: 600,
-                expiresAt: Date.now() + 600_000
+                expiresAt: Date.now() + 600_000,
+                apps: ['hosting'],
+                requested: {
+                    permissions: [...new Set(['hosting', ...((body.permissions as string[] | undefined) ?? [])])].sort(),
+                    grants: body.grants
+                },
+                views: {
+                    hosting: [
+                        { grant: { v: 1, siteId: SITE_ID, environments: ['production'] }, display: { resourceLabel: 'example.com', facts: [] } }
+                    ]
+                },
+                lifetime: { optionsSecs: [2592000, 7776000, 15552000, 31536000], defaultSecs: 7776000 }
             });
         }
         if (method === 'POST' && path === '/identity/key-requests/poll') {
