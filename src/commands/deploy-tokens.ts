@@ -9,7 +9,7 @@ import type { LoginFlow } from '../login/flow.js';
 import { CapabilityKeySummary, KeyRequestClient } from '../api/key-request-client.js';
 import { ManagerClient } from '../api/manager-client.js';
 import { configLocation, describeProfileKey, loadConfigFile, mutateProfile, resolveConfig, selectProfile } from '../config.js';
-import { assertTokenAllowedForSite, diagnoseDeployToken } from '../deploy-tokens/guard.js';
+import { assertTokenAllowedForSite, diagnoseDeployToken, selfFailure } from '../deploy-tokens/guard.js';
 import {
     DEFAULT_SECRET_NAME,
     deliverSecret,
@@ -542,9 +542,13 @@ export async function revokeDeployToken(
         return;
     }
     const config = await resolveConfig(options, env);
-    await new KeyRequestClient(requireAuthApiUrl(config)).revoke(config.credential, keyId!);
-    write(`Deploy token ${keyId} was revoked. A deployment already in progress can run for up to 20 minutes more.\n`);
-    emit({ type: 'result', status: 'revoked', keyId });
+    const { alreadyRevoked } = await new KeyRequestClient(requireAuthApiUrl(config)).revoke(config.credential, keyId!);
+    write(
+        alreadyRevoked
+            ? `Deploy token ${keyId} was not found: it was already revoked or never existed. Nothing changed.\n`
+            : `Deploy token ${keyId} was revoked. A deployment already in progress can run for up to 20 minutes more.\n`
+    );
+    emit({ type: 'result', status: 'revoked', keyId, ...(alreadyRevoked ? { alreadyRevoked: true } : {}) });
 }
 
 /** `whoami` for a deploy token: the sites and environments it holds, and its expiry (which only ZynoAuth knows). */
@@ -560,9 +564,24 @@ export async function describeDeployToken(options: ConfigOverrides & { json?: bo
     } catch (error) {
         return diagnoseDeployToken(config, error);
     }
-    // Hosting reports no expiry. A token that expired or was revoked never reaches here: hosting refuses it first.
-    const self = await new KeyRequestClient(requireAuthApiUrl(config)).self(token);
-    const expiresAt = iso(self.expiresAt);
+    // Hosting reports no expiry; ZynoAuth does. If ZynoAuth cannot answer, show what hosting said and warn.
+    const warnText = (message: string) => (dependencies.warn ?? ((text: string) => process.stderr.write(text)))(`Warning: ${message}\n`);
+    let expiresAt: string | undefined;
+    let permissionKeys: string[] | undefined;
+    if (!config.authApiUrl) {
+        warnText('the ZynoAuth API URL is not set (--auth-api-url or ZYNO_AUTH_API_URL), so the expiry is unknown.');
+    } else {
+        try {
+            const self = await new KeyRequestClient(config.authApiUrl).self(token);
+            expiresAt = iso(self.expiresAt);
+            permissionKeys = self.permissionKeys;
+        } catch (error) {
+            const verdict = selfFailure(error);
+            if (verdict) throw verdict;
+            warnText('ZynoAuth could not be reached, so the expiry is unknown.');
+        }
+    }
+    const expiry = expiresAt ? `expires ${expiresAt}` : 'expiry unknown';
     if (json) {
         write(
             `${JSON.stringify({
@@ -570,18 +589,16 @@ export async function describeDeployToken(options: ConfigOverrides & { json?: bo
                 deployToken: {
                     keyId: info.keyId,
                     sites: info.sites.map(entry => ({ site: entry.site.fqdn, siteId: entry.siteId, environments: entry.environments })),
-                    permissionKeys: self.permissionKeys,
-                    expiresAt
+                    ...(permissionKeys ? { permissionKeys } : {}),
+                    expiresAt: expiresAt ?? null
                 }
             })}\n`
         );
         return;
     }
     if (!info.sites.length) {
-        write(`Deploy token ${info.keyId} no longer covers any site (deleted or transferred); expires ${expiresAt}.\n`);
+        write(`Deploy token ${info.keyId} no longer covers any site (deleted or transferred); ${expiry}.\n`);
         return;
     }
-    write(
-        `Deploy token for ${info.sites.map(entry => `${entry.site.fqdn} (${entry.environments.join(' and ')})`).join(', ')}; expires ${expiresAt}.\n`
-    );
+    write(`Deploy token for ${info.sites.map(entry => `${entry.site.fqdn} (${entry.environments.join(' and ')})`).join(', ')}; ${expiry}.\n`);
 }

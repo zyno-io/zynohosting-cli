@@ -62,7 +62,7 @@ test('request_deploy_token returns a link and code, never the token or the reque
         assert.equal(start.body.requestedLifetimeSecs, 30 * 86_400);
         assert.deepEqual(start.body.permissions, ['hosting.sitesRead']);
         assert.deepEqual(start.body.grants, { hosting: [{ v: 1, siteId: SITE_ID, environments: ['production'] }] });
-        assert.deepEqual(called.structuredContent?.permissions, ['hosting', 'hosting.sitesRead']);
+        assert.deepEqual(called.structuredContent?.permissions, ['hosting.sitesRead']);
     } finally {
         await mcp.close();
         await server.close();
@@ -184,7 +184,11 @@ test('request_deploy_token rejects a malformed permissions input before anything
     const server = await startFakeKeyServer();
     const mcp = await connect(server.url, { ZYNOHOSTING_ACCESS_TOKEN: HUMAN_JWT });
     try {
-        const bad = await call(mcp.client, 'request_deploy_token', { site: 'example.com', environments: ['production'], permissions: ['Hosting Sites'] });
+        const bad = await call(mcp.client, 'request_deploy_token', {
+            site: 'example.com',
+            environments: ['production'],
+            permissions: ['Hosting Sites']
+        });
         assert(bad.called.isError, 'a malformed permission key is refused');
         assert.equal(server.count('POST', '/identity/key-requests'), 0);
 
@@ -192,6 +196,21 @@ test('request_deploy_token rejects a malformed permissions input before anything
         assert(!plain.called.isError, plain.text);
         const start = server.seen.find(entry => entry.url === '/identity/key-requests')!;
         assert.deepEqual(start.body.permissions, []);
+    } finally {
+        await mcp.close();
+        await server.close();
+    }
+});
+
+test('revoke_deploy_token is idempotent: an id ZynoAuth no longer has is already_revoked', async () => {
+    const server = await startFakeKeyServer();
+    server.state.revokeStatus = 404;
+    const mcp = await connect(server.url, { ZYNOHOSTING_ACCESS_TOKEN: HUMAN_JWT });
+    try {
+        const revoked = await call(mcp.client, 'revoke_deploy_token', { keyId: KEY_ID });
+        assert(!revoked.called.isError, revoked.text);
+        assert.equal(revoked.called.structuredContent?.status, 'revoked');
+        assert.equal(revoked.called.structuredContent?.already_revoked, true);
     } finally {
         await mcp.close();
         await server.close();

@@ -296,3 +296,65 @@ test('a 403 for an unknown or ungranted site is explained as the token not cover
         await server.close();
     }
 });
+
+test('a single-site token never reads an uncovered site name as a directory, but plain and explicit paths still work', async () => {
+    const server = await startFakeKeyServer();
+    const dir = await mkdtemp(join(tmpdir(), 'deploy-wrong-'));
+    await mkdir(join(dir, 'site-b.com'));
+    await mkdir(join(dir, 'dist'));
+    const resolved = await config({ ZYNOHOSTING_DEPLOY_TOKEN: SECRET }, server.url);
+    const cwd = process.cwd();
+    process.chdir(dir);
+    try {
+        // A folder named like another site must not be uploaded to this token's site.
+        await assert.rejects(resolveDeployArguments('site-b.com', undefined, resolved), (error: unknown) => {
+            assert(error instanceof CliError);
+            assert.equal(error.code, 'deploy_token_wrong_site');
+            assert.match(error.message, /example\.com/);
+            assert.match(error.message, /<site> <directory>/);
+            return true;
+        });
+        assert.equal(await code(resolveDeployArguments(OTHER_SITE_ID, undefined, resolved)), 'deploy_token_wrong_site');
+        // Plain names and explicit paths are directories.
+        assert.deepEqual(await resolveDeployArguments('dist', undefined, resolved), { site: 'example.com', directory: 'dist' });
+        assert.deepEqual(await resolveDeployArguments('./dist', undefined, resolved), { site: 'example.com', directory: './dist' });
+        assert.deepEqual(await resolveDeployArguments('./site-b.com', undefined, resolved), { site: 'example.com', directory: './site-b.com' });
+        assert.deepEqual(await resolveDeployArguments(join(dir, 'site-b.com'), undefined, resolved), {
+            site: 'example.com',
+            directory: join(dir, 'site-b.com')
+        });
+        // Both arguments are explicit.
+        assert.deepEqual(await resolveDeployArguments('example.com', 'site-b.com', resolved), { site: 'example.com', directory: 'site-b.com' });
+    } finally {
+        process.chdir(cwd);
+        await server.close();
+    }
+});
+
+test('subdomain hostnames are not names a token covers', async () => {
+    const { findTokenSite } = await import('../src/deploy-tokens/guard.js');
+    const { parseDeployTokenInfo } = await import('../src/protocol.js');
+    const info = parseDeployTokenInfo({
+        keyId: 'k',
+        sites: [
+            {
+                siteId: SITE_ID,
+                environments: ['production'],
+                site: {
+                    id: SITE_ID,
+                    primaryHostname: 'example.com',
+                    status: 'active',
+                    phpVersion: null,
+                    hostnames: [
+                        { id: 'a', name: 'example.com', kind: 'custom', subdomainDirectory: null },
+                        { id: 'b', name: 'www.example.com', kind: 'custom', subdomainDirectory: null },
+                        { id: 'c', name: 'blog.example.com', kind: 'subdomain', subdomainDirectory: 'blog' }
+                    ]
+                }
+            }
+        ]
+    });
+    assert.equal(info.sites[0]!.site.hostnames?.find(hostname => hostname.name === 'blog.example.com')?.subdomainDirectory, 'blog');
+    assert(findTokenSite(info, 'www.example.com'));
+    assert.equal(findTokenSite(info, 'blog.example.com'), undefined);
+});

@@ -126,13 +126,13 @@ In the workflow, set `ZYNOHOSTING_DEPLOY_TOKEN` from the CI secret and run `zyno
 
 `zynohosting deploy-tokens list [site]` shows tokens; `deploy-tokens revoke <keyId>` revokes one. Ask the user before revoking. Tokens expire after 30 to 365 days (default 90). Add `--permission <key>` (repeatable, for example `hosting.sitesRead`) only if the user asks for an extra permission; ZynoAuth validates the key and the approver can remove it.
 
-| Code                                                        | Do this                                                                                                                                  |
-| ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `deploy_token_expired`, `deploy_token_revoked`, `deploy_token_no_sites` | Create a new token with `deploy-tokens create`.                                                                                          |
+| Code                                                                               | Do this                                                                                                                                  |
+| ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `deploy_token_expired`, `deploy_token_revoked`, `deploy_token_no_sites`            | Create a new token with `deploy-tokens create`.                                                                                          |
 | `deploy_token_wrong_site`, `deploy_token_wrong_environment`, `deploy_token_denied` | The token is for another site or environment. Create the right one.                                                                      |
-| `conflicting_credentials`                                   | Unset all but one of `ZYNOHOSTING_DEPLOY_TOKEN`, `ZYNOHOSTING_API_KEY`, `ZYNOHOSTING_ACCESS_TOKEN`.                                      |
-| `handoff_unavailable`, `handoff_failed`                     | `gh`, `glab`, or the file path could not take the token. Fix the sign-in or path and run again. A failed hand-off revokes the new token. |
-| `key_request_denied`, `key_request_expired`                 | The user declined or the code ran out. Ask before trying again.                                                                          |
+| `conflicting_credentials`                                                          | Unset all but one of `ZYNOHOSTING_DEPLOY_TOKEN`, `ZYNOHOSTING_API_KEY`, `ZYNOHOSTING_ACCESS_TOKEN`.                                      |
+| `handoff_unavailable`, `handoff_failed`                                            | `gh`, `glab`, or the file path could not take the token. Fix the sign-in or path and run again. A failed hand-off revokes the new token. |
+| `key_request_denied`, `key_request_expired`                                        | The user declined or the code ran out. Ask before trying again.                                                                          |
 
 If a tenant API key is used with `CI=true`, the CLI warns with `api_key_in_ci`. Replace it with a deploy token.
 

@@ -512,13 +512,13 @@ These tools request and manage [deploy tokens](../cli/deploy-tokens) for CI. The
 { "site": "example.com", "environments": ["production"], "lifetimeDays": 90, "permissions": ["hosting.sitesRead"], "ci": "github" }
 ```
 
-| Argument       | Required | Meaning                                                            |
-| -------------- | -------- | ------------------------------------------------------------------ |
-| `site`         | yes      | Site UUID or hostname the user named.                              |
-| `environments` | yes      | `production`, `preview`, or both.                                  |
-| `lifetimeDays` | no       | `30`, `90`, `180`, or `365`. The user chooses when approving.      |
+| Argument       | Required | Meaning                                                                                                          |
+| -------------- | -------- | ---------------------------------------------------------------------------------------------------------------- |
+| `site`         | yes      | Site UUID or hostname the user named.                                                                            |
+| `environments` | yes      | `production`, `preview`, or both.                                                                                |
+| `lifetimeDays` | no       | `30`, `90`, `180`, or `365`. The user chooses when approving.                                                    |
 | `permissions`  | no       | Extra permission keys such as `hosting.sitesRead`. Leave out unless the user asked; the approver can remove any. |
-| `ci`           | no       | `github`, `gitlab`, or `other`, so the page shows the right steps. |
+| `ci`           | no       | `github`, `gitlab`, or `other`, so the page shows the right steps.                                               |
 
 Returns `requestId`, an approval link, and a short code. Give the user the link and code. They check the code, site, and environments, choose a lifetime, and approve. The agent never opens or approves the link, and never asks the user to paste a token into the chat.
 
@@ -532,7 +532,7 @@ Input: optional `site`. Lists token ids, previews, sites and environments, permi
 
 ### `revoke_deploy_token`
 
-Input: `keyId`. Revokes the token. CI that uses it stops deploying at once. Ask the user first.
+Input: `keyId`. Revokes the token. CI that uses it stops deploying at once. Ask the user first. Idempotent: an id ZynoAuth no longer has returns `status: revoked` with `already_revoked: true`.
 
 ## Complete downloads
 

@@ -33,6 +33,8 @@ export interface FakeKeyServer {
         tokenExpiresAt: string;
         self: { httpStatus: number; body?: unknown };
         selfRevokeStatus: number;
+        /** Status of DELETE /tenant/capability-keys/:id. */
+        revokeStatus: number;
         phpVersion: string | null;
         notFoundHandling: string;
         keys: unknown[];
@@ -126,6 +128,7 @@ export async function startFakeKeyServer(): Promise<FakeKeyServer> {
         tokenExpiresAt: new Date(Date.now() + 30 * 86_400_000).toISOString(),
         self: { httpStatus: 200, body: selfRow(new Date(Date.now() + 86_400_000).toISOString()) },
         selfRevokeStatus: 200,
+        revokeStatus: 200,
         phpVersion: null,
         notFoundHandling: '404-page',
         keys: [],
@@ -204,7 +207,8 @@ export async function startFakeKeyServer(): Promise<FakeKeyServer> {
                 expiresAt: Date.now() + 600_000,
                 apps: ['hosting'],
                 requested: {
-                    permissions: [...new Set(['hosting', ...((body.permissions as string[] | undefined) ?? [])])].sort(),
+                    // ZynoAuth only dedupes and sorts what was asked for; the bare app key joins the minted key, not the request.
+                    permissions: [...new Set((body.permissions as string[] | undefined) ?? [])].sort(),
                     grants: body.grants
                 },
                 views: {
@@ -237,7 +241,9 @@ export async function startFakeKeyServer(): Promise<FakeKeyServer> {
         if (method === 'GET' && path === '/identity/tenant-keys/self') return send(state.self.body ?? {}, state.self.httpStatus);
         if (method === 'POST' && path === '/identity/tenant-keys/self-revoke') return send({ revoked: true }, state.selfRevokeStatus);
         if (method === 'GET' && path === '/tenant/capability-keys') return send(state.keys);
-        if (method === 'DELETE' && path.startsWith('/tenant/capability-keys/')) return send(null);
+        if (method === 'DELETE' && path.startsWith('/tenant/capability-keys/')) {
+            return state.revokeStatus === 200 ? send(null) : send({ error: 'Capability key not found' }, state.revokeStatus);
+        }
         send({ error: 'not found' }, 404);
     });
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));

@@ -64,6 +64,19 @@ function deployConfigOverrides(options: DeploySiteOptions): ConfigOverrides {
     };
 }
 
+function looksLikeSiteRef(value: string): boolean {
+    try {
+        normalizeSiteRef(value);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+function isExplicitPath(value: string): boolean {
+    return /^(\.{1,2}[\\/]|[\\/]|~|[A-Za-z]:[\\/])/.test(value) || /[\\/]/.test(value);
+}
+
 /**
  * Works out which positional argument is the site and which the directory. Without a deploy token the site is required.
  * With a token that covers one site, the site is optional: a single argument is the site when it names the token's site,
@@ -102,6 +115,15 @@ export async function resolveDeployArguments(
     }
     if (second !== undefined) return { site: first, directory: second };
     const asSite = tokenCoversSite(info, first);
+    // A bare hostname or id that the token does not cover is a wrong site, even when a folder of that name exists: reading it as
+    // the directory would upload that folder to the token's own site. A path (`./site-b.com`, `/srv/site-b.com`) stays a directory.
+    if (!asSite && looksLikeSiteRef(first) && !isExplicitPath(first)) {
+        throw new CliError(
+            `"${first}" is not a site this deploy token covers (${covered}). To deploy a local folder with that name, write it as a path (./${first}) or give both arguments: zynohosting deploy <site> <directory>`,
+            2,
+            'deploy_token_wrong_site'
+        );
+    }
     const asDirectory = await stat(first).then(
         entry => entry.isDirectory(),
         () => false

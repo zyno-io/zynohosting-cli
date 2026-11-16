@@ -110,6 +110,26 @@ function unavailable(message: string): CliError {
 export interface HandoffPreflight {
     /** The GitLab variable already exists, so it is updated rather than created. */
     replacesExisting: boolean;
+    /** Extra `glab variable update` flags that keep the existing variable's settings (protected, raw, file type, description). */
+    keepFlags?: string[];
+}
+
+/**
+ * Reads an existing GitLab variable's settings from `glab variable get -F json` so a rotation does not reset them. The JSON
+ * also holds the old value; only the settings are taken, and the value is never kept or shown. Unreadable output keeps none.
+ */
+function keepFlagsFrom(stdout: string): string[] {
+    try {
+        const value = JSON.parse(stdout) as Record<string, unknown>;
+        const flags: string[] = [];
+        if (value.protected === true) flags.push('--protected');
+        if (value.raw === true) flags.push('--raw');
+        if (value.variable_type === 'file') flags.push('--type', 'file');
+        if (typeof value.description === 'string' && value.description) flags.push('--description', value.description.slice(0, 255));
+        return flags;
+    } catch {
+        return [];
+    }
 }
 
 /** Checks, before any request is made, that the destination can take the key. Nothing secret exists yet. */
@@ -135,8 +155,8 @@ export async function preflightHandoff(handoff: Handoff, dependencies: HandoffDe
         }
         // `glab variable set` fails when the variable exists, so a rotation must use `update`. Only the exit code is used;
         // the old value that `get` prints stays in memory and is never shown.
-        const existing = await run('glab', ['variable', 'get', handoff.name, '-R', handoff.project]);
-        return { replacesExisting: existing.code === 0 };
+        const existing = await run('glab', ['variable', 'get', handoff.name, '-R', handoff.project, '-F', 'json']);
+        return existing.code === 0 ? { replacesExisting: true, keepFlags: keepFlagsFrom(existing.stdout) } : { replacesExisting: false };
     } else if (handoff.kind === 'file') {
         const path = resolve(handoff.path);
         const exists = await access(path).then(
@@ -181,7 +201,9 @@ export async function deliverSecret(
         if (result.code !== 0) throw failure('Saving the GitHub secret', result, secret);
     } else if (handoff.kind === 'gitlab') {
         const verb = preflight.replacesExisting ? 'update' : 'set';
-        const result = await run('glab', ['variable', verb, handoff.name, '--masked', '-R', handoff.project], { input: secret });
+        // An update keeps the settings the variable already has; `--masked` is always set, as it is for a new variable.
+        const keep = preflight.replacesExisting ? (preflight.keepFlags ?? []) : [];
+        const result = await run('glab', ['variable', verb, handoff.name, '--masked', ...keep, '-R', handoff.project], { input: secret });
         if (result.code !== 0) throw failure('Saving the GitLab variable', result, secret);
     } else if (handoff.kind === 'file') {
         warnings.push(...(await writeSecretFile(resolve(handoff.path), secret, run)));

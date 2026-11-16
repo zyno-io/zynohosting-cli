@@ -411,6 +411,55 @@ test('list filters by site and prints no secret; revoke by id calls the tenant e
     }
 });
 
+test('revoking a key ZynoAuth no longer has is a success that says so', async () => {
+    const context = await setup();
+    context.server.state.revokeStatus = 404;
+    try {
+        await revokeDeployToken(KEY_ID, context.options, context.dependencies);
+        assert.match(context.output.join(''), /already revoked or never existed/);
+        assert.equal(context.events.at(-1)?.alreadyRevoked, true);
+        context.server.state.revokeStatus = 403;
+        await assert.rejects(
+            revokeDeployToken(KEY_ID, context.options, context.dependencies),
+            (error: unknown) => (error as { status?: number }).status === 403
+        );
+    } finally {
+        await context.server.close();
+    }
+});
+
+test('rotating a GitLab variable keeps its protected, raw, and type settings and never shows the old value', async () => {
+    const existing = JSON.stringify({
+        key: 'ZYNOHOSTING_DEPLOY_TOKEN',
+        value: 'old-secret-value',
+        protected: true,
+        raw: true,
+        variable_type: 'file',
+        masked: true
+    });
+    const context = await setup(call => (call.command === 'glab' && call.args[1] === 'get' ? { code: 0, stdout: existing } : undefined));
+    try {
+        await createDeployToken('example.com', { ...context.options, gitlab: 'group/project' }, context.dependencies);
+        const update = context.calls.find(call => call.command === 'glab' && call.args[1] === 'update');
+        assert.deepEqual(update?.args, [
+            'variable',
+            'update',
+            'ZYNOHOSTING_DEPLOY_TOKEN',
+            '--masked',
+            '--protected',
+            '--raw',
+            '--type',
+            'file',
+            '-R',
+            'group/project'
+        ]);
+        assert.equal(update?.input, SECRET);
+        assert(!visible(context).includes('old-secret-value'));
+    } finally {
+        await context.server.close();
+    }
+});
+
 test('the real hand-off passes the token on stdin and never in an argument', { skip: process.platform === 'win32' }, async () => {
     const root = await mkdtemp(join(tmpdir(), 'fake-gh-'));
     const log = join(root, 'log.json');
@@ -588,7 +637,7 @@ test('--permission is sent with the request, deduplicated, and shown to the appr
         assert.deepEqual(start.body.grants, { hosting: [{ v: 1, siteId: SITE_ID, environments: ['production'] }] });
         assert.equal(result.status, 'pending');
         // The server adds the bare app key and sorts; that is what is reported, not what was sent.
-        assert.deepEqual(result.status === 'pending' && result.permissions, ['hosting', 'hosting.deploy', 'hosting.sitesRead']);
+        assert.deepEqual(result.status === 'pending' && result.permissions, ['hosting.deploy', 'hosting.sitesRead']);
         assert.match(context.output.join(''), /with hosting\.deploy, hosting\.sitesRead/);
     } finally {
         await context.server.close();
@@ -646,7 +695,7 @@ test('the new ZynoAuth shapes are parsed strictly: start, key info, list rows, a
             delivery: 'poll' as const
         };
         const start = await client.start({ type: 'bearer', token: HUMAN_JWT } as never, input);
-        assert.deepEqual(start.requested, { permissions: ['hosting'], sites: [{ siteId: SITE_ID, environments: ['production'] }] });
+        assert.deepEqual(start.requested, { permissions: [], sites: [{ siteId: SITE_ID, environments: ['production'] }] });
 
         const state = context.server.state;
         const verdict = async (call: () => Promise<unknown>) =>

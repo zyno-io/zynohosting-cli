@@ -430,7 +430,18 @@ export class KeyRequestClient {
         return siteId ? keys.filter(key => key.sites.some(site => site.siteId.toLowerCase() === siteId)) : keys;
     }
 
-    async revoke(credential: ManagerCredential, keyId: string): Promise<void> {
+    /** Revokes a key. ZynoAuth answers 404 for a key that is unknown, in another tenant, or already revoked: that is reported, not thrown. */
+    async revoke(credential: ManagerCredential, keyId: string): Promise<{ alreadyRevoked: boolean }> {
+        try {
+            await this.sendRevoke(credential, keyId);
+            return { alreadyRevoked: false };
+        } catch (error) {
+            if (error instanceof HttpError && error.status === 404) return { alreadyRevoked: true };
+            throw error;
+        }
+    }
+
+    private async sendRevoke(credential: ManagerCredential, keyId: string): Promise<void> {
         await requestJson(`${this.apiUrl}/tenant/capability-keys/${encodeURIComponent(keyId)}`, {
             method: 'DELETE',
             timeoutMs: this.timeoutMs,

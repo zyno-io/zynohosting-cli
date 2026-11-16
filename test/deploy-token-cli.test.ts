@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { createProgram } from '../src/cli.js';
+import { CliError } from '../src/errors.js';
 import { KEY_ID, OTHER_SITE_ID, SECRET, SITE_ID, selfRow, startFakeKeyServer } from './support/fake-key-server.js';
 
 async function run(args: string[], env: Record<string, string>): Promise<{ out: string; err: string }> {
@@ -169,5 +170,35 @@ test('deploy without a site fails like a missing required argument unless a depl
     } finally {
         if (saved === undefined) delete process.env.ZYNOHOSTING_API_KEY;
         else process.env.ZYNOHOSTING_API_KEY = saved;
+    }
+});
+
+test('whoami still prints the sites when ZynoAuth cannot answer, and maps a refusal from it', async () => {
+    const server = await startFakeKeyServer();
+    const base = { ZYNOHOSTING_DEPLOY_TOKEN: SECRET, ZYNOHOSTING_CONFIG: '/nonexistent/c.json' };
+    const args = ['--api-url', server.url, '--auth-api-url', server.url, 'whoami'];
+    try {
+        // ZynoAuth unavailable: hosting data, "expiry unknown", a warning on stderr.
+        server.state.self = { httpStatus: 503, body: { error: 'down' } };
+        const down = await run(args, base);
+        assert.match(down.out, /example\.com \(production\); expiry unknown\./);
+        assert.match(down.err, /Warning: .*expiry is unknown/);
+        const json = await run([...args, '--json'], base);
+        const parsed = JSON.parse(json.out.trim()) as { deployToken: { sites: unknown[]; expiresAt: unknown } };
+        assert.equal(parsed.deployToken.sites.length, 1);
+        assert.equal(parsed.deployToken.expiresAt, null);
+
+        // No ZynoAuth URL at all: the same degraded output.
+        const noAuth = await run(['--api-url', server.url, 'whoami'], { ...base, ZYNO_AUTH_API_URL: '' });
+        assert.match(noAuth.out, /expiry unknown/);
+        assert.match(noAuth.err, /Warning: /);
+
+        // A verdict from ZynoAuth is not degraded.
+        server.state.self = { httpStatus: 403, body: { error: 'Invalid API key' } };
+        await assert.rejects(run(args, base), (error: unknown) => error instanceof CliError && error.code === 'deploy_token_revoked');
+        server.state.self = { httpStatus: 401, body: { error: 'Capability key has expired' } };
+        await assert.rejects(run(args, base), (error: unknown) => error instanceof CliError && error.code === 'deploy_token_expired');
+    } finally {
+        await server.close();
     }
 });

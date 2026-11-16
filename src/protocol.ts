@@ -80,7 +80,7 @@ export interface AutomationSite {
     /** Absent on managers that predate the setting. Any string is accepted so a future mode cannot break unrelated commands. */
     notFoundHandling?: string;
     deployments?: SiteDeployments;
-    hostnames?: Array<{ name: string; type: string }>;
+    hostnames?: Array<{ name: string; type: string; subdomainDirectory?: string | null }>;
 }
 
 export interface AccessSession {
@@ -234,7 +234,11 @@ export function parseAutomationSite(value: unknown): AutomationSite {
                   const item = record(hostname, `hostnames[${index}]`);
                   return {
                       name: string(item.name, `hostnames[${index}].name`),
-                      type: string(item.type ?? item.kind, `hostnames[${index}].type`)
+                      type: string(item.type ?? item.kind, `hostnames[${index}].type`),
+                      // A subdomain hostname (served from a directory of another site) is not a name of the site itself.
+                      ...(item.subdomainDirectory === undefined || item.subdomainDirectory === null
+                          ? {}
+                          : { subdomainDirectory: string(item.subdomainDirectory, `hostnames[${index}].subdomainDirectory`) })
                   };
               });
     return {

@@ -217,8 +217,14 @@ export function registerDeployTokensMcp(server: McpServer, getClients: () => Pro
         async ({ keyId }) => {
             const { config } = await getClients();
             if (!config.authApiUrl) throw new CliError('The ZynoAuth API URL is required.', 2, 'missing_auth_api_url');
-            await new KeyRequestClient(config.authApiUrl).revoke(config.credential, keyId);
-            return safeResult({ keyId, status: 'revoked' });
+            const { alreadyRevoked } = await new KeyRequestClient(config.authApiUrl).revoke(config.credential, keyId);
+            return safeResult({
+                keyId,
+                status: 'revoked',
+                ...(alreadyRevoked
+                    ? { already_revoked: true, message: 'ZynoAuth has no active deploy token with this id; it was already revoked or never existed.' }
+                    : {})
+            });
         }
     );
 }

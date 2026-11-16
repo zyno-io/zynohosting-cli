@@ -68,7 +68,7 @@ The token goes to `gh` and `glab` on standard input. It is never in a command li
 
 If saving the token fails, the CLI revokes the new token with itself and exits with `handoff_failed`. The message says the token was revoked. If the revoke also fails, the message says so and names the key id: run `zynohosting deploy-tokens revoke <keyId>` with that id (or revoke it in ZynoSuite), because a live token nobody holds is left until then.
 
-If a destination such as a GitLab variable already exists, the CLI replaces its value (`glab variable update`). GitHub secrets are overwritten by `gh secret set`.
+If a destination such as a GitLab variable already exists, the CLI replaces its value (`glab variable update`) and keeps its protected, raw, type, and description settings. The variable stays masked. GitHub secrets are overwritten by `gh secret set`.
 
 A file inside a git repository that is not ignored gets a warning. Add it to `.gitignore` before you commit.
 
@@ -96,6 +96,8 @@ zynohosting deploy-tokens revoke <keyId>
 
 The list shows each token's id, short preview, sites and environments, extra permission keys, who approved it, expiry, and last use. It never shows a token. `list <site>` keeps the tokens granted that site. The list comes from ZynoAuth's `app=hosting` filter, so it holds hosting tokens only. A login that lacks `hosting.sitesRead` sees none.
 
+Revoking a token that ZynoAuth no longer has (already revoked, or no such id) is not an error: the command says so and exits 0.
+
 CI can revoke its own token:
 
 ```bash
@@ -116,6 +118,7 @@ With a token, `deploy` takes the site and the directory in either form:
 - `deploy` deploys the current directory to the token's site;
 - `deploy ./dist` deploys `./dist`;
 - `deploy example.com` deploys the current directory;
+- a name that looks like a site (`site-b.com`) but is not covered by the token is refused (`deploy_token_wrong_site`), even if a folder has that name. Write a folder as a path (`./site-b.com`) or give both arguments;
 - `deploy example.com ./dist` names both.
 
 If one argument is both the site and a directory, the CLI stops and asks for both. If the site or environment does not match the token, it fails before it uploads anything.
@@ -124,7 +127,7 @@ A token that covers several sites always needs the site named: `deploy` or `depl
 
 If every site the token was approved for was deleted or moved to another tenant, hosting lists no sites for it. Commands fail with `deploy_token_no_sites`; create a new token.
 
-`zynohosting whoami` with a token prints its sites, environments, and expiry (read from ZynoAuth), so it needs the ZynoAuth API URL (`--auth-api-url` or `ZYNO_AUTH_API_URL`).
+`zynohosting whoami` with a token prints its sites, environments, and expiry. The expiry is read from ZynoAuth. If ZynoAuth is unreachable or its URL is not set, `whoami` still prints the sites, says "expiry unknown", and warns on stderr. An expired or revoked token fails with `deploy_token_expired` or `deploy_token_revoked`.
 
 A token only runs `deploy`, `promote`, `whoami`, `sites set`, `sites runtime`, and `deploy-tokens revoke --self`. Every other command fails with `deploy_token_not_allowed`.
 
@@ -199,28 +202,28 @@ To limit the variable to protected branches, mark it protected in the project's 
 
 ## Errors
 
-| Code                               | Meaning                                                                                           |
-| ---------------------------------- | ------------------------------------------------------------------------------------------------- |
-| `deploy_token_not_allowed`         | A deploy token cannot run this command (exit 3).                                                  |
-| `conflicting_credentials`          | A deploy token was set together with an API key or access token (exit 2).                         |
-| `invalid_deploy_token`             | The value is not a deploy token. A tenant API key gets its own message (exit 2).                  |
-| `deploy_token_wrong_site`          | The site is not one the token covers (exit 3, or 2 for a deploy argument).                        |
-| `deploy_token_site_required`       | The token covers several sites: name the one to deploy (exit 2).                                  |
-| `deploy_token_no_sites`            | Every site of the token was deleted or transferred. Create a new token (exit 3).                  |
-| `deploy_token_wrong_environment`   | The token's grant for that site does not include that environment (exit 3). Checked before the request. |
+| Code                               | Meaning                                                                                                                                   |
+| ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `deploy_token_not_allowed`         | A deploy token cannot run this command (exit 3).                                                                                          |
+| `conflicting_credentials`          | A deploy token was set together with an API key or access token (exit 2).                                                                 |
+| `invalid_deploy_token`             | The value is not a deploy token. A tenant API key gets its own message (exit 2).                                                          |
+| `deploy_token_wrong_site`          | The site is not one the token covers (exit 3, or 2 for a deploy argument).                                                                |
+| `deploy_token_site_required`       | The token covers several sites: name the one to deploy (exit 2).                                                                          |
+| `deploy_token_no_sites`            | Every site of the token was deleted or transferred. Create a new token (exit 3).                                                          |
+| `deploy_token_wrong_environment`   | The token's grant for that site does not include that environment (exit 3). Checked before the request.                                   |
 | `deploy_token_denied`              | The token is valid, but hosting refused the call (`not bound to this site`, wrong scope, and so on). The message quotes hosting (exit 3). |
-| `deploy_token_requires_production` | The site runs PHP, so its token must include production (exit 3).                                 |
-| `deploy_token_expired`             | The token expired. Create a new one (exit 3).                                                     |
-| `deploy_token_revoked`             | The token was revoked or is no longer valid (exit 3).                                             |
-| `ambiguous_deploy_argument`        | One argument is both the site and a directory. Give both (exit 2).                                |
-| `handoff_unavailable`              | `gh`, `glab`, or the file path cannot take the token. Nothing was requested (exit 2).             |
-| `handoff_failed`                   | Saving the token failed. The new token was revoked if possible (exit 7).                          |
-| `key_request_denied`               | The approver denied the request (exit 3).                                                         |
-| `key_request_expired`              | The approval code ran out. Start again (exit 3).                                                  |
-| `key_request_pending`              | `--resume` timed out with nobody approving (exit 3).                                              |
-| `no_pending_key_request`           | `--resume` with nothing saved (exit 2).                                                           |
-| `key_credential_lost`              | The connection dropped as the token was handed over. List and revoke, then create again (exit 3). |
+| `deploy_token_requires_production` | The site runs PHP, so its token must include production (exit 3).                                                                         |
+| `deploy_token_expired`             | The token expired. Create a new one (exit 3).                                                                                             |
+| `deploy_token_revoked`             | The token was revoked or is no longer valid (exit 3).                                                                                     |
+| `ambiguous_deploy_argument`        | One argument is both the site and a directory. Give both (exit 2).                                                                        |
+| `handoff_unavailable`              | `gh`, `glab`, or the file path cannot take the token. Nothing was requested (exit 2).                                                     |
+| `handoff_failed`                   | Saving the token failed. The new token was revoked if possible (exit 7).                                                                  |
+| `key_request_denied`               | The approver denied the request (exit 3).                                                                                                 |
+| `key_request_expired`              | The approval code ran out. Start again (exit 3).                                                                                          |
+| `key_request_pending`              | `--resume` timed out with nobody approving (exit 3).                                                                                      |
+| `no_pending_key_request`           | `--resume` with nothing saved (exit 2).                                                                                                   |
+| `key_credential_lost`              | The connection dropped as the token was handed over. List and revoke, then create again (exit 3).                                         |
 
 ## Permissions
 
-Creating a token needs `hosting.sitesRead` on your login. Approving needs `hosting.deploy`. Tenant administrators pass both checks.
+Starting a request needs `hosting.deploy` (or tenant administrator) on your login: hosting checks it when the request starts and again at approval. Approving needs the same, and any extra `--permission` key must be one you hold. The CLI also reads the site before it asks, which needs `hosting.sitesRead`, so a login with only `hosting.deploy` cannot use `create`. Tenant administrators pass every check.

@@ -39,8 +39,9 @@ export function assertTokenAllowedForSite(site: { phpVersion: string | null }, e
     if (site.phpVersion !== null && !environments.includes('production')) throw requiresProduction();
 }
 
+/** The names a token covers for a site: its primary hostname and aliases. Subdomain hostnames are never covered (hosting denies them). */
 function siteNames(site: DeployTokenSite['site']): string[] {
-    return [site.fqdn, ...(site.hostnames ?? []).map(hostname => hostname.name)];
+    return [site.fqdn, ...(site.hostnames ?? []).filter(hostname => hostname.subdomainDirectory === undefined).map(hostname => hostname.name)];
 }
 
 /** The site grant of the token that `reference` (a site id or any hostname of the site) names. */
@@ -102,6 +103,21 @@ export async function verifyDeployToken(manager: ManagerClient, need: { site: st
     return grant;
 }
 
+/** ZynoAuth answers `self` with 401 for an expired key and 403 for one that was revoked or never existed. Anything else is not a verdict. */
+export function selfFailure(selfError: unknown): CliError | undefined {
+    if (selfError instanceof HttpError && selfError.status === 401) {
+        return new CliError('This deploy token has expired. Create a new one with `zynohosting deploy-tokens create`.', 3, 'deploy_token_expired');
+    }
+    if (selfError instanceof HttpError && selfError.status === 403) {
+        return new CliError(
+            'This deploy token has been revoked or is not valid. Create a new one with `zynohosting deploy-tokens create`.',
+            3,
+            'deploy_token_revoked'
+        );
+    }
+    return undefined;
+}
+
 /**
  * Turns a 401 or 403 from a call made with a deploy token into a reason the person can act on, by asking the token about
  * itself. Any other error, or a credential that is not a deploy token, is rethrown unchanged.
@@ -120,18 +136,7 @@ export async function diagnoseDeployToken(config: ResolvedConfig, error: unknown
     try {
         await client.self(config.credential.token);
     } catch (selfError) {
-        // ZynoAuth answers 401 for an expired key and 403 for one that was revoked or never existed.
-        if (selfError instanceof HttpError && selfError.status === 401) {
-            throw new CliError('This deploy token has expired. Create a new one with `zynohosting deploy-tokens create`.', 3, 'deploy_token_expired');
-        }
-        if (selfError instanceof HttpError && selfError.status === 403) {
-            throw new CliError(
-                'This deploy token has been revoked or is not valid. Create a new one with `zynohosting deploy-tokens create`.',
-                3,
-                'deploy_token_revoked'
-            );
-        }
-        throw error;
+        throw selfFailure(selfError) ?? error;
     }
     // The token is valid. Only an authorization denial is about what the token may do; any other 403 (the site is not
     // active, a transfer is in progress, ...) is the manager's own reason and is shown unchanged.
