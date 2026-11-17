@@ -201,8 +201,8 @@ export async function startFakeKeyServer(): Promise<FakeKeyServer> {
             return send({
                 requestCode,
                 userCode: USER_CODE,
-                verificationUri: `${baseUrl}/api-keys/approve`,
-                verificationUriComplete: `${baseUrl}/api-keys/approve?code=${USER_CODE}`,
+                verificationUri: `${baseUrl}/cli/api-keys/approve`,
+                verificationUriComplete: `${baseUrl}/cli/api-keys/approve?code=${USER_CODE}`,
                 interval: 0.02,
                 requestId: '77777777-7777-4777-8777-777777777777',
                 expiresIn: 600,
