@@ -5,7 +5,7 @@ export const SITE_ID = '11111111-1111-4111-8111-111111111111';
 export const OPERATION_ID = '33333333-3333-4333-8333-333333333333';
 export const KEY_ID = '99999999-9999-4999-8999-999999999999';
 /** A well-formed deploy token. It must never appear in any output. */
-export const SECRET = `zck_${'A1b2C3d4'.repeat(5)}abc`;
+export const SECRET = `zak_${'A1b2C3d4'.repeat(5)}abc`;
 export const REQUEST_CODE = `zkr_${'Q9w8E7r6'.repeat(5)}abc`;
 export const USER_CODE = 'ABCD-EFGH';
 export const HUMAN_JWT = 'human.jwt.signature';
@@ -33,7 +33,7 @@ export interface FakeKeyServer {
         tokenExpiresAt: string;
         self: { httpStatus: number; body?: unknown };
         selfRevokeStatus: number;
-        /** Status of DELETE /tenant/capability-keys/:id. */
+        /** Status of DELETE /tenant/api-keys/:id. */
         revokeStatus: number;
         phpVersion: string | null;
         notFoundHandling: string;
@@ -71,7 +71,7 @@ export function keyInfo(environments: string[] = ['production'], permissionKeys:
         id: KEY_ID,
         tenantId: TENANT_ID,
         description: 'CI',
-        keyPreview: 'zck_A1b2...abc',
+        keyPreview: 'zak_A1b2...abc',
         permissionKeys,
         display: grantDisplay([[SITE_ID, 'example.com', environments]]),
         handoff: null,
@@ -90,15 +90,17 @@ export function displayApprovedPoll(extra: Record<string, unknown> = {}): Script
     return { status: 'approved', delivery: 'display', key: keyInfo(), ...extra };
 }
 
-/** The key's own `GET /identity/tenant-keys/self` answer: a list row without `status` and `createdByEmail`. */
+/** The key's own `GET /identity/api-keys/self` answer: a list row without `status` and `createdByEmail`. */
 export function selfRow(expiresAt: string, environments: string[] = ['production']): Record<string, unknown> {
     return {
         id: KEY_ID,
         tenantId: TENANT_ID,
         description: 'CI',
-        keyPreview: 'zck_A1b2...abc',
+        keyPreview: 'zak_A1b2...abc',
         apps: ['hosting'],
         permissionKeys: ['hosting'],
+        origin: 'request',
+        deletedAt: null,
         display: grantDisplay([[SITE_ID, 'example.com', environments]]),
         handoff: null,
         createdAt: new Date().toISOString(),
@@ -109,7 +111,7 @@ export function selfRow(expiresAt: string, environments: string[] = ['production
     };
 }
 
-/** A listed key as `GET /tenant/capability-keys` returns it. */
+/** A listed key as `GET /tenant/api-keys` returns it. */
 export function listRow(extra: Record<string, unknown> = {}): Record<string, unknown> {
     return { ...selfRow(new Date(Date.now() + 86_400_000).toISOString()), createdByEmail: 'a@example.com', status: 'active', ...extra };
 }
@@ -193,14 +195,14 @@ export async function startFakeKeyServer(): Promise<FakeKeyServer> {
             return send({ id: OPERATION_ID, status: 'succeeded', statusUrl: `/reconciliations/${OPERATION_ID}`, lastError: null });
         }
         if (method === 'GET' && path === '/v1/sites') return send([site()]);
-        if (method === 'POST' && path === '/identity/key-requests') {
+        if (method === 'POST' && path === '/identity/api-key-requests') {
             // Each request gets its own code; the first is REQUEST_CODE.
             const requestCode = `${REQUEST_CODE.slice(0, -1)}${String.fromCharCode(REQUEST_CODE.charCodeAt(REQUEST_CODE.length - 1) + starts++)}`;
             return send({
                 requestCode,
                 userCode: USER_CODE,
-                verificationUri: `${baseUrl}/keys/approve`,
-                verificationUriComplete: `${baseUrl}/keys/approve?code=${USER_CODE}`,
+                verificationUri: `${baseUrl}/api-keys/approve`,
+                verificationUriComplete: `${baseUrl}/api-keys/approve?code=${USER_CODE}`,
                 interval: 0.02,
                 requestId: '77777777-7777-4777-8777-777777777777',
                 expiresIn: 600,
@@ -219,7 +221,7 @@ export async function startFakeKeyServer(): Promise<FakeKeyServer> {
                 lifetime: { optionsSecs: [2592000, 7776000, 15552000, 31536000], defaultSecs: 7776000 }
             });
         }
-        if (method === 'POST' && path === '/identity/key-requests/poll') {
+        if (method === 'POST' && path === '/identity/api-key-requests/poll') {
             const script = state.polls[Math.min(pollIndex++, state.polls.length - 1)]!;
             if (script === 'drop') {
                 request.socket.destroy();
@@ -237,12 +239,12 @@ export async function startFakeKeyServer(): Promise<FakeKeyServer> {
                 return send({ ...script, interval: 0.02 });
             return send(script);
         }
-        if (method === 'POST' && path === '/identity/key-requests/cancel') return send(null);
-        if (method === 'GET' && path === '/identity/tenant-keys/self') return send(state.self.body ?? {}, state.self.httpStatus);
-        if (method === 'POST' && path === '/identity/tenant-keys/self-revoke') return send({ revoked: true }, state.selfRevokeStatus);
-        if (method === 'GET' && path === '/tenant/capability-keys') return send(state.keys);
-        if (method === 'DELETE' && path.startsWith('/tenant/capability-keys/')) {
-            return state.revokeStatus === 200 ? send(null) : send({ error: 'Capability key not found' }, state.revokeStatus);
+        if (method === 'POST' && path === '/identity/api-key-requests/cancel') return send(null);
+        if (method === 'GET' && path === '/identity/api-keys/self') return send(state.self.body ?? {}, state.self.httpStatus);
+        if (method === 'POST' && path === '/identity/api-keys/self-revoke') return send({ revoked: true }, state.selfRevokeStatus);
+        if (method === 'GET' && path === '/tenant/api-keys') return send(state.keys);
+        if (method === 'DELETE' && path.startsWith('/tenant/api-keys/')) {
+            return state.revokeStatus === 200 ? send(null) : send({ error: 'API key not found' }, state.revokeStatus);
         }
         send({ error: 'not found' }, 404);
     });

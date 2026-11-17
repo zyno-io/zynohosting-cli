@@ -6,7 +6,7 @@ import type { ConfigOverrides, ResolvedConfig } from '../config.js';
 import type { Handoff, HandoffDependencies } from '../deploy-tokens/handoff.js';
 import type { LoginFlow } from '../login/flow.js';
 
-import { CapabilityKeySummary, KeyRequestClient } from '../api/key-request-client.js';
+import { ApiKeySummary, KeyRequestClient } from '../api/key-request-client.js';
 import { ManagerClient } from '../api/manager-client.js';
 import { configLocation, describeProfileKey, loadConfigFile, mutateProfile, resolveConfig, selectProfile } from '../config.js';
 import { assertTokenAllowedForSite, diagnoseDeployToken, selfFailure } from '../deploy-tokens/guard.js';
@@ -489,7 +489,7 @@ export async function listDeployTokens(
     siteRef: string | undefined,
     options: ConfigOverrides & { json?: boolean },
     dependencies: DeployTokenDependencies = {}
-): Promise<CapabilityKeySummary[]> {
+): Promise<ApiKeySummary[]> {
     const { json, env } = context(options, dependencies);
     const write = dependencies.write ?? ((message: string) => process.stdout.write(message));
     const config = await resolveConfig(options, env);
@@ -511,7 +511,7 @@ export async function listDeployTokens(
             key.id,
             key.preview ?? '',
             key.sites.map(site => `${site.label} (${site.environments.join('+')})`).join(', '),
-            key.permissionKeys.filter(permission => !key.apps.includes(permission)).join(','),
+            (key.permissionKeys ?? []).filter(permission => !key.apps.includes(permission)).join(','),
             key.expiresAt === undefined ? '' : `expires ${iso(key.expiresAt)}`,
             key.lastUsedAt === undefined ? 'never used' : `last used ${iso(key.lastUsedAt)}`,
             key.approvedBy ? `approved by ${key.approvedBy}` : '',
@@ -567,7 +567,7 @@ export async function describeDeployToken(options: ConfigOverrides & { json?: bo
     // Hosting reports no expiry; ZynoAuth does. If ZynoAuth cannot answer, show what hosting said and warn.
     const warnText = (message: string) => (dependencies.warn ?? ((text: string) => process.stderr.write(text)))(`Warning: ${message}\n`);
     let expiresAt: string | undefined;
-    let permissionKeys: string[] | undefined;
+    let permissionKeys: string[] | null | undefined;
     if (!config.authApiUrl) {
         warnText('the ZynoAuth API URL is not set (--auth-api-url or ZYNO_AUTH_API_URL), so the expiry is unknown.');
     } else {

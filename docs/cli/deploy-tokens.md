@@ -1,12 +1,12 @@
 # Deploy tokens
 
-A deploy token is a key for CI. It can deploy one site and do almost nothing else. Use it instead of a tenant API key.
+A deploy token is an API key made through an API key request, for CI. It can deploy one site and do almost nothing else. Use it instead of a tenant API key.
 
 If a deploy token leaks, an attacker can deploy to that one site until you revoke it. A leaked tenant API key reaches your whole tenant.
 
 ## What a token can do
 
-A deploy token is an ordinary restricted API key with the `hosting` app permission and nothing else by default. Its access to sites is a grant stored in hosting: one or more sites, each with the environments you choose (production, preview, or both). `deploy-tokens create` asks for one site.
+A deploy token is an ordinary restricted API key (`zak_` plus 43 characters, the same format as any other API key) with the `hosting` app permission and nothing else by default. Its access to sites is a grant stored in hosting: one or more sites, each with the environments you choose (production, preview, or both). `deploy-tokens create` asks for one site.
 
 It can:
 
@@ -131,6 +131,8 @@ If every site the token was approved for was deleted or moved to another tenant,
 
 A token only runs `deploy`, `promote`, `whoami`, `sites set`, `sites runtime`, and `deploy-tokens revoke --self`. Every other command fails with `deploy_token_not_allowed`.
 
+The CLI treats a key as a deploy token because you put it in `ZYNOHOSTING_DEPLOY_TOKEN`, not because of its prefix. The same key in `ZYNOHOSTING_API_KEY` is an ordinary API key.
+
 Do not set `ZYNOHOSTING_DEPLOY_TOKEN` together with `ZYNOHOSTING_API_KEY` or `ZYNOHOSTING_ACCESS_TOKEN`. That is `conflicting_credentials`. A token cannot be combined with `--tenant` either.
 
 ### GitHub Actions
@@ -206,7 +208,7 @@ To limit the variable to protected branches, mark it protected in the project's 
 | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
 | `deploy_token_not_allowed`         | A deploy token cannot run this command (exit 3).                                                                                          |
 | `conflicting_credentials`          | A deploy token was set together with an API key or access token (exit 2).                                                                 |
-| `invalid_deploy_token`             | The value is not a deploy token. A tenant API key gets its own message (exit 2).                                                          |
+| `invalid_deploy_token`             | The value is not shaped like a key: `zak_` plus 43 characters (exit 2).                                                                   |
 | `deploy_token_wrong_site`          | The site is not one the token covers (exit 3, or 2 for a deploy argument).                                                                |
 | `deploy_token_site_required`       | The token covers several sites: name the one to deploy (exit 2).                                                                          |
 | `deploy_token_no_sites`            | Every site of the token was deleted or transferred. Create a new token (exit 3).                                                          |

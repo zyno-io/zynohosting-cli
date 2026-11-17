@@ -54,9 +54,9 @@ test('request_deploy_token returns a link and code, never the token or the reque
         assert(!text.includes(SECRET));
         assert(!text.includes(REQUEST_CODE), 'the request code stays inside the server process');
         assert.equal(called.structuredContent?.userCode, 'ABCD-EFGH');
-        assert.match(String(called.structuredContent?.verificationUriComplete), /\/keys\/approve\?code=ABCD-EFGH$/);
+        assert.match(String(called.structuredContent?.verificationUriComplete), /\/api-keys\/approve\?code=ABCD-EFGH$/);
 
-        const start = server.seen.find(entry => entry.url === '/identity/key-requests')!;
+        const start = server.seen.find(entry => entry.url === '/identity/api-key-requests')!;
         assert.equal(start.body.delivery, 'display', 'the MCP asks for display delivery only');
         assert.deepEqual(start.body.handoff, { kind: 'github-secret' });
         assert.equal(start.body.requestedLifetimeSecs, 30 * 86_400);
@@ -108,7 +108,7 @@ test('list_deploy_tokens and revoke_deploy_token never expose a token', async ()
         assert.equal((listed.called.structuredContent?.tokens as unknown[]).length, 1);
         const revoked = await call(mcp.client, 'revoke_deploy_token', { keyId: KEY_ID });
         assert.equal(revoked.called.structuredContent?.status, 'revoked');
-        assert.equal(server.count('DELETE', `/tenant/capability-keys/${KEY_ID}`), 1);
+        assert.equal(server.count('DELETE', `/tenant/api-keys/${KEY_ID}`), 1);
     } finally {
         await mcp.close();
         await server.close();
@@ -190,11 +190,11 @@ test('request_deploy_token rejects a malformed permissions input before anything
             permissions: ['Hosting Sites']
         });
         assert(bad.called.isError, 'a malformed permission key is refused');
-        assert.equal(server.count('POST', '/identity/key-requests'), 0);
+        assert.equal(server.count('POST', '/identity/api-key-requests'), 0);
 
         const plain = await call(mcp.client, 'request_deploy_token', { site: 'example.com', environments: ['production'] });
         assert(!plain.called.isError, plain.text);
-        const start = server.seen.find(entry => entry.url === '/identity/key-requests')!;
+        const start = server.seen.find(entry => entry.url === '/identity/api-key-requests')!;
         assert.deepEqual(start.body.permissions, []);
     } finally {
         await mcp.close();

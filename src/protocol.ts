@@ -303,7 +303,7 @@ export interface DeployTokenSite {
 
 /**
  * What `GET /v1/deploy-token` says about the token making the call. There is no expiry: hosting does not know it, and
- * ZynoAuth reports it at `/identity/tenant-keys/self`. `sites` is empty when every granted site was deleted or transferred.
+ * ZynoAuth reports it at `/identity/api-keys/self`. `sites` is empty when every granted site was deleted or transferred.
  */
 export interface DeployTokenInfo {
     keyId: string;

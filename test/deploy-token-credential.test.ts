@@ -52,8 +52,8 @@ test('a tenant choice cannot be combined with a deploy token', async () => {
     assert.equal(await code(config({ ZYNOHOSTING_DEPLOY_TOKEN: SECRET }, 'http://127.0.0.1:1', { tenant: 'acme' })), 'fixed_credential_source');
 });
 
-test('a malformed value is rejected, a tenant API key gets its own message, and neither value is echoed', async () => {
-    for (const bad of ['zck_short', `zck_${'!'.repeat(43)}`, `${SECRET}x`, 'plain-text']) {
+test('a malformed value is rejected, and the value is never echoed', async () => {
+    for (const bad of ['zak_short', `zak_${'!'.repeat(43)}`, `${SECRET}x`, 'plain-text']) {
         await assert.rejects(config({ ZYNOHOSTING_DEPLOY_TOKEN: bad }, 'http://127.0.0.1:1'), (error: unknown) => {
             assert(error instanceof CliError);
             assert.equal(error.code, 'invalid_deploy_token');
@@ -61,12 +61,11 @@ test('a malformed value is rejected, a tenant API key gets its own message, and 
             return true;
         });
     }
-    await assert.rejects(config({ ZYNOHOSTING_DEPLOY_TOKEN: 'zak_secretsecretsecret' }, 'http://127.0.0.1:1'), (error: unknown) => {
-        assert(error instanceof CliError);
-        assert.match(error.message, /tenant API key/);
-        assert(!error.message.includes('secretsecret'));
-        return true;
-    });
+    // A deploy token is an ordinary-format API key: only where it came from makes it a deploy token.
+    const resolved = await config({ ZYNOHOSTING_DEPLOY_TOKEN: SECRET }, 'http://127.0.0.1:1');
+    assert.equal(resolved.credential.type, 'deploy-token');
+    const asApiKey = await config({ ZYNOHOSTING_API_KEY: SECRET }, 'http://127.0.0.1:1', { deployTokenAllowed: false });
+    assert.equal(asApiKey.credential.type, 'api-key', 'the same key in ZYNOHOSTING_API_KEY is an ordinary API key');
 });
 
 test('commands that do not opt in refuse a deploy token', async () => {
@@ -144,7 +143,7 @@ test('a refused deploy token says whether it expired, was revoked, or is just no
     void manager;
     try {
         server.state.whoamiStatus = 401;
-        server.state.self = { httpStatus: 401, body: { error: 'Capability key has expired' } };
+        server.state.self = { httpStatus: 401, body: { error: 'API key has expired' } };
         assert.equal(await code(prepareDeployment('example.com', dir, {}, undefined, resolved)), 'deploy_token_expired');
 
         server.state.self = { httpStatus: 403, body: { error: 'Invalid API key' } };
@@ -181,7 +180,7 @@ test('a preview-only token on a PHP site is refused up front and when the manage
     }
 });
 
-test('after a valid token, only capability denials are rewritten; any other 403 shows the manager message', async () => {
+test('after a valid token, only grant denials are rewritten; any other 403 shows the manager message', async () => {
     const server = await startFakeKeyServer();
     const resolved = await config({ ZYNOHOSTING_DEPLOY_TOKEN: SECRET }, server.url);
     const denied = (message: string) =>
@@ -202,12 +201,12 @@ test('after a valid token, only capability denials are rewritten; any other 403 
             const error = await denied(message);
             assert(error instanceof CliError && error.code === 'deploy_token_denied', message);
         }
-        // The old capability-key wording is gone, and a refusal that is not about the token's grants is never rewritten.
+        // A refusal that is not about the token's grants is never rewritten.
         for (const message of [
             'site is not active',
             'site tenant transfer is in progress',
             'site cluster is not active',
-            'capability key does not allow this request',
+            'identity does not have hosting.deploy permission',
             'identity is not an API key',
             'This credential has no access to hosting'
         ]) {

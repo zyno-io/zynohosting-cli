@@ -87,18 +87,18 @@ test('a GitHub hand-off puts the token on stdin of gh secret set and nowhere els
             ['auth status', 'secret list']
         );
 
-        const start = context.server.seen.find(entry => entry.url === '/identity/key-requests')!;
+        const start = context.server.seen.find(entry => entry.url === '/identity/api-key-requests')!;
         assert.equal(start.authorization, `Bearer ${HUMAN_JWT}`);
         assert.deepEqual(start.body.permissions, []);
         assert.deepEqual(start.body.grants, { hosting: [{ v: 1, siteId: SITE_ID, environments: ['production'] }] });
-        assert.equal('capabilities' in start.body, false);
+        assert.equal('capabilities' in start.body, false, 'the old envelope is not sent');
         assert.equal(start.body.delivery, 'poll');
         assert.deepEqual(start.body.handoff, { kind: 'github-secret', target: 'acme/web' });
         assert.equal(typeof start.body.description, 'string');
         assert.equal(context.opened.length, 1);
 
         assertNoSecret(visible(context, JSON.stringify(result)));
-        assert.equal(context.server.count('POST', '/identity/tenant-keys/self-revoke'), 0);
+        assert.equal(context.server.count('POST', '/identity/api-keys/self-revoke'), 0);
     } finally {
         await context.server.close();
     }
@@ -130,7 +130,7 @@ test('a GitLab hand-off creates a masked variable with the token on stdin', asyn
         const set = context.calls.find(call => call.command === 'glab' && call.args[1] === 'set');
         assert.deepEqual(set?.args, ['variable', 'set', 'ZYNOHOSTING_DEPLOY_TOKEN', '--masked', '-R', 'group/sub/project']);
         assert.equal(set?.input, SECRET);
-        const start = context.server.seen.find(entry => entry.url === '/identity/key-requests')!;
+        const start = context.server.seen.find(entry => entry.url === '/identity/api-key-requests')!;
         assert.deepEqual((start.body.grants as { hosting: Array<{ environments: string[] }> }).hosting[0]!.environments, ['preview']);
         assert.deepEqual(start.body.handoff, { kind: 'gitlab-variable', target: 'group/sub/project' });
         assertNoSecret(visible(context));
@@ -151,7 +151,7 @@ test('a failed hand-off revokes the new token with itself, exits non-zero, and n
             assertNoSecret(error.message + JSON.stringify(error.details ?? ''));
             return true;
         });
-        const revoke = context.server.seen.find(entry => entry.url === '/identity/tenant-keys/self-revoke');
+        const revoke = context.server.seen.find(entry => entry.url === '/identity/api-keys/self-revoke');
         assert.equal(revoke?.authorization, `Basic ${Buffer.from(`api:${SECRET}`).toString('base64')}`);
         assertNoSecret(visible(context));
     } finally {
@@ -183,7 +183,7 @@ test('a destination that is not ready fails before any request is made', async (
             createDeployToken('example.com', { ...context.options, github: 'acme/web' }, context.dependencies),
             (error: unknown) => error instanceof CliError && error.code === 'handoff_unavailable'
         );
-        assert.equal(context.server.count('POST', '/identity/key-requests'), 0);
+        assert.equal(context.server.count('POST', '/identity/api-key-requests'), 0);
     } finally {
         await context.server.close();
     }
@@ -206,12 +206,12 @@ test('a file hand-off creates a new 0600 file, never overwrites, and warns insid
         assertNoSecret(visible(context, JSON.stringify(result)));
 
         // A second run never replaces it, and says so before asking for a token.
-        const before = context.server.count('POST', '/identity/key-requests');
+        const before = context.server.count('POST', '/identity/api-key-requests');
         await assert.rejects(
             createDeployToken('example.com', { ...context.options, file: target }, context.dependencies),
             (error: unknown) => error instanceof CliError && error.code === 'handoff_unavailable'
         );
-        assert.equal(context.server.count('POST', '/identity/key-requests'), before);
+        assert.equal(context.server.count('POST', '/identity/api-key-requests'), before);
         assert.equal((await readFile(target, 'utf8')).trim(), SECRET);
     } finally {
         await context.server.close();
@@ -231,7 +231,7 @@ test('a file that appears after the preflight is not overwritten, and the token 
             (error: unknown) => error instanceof CliError && error.code === 'handoff_failed'
         );
         assert.equal(await readFile(target, 'utf8'), 'precious');
-        assert.equal(context.server.count('POST', '/identity/tenant-keys/self-revoke'), 1);
+        assert.equal(context.server.count('POST', '/identity/api-keys/self-revoke'), 1);
     } finally {
         await context.server.close();
     }
@@ -244,7 +244,7 @@ test('without a destination the token is shown on the approval page only, and a 
     try {
         const result = await createDeployToken('example.com', { ...context.options, both: true, production: false }, context.dependencies);
         assert.equal(result.status, 'created');
-        const start = context.server.seen.find(entry => entry.url === '/identity/key-requests')!;
+        const start = context.server.seen.find(entry => entry.url === '/identity/api-key-requests')!;
         assert.equal(start.body.delivery, 'display');
         assert.deepEqual(start.body.handoff, { kind: 'manual' });
         assert.deepEqual((start.body.grants as { hosting: Array<{ environments: string[] }> }).hosting[0]!.environments, ['preview', 'production']);
@@ -284,7 +284,7 @@ test('--no-wait saves the request and --resume finishes it without asking for an
 
         const second = await createDeployToken(undefined, { apiUrl: context.server.url, resume: true, json: true }, context.dependencies);
         assert.equal(second.status, 'created');
-        assert.equal(context.server.count('POST', '/identity/key-requests'), 1);
+        assert.equal(context.server.count('POST', '/identity/api-key-requests'), 1);
         assert.equal((await loadStoredConfig(context.file, 'url:' + context.server.url)).pendingKeyRequest, undefined);
         assertNoSecret(visible(context));
     } finally {
@@ -323,7 +323,7 @@ test('input errors are caught before any request: no environment, two environmen
         assert.equal(await code({ production: true, lifetime: '7d' }), 'invalid_input');
         assert.equal(await code({ production: true, github: 'not a repo' }), 'invalid_input');
         assert.equal(await code({ production: true, github: 'a/b', name: '--oops' }), 'invalid_input');
-        assert.equal(context.server.count('POST', '/identity/key-requests'), 0);
+        assert.equal(context.server.count('POST', '/identity/api-key-requests'), 0);
     } finally {
         await context.server.close();
     }
@@ -340,7 +340,7 @@ test('a tenant API key cannot request a deploy token', async () => {
             ),
             (error: unknown) => error instanceof CliError && error.code === 'login_required'
         );
-        assert.equal(context.server.count('POST', '/identity/key-requests'), 0);
+        assert.equal(context.server.count('POST', '/identity/api-key-requests'), 0);
     } finally {
         await context.server.close();
     }
@@ -373,7 +373,7 @@ test('revoke --self uses the token as its own credential, and the token never re
     const env = { ZYNOHOSTING_CONFIG: context.file, ZYNOHOSTING_DEPLOY_TOKEN: SECRET };
     try {
         await revokeDeployToken(undefined, { ...context.options, self: true }, { ...context.dependencies, env });
-        const revoke = context.server.seen.find(entry => entry.url === '/identity/tenant-keys/self-revoke')!;
+        const revoke = context.server.seen.find(entry => entry.url === '/identity/api-keys/self-revoke')!;
         assert.equal(revoke.authorization, `Basic ${Buffer.from(`api:${SECRET}`).toString('base64')}`);
         assertNoSecret(visible(context));
         // --self without the variable is an error, not a request.
@@ -395,7 +395,7 @@ test('list filters by site and prints no secret; revoke by id calls the tenant e
         assert.equal(keys.length, 1);
         assert.deepEqual(keys[0]!.sites, [{ siteId: SITE_ID, label: 'example.com', environments: ['production'] }]);
         assert.deepEqual(keys[0]!.permissionKeys, ['hosting']);
-        const request = context.server.seen.find(entry => entry.url.startsWith('/tenant/capability-keys'))!;
+        const request = context.server.seen.find(entry => entry.url.startsWith('/tenant/api-keys'))!;
         const query = new URL(request.url, 'http://x').searchParams;
         assert.equal(query.get('app'), 'hosting');
         assert.equal(query.has('ref') || query.has('namespace'), false);
@@ -405,7 +405,7 @@ test('list filters by site and prints no secret; revoke by id calls the tenant e
         assertNoSecret(visible(context));
 
         await revokeDeployToken(KEY_ID, context.options, context.dependencies);
-        assert.equal(context.server.count('DELETE', `/tenant/capability-keys/${KEY_ID}`), 1);
+        assert.equal(context.server.count('DELETE', `/tenant/api-keys/${KEY_ID}`), 1);
     } finally {
         await context.server.close();
     }
@@ -489,7 +489,7 @@ test('a preview-only token for a site that runs PHP fails before any request, wi
             createDeployToken('example.com', { ...context.options, production: false, preview: true, github: 'acme/web' }, context.dependencies),
             (error: unknown) => error instanceof CliError && error.code === 'deploy_token_requires_production' && /PHP/.test(error.message)
         );
-        assert.equal(context.server.count('POST', '/identity/key-requests'), 0);
+        assert.equal(context.server.count('POST', '/identity/api-key-requests'), 0);
         assert.equal(context.calls.length, 0, 'not even the hand-off preflight ran');
     } finally {
         await context.server.close();
@@ -510,7 +510,7 @@ test('ZynoAuth responses are parsed strictly: a malformed start, poll, or list i
         };
         // Poll delivery without a secret, with a malformed one, and answered as the other delivery.
         assert.equal(await bad({ status: 'approved', delivery: 'poll', key: (approvedPoll() as { key: unknown }).key }), 'invalid_auth_response');
-        assert.equal(await bad({ ...(approvedPoll() as object), secret: 'zck_short' }), 'invalid_auth_response');
+        assert.equal(await bad({ ...(approvedPoll() as object), secret: 'zak_short' }), 'invalid_auth_response');
         // With a well-formed secret present, an unusable answer revokes the key instead (see the revoke test below).
         assert.equal(await bad({ ...(approvedPoll() as object), delivery: 'display' }), 'key_credential_lost');
         assert.equal(await bad({ ...(displayApprovedPoll() as object) }), 'invalid_auth_response');
@@ -544,7 +544,7 @@ test('--no-wait over a saved request cancels the old one on the server and keeps
     try {
         await createDeployToken('example.com', { ...context.options, noWait: true }, context.dependencies);
         await createDeployToken('example.com', { ...context.options, noWait: true }, context.dependencies);
-        const cancels = context.server.seen.filter(entry => entry.url === '/identity/key-requests/cancel');
+        const cancels = context.server.seen.filter(entry => entry.url === '/identity/api-key-requests/cancel');
         assert.equal(cancels.length, 1);
         assert.equal(cancels[0]!.body.requestCode, REQUEST_CODE);
         const saved = (await loadStoredConfig(context.file, `url:${context.server.url}`)).pendingKeyRequest;
@@ -594,7 +594,7 @@ test('an approved poll-delivery answer that cannot be read revokes the token wit
         ];
         for (const script of unreadable) {
             context.server.state.polls = [script as never];
-            const before = context.server.count('POST', '/identity/tenant-keys/self-revoke');
+            const before = context.server.count('POST', '/identity/api-keys/self-revoke');
             await assert.rejects(client.poll(REQUEST_CODE, 'poll'), (error: unknown) => {
                 assert(error instanceof CliError);
                 assert.equal(error.code, 'key_credential_lost');
@@ -602,8 +602,8 @@ test('an approved poll-delivery answer that cannot be read revokes the token wit
                 assertNoSecret(error.message);
                 return true;
             });
-            assert.equal(context.server.count('POST', '/identity/tenant-keys/self-revoke'), before + 1);
-            const revoke = context.server.seen.filter(entry => entry.url === '/identity/tenant-keys/self-revoke').at(-1)!;
+            assert.equal(context.server.count('POST', '/identity/api-keys/self-revoke'), before + 1);
+            const revoke = context.server.seen.filter(entry => entry.url === '/identity/api-keys/self-revoke').at(-1)!;
             assert.equal(revoke.authorization, `Basic ${Buffer.from(`api:${SECRET}`).toString('base64')}`);
         }
         // Display delivery has no secret to revoke, so an unreadable answer is just an invalid response.
@@ -632,7 +632,7 @@ test('--permission is sent with the request, deduplicated, and shown to the appr
             { ...context.options, permission: ['hosting.sitesRead', 'hosting.sitesRead', 'hosting.deploy'], noWait: true },
             context.dependencies
         );
-        const start = context.server.seen.find(entry => entry.url === '/identity/key-requests')!;
+        const start = context.server.seen.find(entry => entry.url === '/identity/api-key-requests')!;
         assert.deepEqual(start.body.permissions, ['hosting.sitesRead', 'hosting.deploy']);
         assert.deepEqual(start.body.grants, { hosting: [{ v: 1, siteId: SITE_ID, environments: ['production'] }] });
         assert.equal(result.status, 'pending');
@@ -656,7 +656,7 @@ test('--permission is checked loosely before anything is requested, and does not
         }
         // Unknown but well-formed keys are left to the server, which is authoritative.
         await createDeployToken('example.com', { ...context.options, permission: ['somefuture.key'], noWait: true }, context.dependencies);
-        assert.equal(context.server.count('POST', '/identity/key-requests'), 1);
+        assert.equal(context.server.count('POST', '/identity/api-key-requests'), 1);
         await assert.rejects(
             createDeployToken(undefined, { ...context.options, resume: true, permission: ['hosting.sitesRead'] }, context.dependencies),
             (error: unknown) => error instanceof CliError && error.code === 'invalid_input'
@@ -709,7 +709,7 @@ test('the new ZynoAuth shapes are parsed strictly: start, key info, list rows, a
         };
         const info = keyInfo();
         assert.equal(await poll({ status: 'approved', delivery: 'display', key: info }), 'ok');
-        // The old `capabilities` envelope is not a key.
+        // An old-shaped key (no permission keys or display) is not a key.
         const { display: _display, permissionKeys: _permissionKeys, ...old } = info;
         assert.equal(
             await poll({ status: 'approved', delivery: 'display', key: { ...old, capabilities: { hosting: {} } } }),
@@ -731,11 +731,25 @@ test('the new ZynoAuth shapes are parsed strictly: start, key info, list rows, a
             return verdict(() => client.list({ type: 'bearer', token: HUMAN_JWT } as never));
         };
         assert.equal(await list([listRow()]), 'ok');
-        for (const field of ['apps', 'permissionKeys', 'display', 'status', 'lastUsedAt', 'createdByEmail', 'requestedByAccountId']) {
+        for (const field of [
+            'apps',
+            'permissionKeys',
+            'origin',
+            'deletedAt',
+            'expiresAt',
+            'display',
+            'status',
+            'lastUsedAt',
+            'createdByEmail',
+            'requestedByAccountId'
+        ]) {
             const { [field]: _removed, ...partial } = listRow();
             assert.equal(await list([partial]), 'invalid_auth_response', field);
         }
         assert.equal(await list([listRow({ status: 'revoked' })]), 'invalid_auth_response');
+        assert.equal(await list([listRow({ origin: 'capability' })]), 'invalid_auth_response');
+        // A manual key has nulls where a request key has values, and no grants.
+        assert.equal(await list([listRow({ origin: 'manual', permissionKeys: null, expiresAt: null, apps: [], display: {} })]), 'ok');
         assert.equal(await list([listRow({ expiresAt: 'tomorrow' })]), 'invalid_auth_response');
 
         const self = await client.self(SECRET);
@@ -766,8 +780,8 @@ test('a start response that does not match the contract is rejected', async () =
         requestId: '77777777-7777-4777-8777-777777777777',
         requestCode: REQUEST_CODE,
         userCode: 'ABCD-EFGH',
-        verificationUri: `${base}/keys/approve`,
-        verificationUriComplete: `${base}/keys/approve?code=ABCD-EFGH`,
+        verificationUri: `${base}/api-keys/approve`,
+        verificationUriComplete: `${base}/api-keys/approve?code=ABCD-EFGH`,
         interval: 5,
         expiresIn: 600,
         expiresAt: Date.now() + 600_000,

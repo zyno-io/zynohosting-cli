@@ -19,7 +19,7 @@ At the node, the edge and agent validate:
 
 A [deploy token](../cli/deploy-tokens) is a key tied to one site. It can only call the few hosting endpoints that deploy, promote, clear the cache, and change runtime and not-found handling. Every other call is denied, and a token is never an administrator.
 
-- The token is `zck_` plus 43 URL-safe characters. It is sent as HTTP Basic with the user name `api`, and only to two places: the Hosting API, and ZynoAuth's own self and self-revoke endpoints (the token revokes itself, or ZynoAuth says why it was refused).
+- The token is `zak_` plus 43 URL-safe characters. It is sent as HTTP Basic with the user name `api`, and only to two places: the Hosting API, and ZynoAuth's own self and self-revoke endpoints (the token revokes itself, or ZynoAuth says why it was refused).
 - The CLI never puts a token in an argument, in `--json` output, in an error, or in a log. It goes to `gh` and `glab` on standard input, or to a new file with mode `0600` that is created exclusively and never overwritten.
 - If saving the token fails, the CLI revokes it with itself and exits with an error.
 - The MCP tools request a token with display delivery only. The token is shown once on the approval page. It never passes through the model.

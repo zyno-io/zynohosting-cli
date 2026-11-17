@@ -62,29 +62,32 @@ export type KeyRequestPoll =
     | { status: 'denied' | 'expired' | 'consumed' }
     | { status: 'approved'; key: IssuedKey; secret?: string | undefined };
 
-export interface CapabilityKeySummary {
+export interface ApiKeySummary {
     id: string;
     description: string;
     preview: string;
     status: 'active' | 'expired';
     apps: string[];
-    permissionKeys: string[];
+    /** Null for a manual key, which has every permission its tenant allows. */
+    permissionKeys: string[] | null;
+    origin: 'manual' | 'request';
     sites: KeySite[];
     approvedBy?: string | undefined;
     /** Epoch milliseconds. */
     createdAt: number;
-    expiresAt: number;
+    /** Absent for a manual key, which never expires. */
+    expiresAt?: number | undefined;
     lastUsedAt?: number | undefined;
 }
 
-/** What the key says about itself at `GET /identity/tenant-keys/self`. */
+/** What the key says about itself at `GET /identity/api-keys/self`. */
 export interface SelfKey {
     id: string;
-    /** Epoch milliseconds. */
-    expiresAt: number;
+    /** Epoch milliseconds. Absent for a manual API key, which never expires. */
+    expiresAt?: number | undefined;
     description: string;
     apps: string[];
-    permissionKeys: string[];
+    permissionKeys: string[] | null;
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -197,18 +200,20 @@ const pollSchema = z.object({
     secret: z.string().max(256).optional()
 });
 
-/** The fields a listed key and the key's own `self` answer share. */
+/** The fields a listed key and the key's own `self` answer share (manual keys have nulls and an empty `display`). */
 const keyRowShape = {
     id: z.string().regex(UUID),
     tenantId: z.string().regex(UUID),
     description: displayText(500),
     keyPreview: displayText(100),
+    permissionKeys: z.array(permissionKeySchema).nullable(),
+    createdAt: isoMilliseconds,
+    deletedAt: isoMilliseconds.nullable(),
+    origin: z.enum(['manual', 'request']),
+    expiresAt: isoMilliseconds.nullable(),
     apps: z.array(z.string().max(64)),
-    permissionKeys: z.array(permissionKeySchema),
     display: displayMapSchema,
     handoff: handoffSchema.nullable(),
-    createdAt: isoMilliseconds,
-    expiresAt: isoMilliseconds,
     lastUsedAt: isoMilliseconds.nullable(),
     createdByAccountId: z.string().regex(UUID).nullable(),
     requestedByAccountId: z.string().regex(UUID).nullable()
@@ -266,7 +271,7 @@ function parsePoll(value: unknown, delivery: KeyDelivery): KeyRequestPoll {
 
 /** A well-formed secret in an approved answer, found before the rest of the body is validated. Also searches text that is not JSON. */
 function findSecret(value: unknown, text: string): string | undefined {
-    if (value === undefined) return /zck_[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])/.exec(text)?.[0];
+    if (value === undefined) return /zak_[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])/.exec(text)?.[0];
     if (!value || typeof value !== 'object') return undefined;
     const object = value as Record<string, unknown>;
     if (object.status !== 'approved' || typeof object.secret !== 'string') return undefined;
@@ -297,7 +302,7 @@ export class KeyRequestClient {
         }
         let value: unknown;
         try {
-            value = await requestJson(`${this.apiUrl}/identity/key-requests`, {
+            value = await requestJson(`${this.apiUrl}/identity/api-key-requests`, {
                 method: 'POST',
                 timeoutMs: this.timeoutMs,
                 headers: { ...(await authorizationHeaders(credential)), Accept: 'application/json', 'Content-Type': 'application/json' },
@@ -348,7 +353,7 @@ export class KeyRequestClient {
      * key already exists and nobody holds it, so it is revoked with itself before the error is raised.
      */
     async poll(requestCode: string, delivery: KeyDelivery): Promise<KeyRequestPoll> {
-        const response = await request(`${this.apiUrl}/identity/key-requests/poll`, {
+        const response = await request(`${this.apiUrl}/identity/api-key-requests/poll`, {
             method: 'POST',
             timeoutMs: this.timeoutMs,
             headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
@@ -369,7 +374,7 @@ export class KeyRequestClient {
         const secret = delivery === 'poll' ? findSecret(value, text) : undefined;
         try {
             if (value === undefined)
-                throw new HttpError('Server returned invalid JSON from /identity/key-requests/poll', response.status, 'invalid_json_response');
+                throw new HttpError('Server returned invalid JSON from /identity/api-key-requests/poll', response.status, 'invalid_json_response');
             return parsePoll(value, delivery);
         } catch (error) {
             if (!secret) throw error;
@@ -391,7 +396,7 @@ export class KeyRequestClient {
 
     /** Abandons a key request. Best effort. */
     async cancel(requestCode: string, timeoutMs = 2_000): Promise<void> {
-        await requestJson(`${this.apiUrl}/identity/key-requests/cancel`, {
+        await requestJson(`${this.apiUrl}/identity/api-key-requests/cancel`, {
             method: 'POST',
             timeoutMs,
             headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
@@ -399,9 +404,9 @@ export class KeyRequestClient {
         });
     }
 
-    async list(credential: ManagerCredential, filter: { siteId?: string | undefined } = {}): Promise<CapabilityKeySummary[]> {
+    async list(credential: ManagerCredential, filter: { siteId?: string | undefined } = {}): Promise<ApiKeySummary[]> {
         const query = new URLSearchParams({ app: 'hosting' });
-        const value = await requestJson(`${this.apiUrl}/tenant/capability-keys?${query}`, {
+        const value = await requestJson(`${this.apiUrl}/tenant/api-keys?${query}`, {
             timeoutMs: this.timeoutMs,
             headers: { ...(await authorizationHeaders(credential)), Accept: 'application/json' }
         });
@@ -410,14 +415,15 @@ export class KeyRequestClient {
             const parsed = summarySchema.safeParse(row);
             if (!parsed.success) throw invalid(parsed.error, 'key list');
             const item = parsed.data;
-            const summary: CapabilityKeySummary = {
+            const summary: ApiKeySummary = {
                 id: item.id,
                 description: item.description,
                 preview: item.keyPreview,
                 status: item.status,
                 ...(item.createdByEmail ? { approvedBy: item.createdByEmail } : {}),
                 createdAt: item.createdAt,
-                expiresAt: item.expiresAt,
+                origin: item.origin,
+                ...(item.expiresAt === null ? {} : { expiresAt: item.expiresAt }),
                 ...(item.lastUsedAt === null ? {} : { lastUsedAt: item.lastUsedAt }),
                 apps: item.apps,
                 permissionKeys: item.permissionKeys,
@@ -442,7 +448,7 @@ export class KeyRequestClient {
     }
 
     private async sendRevoke(credential: ManagerCredential, keyId: string): Promise<void> {
-        await requestJson(`${this.apiUrl}/tenant/capability-keys/${encodeURIComponent(keyId)}`, {
+        await requestJson(`${this.apiUrl}/tenant/api-keys/${encodeURIComponent(keyId)}`, {
             method: 'DELETE',
             timeoutMs: this.timeoutMs,
             headers: { ...(await authorizationHeaders(credential)), Accept: 'application/json' }
@@ -451,19 +457,19 @@ export class KeyRequestClient {
 
     /** The key describing itself: its expiry (hosting does not report one) and why a deploy was refused. */
     async self(key: string): Promise<SelfKey> {
-        const value = await requestJson(`${this.apiUrl}/identity/tenant-keys/self`, {
+        const value = await requestJson(`${this.apiUrl}/identity/api-keys/self`, {
             timeoutMs: this.timeoutMs,
             headers: { Authorization: basicAuthorization(key), Accept: 'application/json' }
         });
         const parsed = selfSchema.safeParse(value);
         if (!parsed.success) throw invalid(parsed.error, 'key');
         const { id, expiresAt, description, apps, permissionKeys } = parsed.data;
-        return { id, expiresAt, description, apps, permissionKeys };
+        return { id, expiresAt: expiresAt ?? undefined, description, apps, permissionKeys };
     }
 
     /** The key revoking itself: for a deploy-tokens revoke --self, and to undo a key whose hand-off failed. */
     async revokeSelf(key: string, timeoutMs = this.timeoutMs): Promise<void> {
-        await requestJson(`${this.apiUrl}/identity/tenant-keys/self-revoke`, {
+        await requestJson(`${this.apiUrl}/identity/api-keys/self-revoke`, {
             method: 'POST',
             timeoutMs,
             headers: { Authorization: basicAuthorization(key), Accept: 'application/json' }

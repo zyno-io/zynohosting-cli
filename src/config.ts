@@ -38,7 +38,11 @@ export interface BearerCredential {
     deniedPermissionKeys?: string[];
 }
 
-/** A capability key (`zck_...`) that can only deploy one site. Never saved; it comes from ZYNOHOSTING_DEPLOY_TOKEN. */
+/**
+ * An API key created from an API key request (`zak_...`) that can only deploy the sites it was granted. Never saved; it comes from
+ * ZYNOHOSTING_DEPLOY_TOKEN. It has the same format as any other API key, so what makes it a deploy token is where it came from
+ * (that variable), never its prefix.
+ */
 export interface DeployTokenCredential {
     type: 'deploy-token';
     token: string;
@@ -46,7 +50,7 @@ export interface DeployTokenCredential {
 
 export type ManagerCredential = ApiKeyCredential | BearerCredential | DeployTokenCredential;
 
-export const DEPLOY_TOKEN_PATTERN = /^zck_[A-Za-z0-9_-]{43}$/;
+export const DEPLOY_TOKEN_PATTERN = /^zak_[A-Za-z0-9_-]{43}$/;
 export type HostingEnvironment = 'production' | 'alpha' | 'dev';
 
 export interface ConfigOverrides extends Omit<StoredConfig, 'logins' | 'activeLogin' | 'pendingDeviceLogin' | 'pendingKeyRequest'> {
@@ -620,16 +624,9 @@ function deployTokenFromEnvironment(env: NodeJS.ProcessEnv, overrides: ConfigOve
             'conflicting_credentials'
         );
     }
-    if (token.startsWith('zak_')) {
-        throw new CliError(
-            'ZYNOHOSTING_DEPLOY_TOKEN holds a tenant API key, not a deploy token. Create a deploy token with `zynohosting deploy-tokens create`.',
-            2,
-            'invalid_deploy_token'
-        );
-    }
     if (!DEPLOY_TOKEN_PATTERN.test(token)) {
         throw new CliError(
-            'ZYNOHOSTING_DEPLOY_TOKEN is not a valid deploy token (expected zck_ followed by 43 characters).',
+            'ZYNOHOSTING_DEPLOY_TOKEN is not a valid deploy token (expected zak_ followed by 43 characters).',
             2,
             'invalid_deploy_token'
         );

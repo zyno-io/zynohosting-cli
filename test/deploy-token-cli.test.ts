@@ -109,8 +109,8 @@ test('whoami with a deploy token lists its sites and takes the expiry from ZynoA
         assert.deepEqual(parsed.deployToken.permissionKeys, ['hosting']);
         assert.equal(parsed.deployToken.expiresAt, new Date(expiresAt).toISOString());
         assert(!out.includes(SECRET) && !err.includes(SECRET));
-        assert.equal(server.count('GET', '/identity/tenant-keys/self'), 1, 'the expiry comes from ZynoAuth');
-        const self = server.seen.find(entry => entry.url === '/identity/tenant-keys/self')!;
+        assert.equal(server.count('GET', '/identity/api-keys/self'), 1, 'the expiry comes from ZynoAuth');
+        const self = server.seen.find(entry => entry.url === '/identity/api-keys/self')!;
         assert.equal(self.authorization, `Basic ${Buffer.from(`api:${SECRET}`).toString('base64')}`);
 
         const human = await run(args, env);
@@ -196,7 +196,7 @@ test('whoami still prints the sites when ZynoAuth cannot answer, and maps a refu
         // A verdict from ZynoAuth is not degraded.
         server.state.self = { httpStatus: 403, body: { error: 'Invalid API key' } };
         await assert.rejects(run(args, base), (error: unknown) => error instanceof CliError && error.code === 'deploy_token_revoked');
-        server.state.self = { httpStatus: 401, body: { error: 'Capability key has expired' } };
+        server.state.self = { httpStatus: 401, body: { error: 'API key has expired' } };
         await assert.rejects(run(args, base), (error: unknown) => error instanceof CliError && error.code === 'deploy_token_expired');
     } finally {
         await server.close();

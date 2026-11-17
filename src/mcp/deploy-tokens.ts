@@ -26,7 +26,7 @@ interface PendingRequest {
 }
 
 const MAX_PENDING = 16;
-const KEY_SHAPE = /zck_[A-Za-z0-9_-]{20,}/;
+const KEY_SHAPE = /zak_[A-Za-z0-9_-]{20,}/;
 
 /** The last line of defense: a value that looks like a deploy token is never returned to the model. */
 function safeResult(value: Record<string, unknown>) {

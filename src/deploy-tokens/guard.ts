@@ -14,7 +14,7 @@ const PHP_PREVIEW_PREFIX = 'This site runs PHP, so preview code can reach produc
  * The exact 403 messages the hosting manager uses when a deploy token's grants do not cover a request. An unknown site, another
  * tenant's site and an ungranted site all answer `is not bound to this site` (403, never 404).
  */
-const CAPABILITY_DENIALS = [
+const TOKEN_DENIALS = [
     'deploy token is not bound to this site',
     'deploy token can only request deploy access scopes',
     'deploy token cannot perform this action',
@@ -22,8 +22,8 @@ const CAPABILITY_DENIALS = [
     'This credential can only use its hosting grants'
 ];
 
-export function isCapabilityDenial(message: string): boolean {
-    return CAPABILITY_DENIALS.includes(message) || /^deploy token does not include the (production|preview) environment$/.test(message);
+export function isTokenDenial(message: string): boolean {
+    return TOKEN_DENIALS.includes(message) || /^deploy token does not include the (production|preview) environment$/.test(message);
 }
 
 function requiresProduction(): CliError {
@@ -140,7 +140,7 @@ export async function diagnoseDeployToken(config: ResolvedConfig, error: unknown
     }
     // The token is valid. Only an authorization denial is about what the token may do; any other 403 (the site is not
     // active, a transfer is in progress, ...) is the manager's own reason and is shown unchanged.
-    if (error.status === 403 && isCapabilityDenial(error.message)) {
+    if (error.status === 403 && isTokenDenial(error.message)) {
         throw new CliError(
             `This deploy token is valid but is not allowed to do that (${error.message}). It may be for a different site or environment.`,
             3,
