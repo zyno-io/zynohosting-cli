@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import { ManagerClient } from '../api/manager-client.js';
 import { ConfigOverrides, ResolvedConfig, resolveConfig } from '../config.js';
+import { diagnoseDeployToken, verifyDeployToken } from '../deploy-tokens/guard.js';
 import { CliError } from '../errors.js';
 import { Output } from '../output.js';
 import { AutomationSite, PromotionAccepted, PREVIEW_RESOURCE_NOTICE } from '../protocol.js';
@@ -40,10 +41,18 @@ export interface PreparedPromotion {
 
 export async function preparePromotion(siteRef: string, options: PromoteSiteOptions, resolvedConfig?: ResolvedConfig): Promise<PreparedPromotion> {
     const normalized = normalizeSiteRef(siteRef);
-    const config = resolvedConfig ?? (await resolveConfig(options));
+    const config = resolvedConfig ?? (await resolveConfig({ ...options, deployTokenAllowed: true }));
     const timeoutMs = Math.max(1, options.timeoutSeconds ?? 900) * 1000;
     const manager = new ManagerClient(config.apiUrl, config.credential, timeoutMs);
-    const site = await manager.getSite(normalized);
+    let site: AutomationSite;
+    try {
+        // Promotion empties preview and replaces production, so a deploy token needs both.
+        if (config.credential.type === 'deploy-token')
+            await verifyDeployToken(manager, { site: normalized, environments: ['production', 'preview'] });
+        site = await manager.getSite(normalized);
+    } catch (error) {
+        return diagnoseDeployToken(config, error);
+    }
     if (!site.deployments?.production.url || !site.deployments.preview.url) {
         throw new CliError('This manager/site does not advertise preview deployments; update the manager before promoting', 5, 'preview_unavailable');
     }

@@ -55,11 +55,13 @@ Login creates a tenant-bound scoped CLI token. `hosting.sitesRead` is requested 
 
 Logins are saved per environment, so signing in to alpha never replaces the production login. Production is the default; pass `--environment alpha` (or set `ZYNOHOSTING_ENVIRONMENT`) to use another saved login. Each environment keeps one login per account and tenant (signing in again as the same account in the same tenant replaces that login; another account or tenant adds one): `zynohosting logins` lists them, `zynohosting logins use <tenant>` changes the default, and `--tenant <name|id>` (or `ZYNOHOSTING_TENANT`) picks one for a single command. Revoke the active login and remove its local credentials with `zynohosting logout`, one named login with `--tenant`, or every saved login with `zynohosting logout --all`.
 
-For CI or another non-interactive environment, inject a tenant API key:
+For CI, use a deploy token. It can deploy one site and nothing else. Create it once from your own login:
 
 ```bash
-export ZYNOHOSTING_API_KEY='...'
+zynohosting deploy-tokens create example.com --production --github acme/web
 ```
+
+The token goes straight into a GitHub secret and is never printed. CI sets it as `ZYNOHOSTING_DEPLOY_TOKEN` and runs `zynohosting deploy ./dist --yes`. See [Deploy tokens](https://cli.zyno.host/cli/deploy-tokens). Use a tenant API key (`ZYNOHOSTING_API_KEY`) only for your own scripts, not for CI.
 
 The CLI also accepts `--environment production|alpha|dev` and `--api-url`. The Hosting API URL comes from `--api-url`, `--environment`, `ZYNOHOSTING_API_URL`, `ZYNOHOSTING_ENVIRONMENT`, then `production`, and the saved login is the one for that URL. Credentials are resolved in this order:
 
@@ -69,6 +71,7 @@ The CLI also accepts `--environment production|alpha|dev` and `--api-url`. The H
 
 Relevant environment variables are:
 
+- `ZYNOHOSTING_DEPLOY_TOKEN`
 - `ZYNOHOSTING_API_KEY`
 - `ZYNOHOSTING_ACCESS_TOKEN`
 - `ZYNOHOSTING_TENANT_ID`

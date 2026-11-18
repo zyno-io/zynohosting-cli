@@ -15,11 +15,12 @@ import { createFileClient, purgeSiteCacheAfterMutation, writeResponseAtomically 
 import { login, LOGIN_LIFETIMES, LoginDependencies, type LoginPrompt, type LoginResult } from '../commands/login.js';
 import { savedLogins, useLogin } from '../commands/logins.js';
 import { applyPreparedPromotion, preparePromotion, PreparedPromotion, promotionSummary } from '../commands/promote-site.js';
-import { applyPreparedSiteSettings, prepareSiteSettings } from '../commands/site-settings.js';
+import { applyPreparedRuntime, applyPreparedSiteSettings, prepareRuntime, prepareSiteSettings } from '../commands/site-settings.js';
 import { configLocation, ConfigOverrides, type HostingEnvironment, ResolvedConfig, resolveConfig } from '../config.js';
 import { CliError, errorMessage, HttpError } from '../errors.js';
 import { DELEGABLE_PERMISSION_KEYS, permissionCapabilityLines } from '../permissions.js';
 import { NOT_FOUND_HANDLING_MODES, PREVIEW_RESOURCE_NOTICE } from '../protocol.js';
+import { registerDeployTokensMcp } from './deploy-tokens.js';
 import { registerFormsMcp } from './forms.js';
 import { AllowedLocalRoots } from './local-paths.js';
 import { UpdatePolicy } from './update-check.js';
@@ -40,10 +41,11 @@ const TENANT_EXEMPT_TOOLS = new Set(['login', 'list_logins', 'use_login']);
 // Policy that applies once this server is connected belongs here or in a tool description, not in
 // documentation the agent fetches before installing. The riskiest tools echo one line of it.
 const SERVER_INSTRUCTIONS = [
-    'Never infer a deployment domain from a repository, site content, organization name, or a similar available site. Before any site mutation, use an explicitly stated project domain or ask the user which domain they intend. Verify that domain with list_sites or get_site. If it is unavailable in the current login context, do not substitute another site; explain that access is unavailable and offer the login tool so the user can switch context. Use plan_deploy and present its operations and target before apply_deploy. Production is the default; target preview updates only preview. Use plan_promote and present both URLs before apply_promote; promotion renames the current preview into production and resets preview to empty. Preview has no separate database and shares the main site’s database and storage quota. Only set force to true when the user explicitly requests bypassing the wp-config.php guard; never retry a blocked promotion with force automatically. Read the preview address from get_site deployments.preview.url and never construct it; the vanity hostname serves production. File tools and downloads act only on production. Promotion replaces production with exactly what preview holds, and deployments never send wp-config.php, wp-content/uploads, or other excluded content to preview, so for WordPress or any site whose production holds content outside the build, recommend deploying to production instead of promoting. After a promotion preview is empty; do not promote again until preview has been redeployed.',
-    'Saved logins: when list_logins shows more than one login, ask the user which tenant (organization) to work in before any site or form action, and pass that tenant name or id in the tool\u2019s tenant input; use_login changes the default for later calls. After a sign-in finishes, tell the user which account and tenant it signed in to and ask them to confirm it is theirs. If deniedPermissionKeys is non-empty, tell the user which permissions were not granted and what that means (the approver does not hold them in that tenant, so anything needing them will fail); do not request them again unless the user asks. Before suggesting a new sign-in because a domain is unavailable, call list_logins and try another saved login with the tenant input.',
-    'When connecting a page to a form, read the existing page first and preserve its markup, layout, and styling rather than replacing it with a generic form. Allow that page’s exact origin, and follow the response contract and the jsonScript or capScript returned with the form. Read an existing form with describe_form before update_form and edit it in place rather than creating a second form. If ZynoForms cannot represent a field, validation rule, choice, or bot protection exactly, explain the limitation and ask the user how to proceed instead of dropping it.',
-    'When the user wants to build a new site: ZynoHosting serves static files, plus PHP on sites with PHP turned on (get_site phpVersion is null when it is off, and .php files then return 404). It runs no Node.js or other server process, so server-side rendering and API routes are unavailable. If you can run commands, recommend Astro with its default static output and no server adapter, build it, and deploy the dist folder rather than the project root. If you cannot run a build, write plain HTML, CSS, and JavaScript files. Use PHP only for real server-side code, and ZynoForms rather than PHP for forms. A static site returns 404 for unknown paths unless get_site notFoundHandling is single-page-application, which serves /index.html for unknown paths unless they end in a listed asset extension. Prefer pre-rendering every route; if a client-side router needs the fallback, ask the user, then call set_not_found_handling; it applies to production and preview and is unavailable with PHP. Everything deployed is publicly readable, so never deploy .env files or secrets. These tools cannot create sites: deploy only to an existing site the user names, and if they have none, tell them to ask ZynoHosting support to set one up.'
+    'Never infer a deployment domain from a repository, site content, organization name, or a similar site. Before any site mutation, use an explicitly stated project domain or ask the user which domain they intend. Verify that domain with list_sites or get_site. If it is unavailable in the current login context, do not substitute another site; explain that access is unavailable and offer the login tool to switch context. Use plan_deploy and present its operations and target before apply_deploy. Production is the default; target preview updates only preview. Use plan_promote and present both URLs before apply_promote; promotion renames the current preview into production and resets preview to empty. Preview shares the main site’s database and storage quota. Only set force to true when the user explicitly requests bypassing the wp-config.php guard; never retry a blocked promotion with force automatically. Read the preview address from get_site deployments.preview.url and never construct it; the vanity hostname serves production. File tools and downloads act only on production. Promotion replaces production with exactly what preview holds, and deployments never send wp-config.php, wp-content/uploads, or other excluded content to preview, so for WordPress or any site with content outside the build, recommend deploying to production instead of promoting. After a promotion preview is empty; do not promote again until preview has been redeployed.',
+    'Saved logins: when list_logins shows more than one login, ask the user which tenant (organization) to work in before any site or form action, and pass that tenant name or id in the tool\u2019s tenant input; use_login changes the default for later calls. After a sign-in finishes, tell the user which account and tenant it signed in to and ask them to confirm it is theirs. If deniedPermissionKeys is non-empty, tell the user which permissions were not granted and what that means (the approver lacks them in that tenant, so anything needing them will fail); do not request them again unless the user asks. Before suggesting a new sign-in because a domain is unavailable, call list_logins and try another saved login with the tenant input.',
+    'CI deploys use a deploy token only (request_deploy_token), never a tenant API key; never ask the user to paste it.',
+    'When connecting a page to a form, read the existing page first and preserve its markup, layout, and styling rather than replacing it with a generic form. Allow that page’s exact origin, and follow the response contract and the jsonScript or capScript returned with the form. Read an existing form with describe_form before update_form and edit it in place, never create a second form. If ZynoForms cannot represent a field, validation rule, choice, or bot protection exactly, explain the limitation and ask the user how to proceed instead of dropping it.',
+    'When the user wants to build a new site: ZynoHosting serves static files, plus PHP on sites with PHP turned on (get_site phpVersion is null when it is off, and .php files then return 404). It runs no Node.js or other server process, so server-side rendering and API routes are unavailable. If you can run commands, recommend Astro with its default static output and no server adapter, build it, and deploy the dist folder rather than the project root. If you cannot run a build, write plain HTML, CSS, and JavaScript files. Use PHP only for real server-side code, and ZynoForms rather than PHP for forms. A static site returns 404 for unknown paths unless get_site notFoundHandling is single-page-application, which serves /index.html for unknown paths unless they end in a listed asset extension. Prefer pre-rendering every route; if a client-side router needs the fallback, ask the user, then call set_not_found_handling; it applies to production and preview and is unavailable with PHP. Everything deployed is publicly readable, so never deploy .env files or secrets. These tools cannot create sites: deploy only to an existing site the user names; if none, tell them to ask ZynoHosting support to set one up.'
 ].join(' ');
 
 export async function createHostingMcpServer(options: McpServerOptions): Promise<McpServer> {
@@ -253,6 +255,7 @@ export async function createHostingMcpServer(options: McpServerOptions): Promise
     );
 
     registerFormsMcp(server, () => authentication.clients());
+    registerDeployTokensMcp(server, () => authentication.clients());
 
     server.registerTool(
         'list_sites',
@@ -397,7 +400,7 @@ export async function createHostingMcpServer(options: McpServerOptions): Promise
             const source = await options.roots.existing(local_root);
             const info = await lstat(source);
             if (!info.isDirectory() || info.isSymbolicLink()) throw new CliError('Deployment source is not a regular directory', 2, 'invalid_source');
-            const { config } = await authentication.clients();
+            const { config } = await authentication.deployClients();
             const plan = await prepareDeployment(
                 site,
                 source,
@@ -466,7 +469,7 @@ export async function createHostingMcpServer(options: McpServerOptions): Promise
         async ({ site, force }) => {
             purgeExpired(deployments, downloads, promotions);
             requirePlanCapacity(deployments, downloads, promotions);
-            const { config } = await authentication.clients();
+            const { config } = await authentication.deployClients();
             const plan = await preparePromotion(site, { ...options, force }, config);
             promotions.set(plan.planId, plan);
             return result(promotionSummary(plan));
@@ -505,10 +508,41 @@ export async function createHostingMcpServer(options: McpServerOptions): Promise
             annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false }
         },
         async ({ site, mode }) => {
-            const { config, manager } = await authentication.clients();
+            const { config, manager } = await authentication.deployClients();
             await authorizedSite(manager, normalizeSiteRef(site));
             const plan = await prepareSiteSettings(site, mode, options, config);
             return result(await applyPreparedSiteSettings(plan));
+        }
+    );
+
+    server.registerTool(
+        'set_runtime',
+        {
+            title: 'Turn PHP on or off for a site',
+            description:
+                'Set a site\'s runtime: "static" turns PHP off (.php files then return 404), "php" turns it on (optionally at phpVersion, such as "8.3"; omitted means the platform default). Applies immediately to both production and preview and purges the CDN cache; it changes live traffic, so ask the user first. Turning PHP on while not-found handling is single-page-application resets it to 404-page. Idempotent; waits for serving reconciliation. Requires hosting.deploy. A deploy token may call it only if the token includes production.',
+            inputSchema: {
+                site: z.string().min(1),
+                runtime: z.enum(['static', 'php']),
+                phpVersion: z
+                    .string()
+                    .regex(/^\d+\.\d+$/)
+                    .optional()
+                    .describe('PHP version such as "8.3", only with runtime "php". Omit for the platform default.')
+            },
+            annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false }
+        },
+        async ({ site, runtime, phpVersion }) => {
+            if (runtime === 'static' && phpVersion) throw new CliError('phpVersion only applies with runtime "php"', 2, 'invalid_input');
+            const { config, manager } = await authentication.deployClients();
+            await authorizedSite(manager, normalizeSiteRef(site));
+            const plan = await prepareRuntime(
+                site,
+                runtime === 'static' ? { kind: 'static' } : { kind: 'php', ...(phpVersion ? { version: phpVersion } : {}) },
+                options,
+                config
+            );
+            return result(await applyPreparedRuntime(plan));
         }
     );
 
@@ -617,7 +651,21 @@ class McpAuthentication {
         private readonly onLoginComplete: () => void
     ) {}
 
+    /** Clients for tools a deploy token may not use. A deploy token is refused here, so a tool must opt in through deployClients. */
     async clients(choice: LoginChoice | undefined = this.tenant.getStore()): Promise<AuthenticatedMcpClients> {
+        const clients = await this.deployClients(choice);
+        if (clients.config.credential.type === 'deploy-token') {
+            throw new CliError(
+                'This MCP process uses a deploy token (ZYNOHOSTING_DEPLOY_TOKEN), which can only deploy, promote, and change the runtime and not-found handling of its own site.',
+                3,
+                'deploy_token_not_allowed'
+            );
+        }
+        return clients;
+    }
+
+    /** Clients for the few tools a deploy token may use: plan_deploy, plan_promote, set_not_found_handling, set_runtime. */
+    async deployClients(choice: LoginChoice | undefined = this.tenant.getStore()): Promise<AuthenticatedMcpClients> {
         const tenant = choice?.tenant?.trim() || undefined;
         const account = choice?.account?.trim() || undefined;
         const key = tenant || account ? `${tenant ?? ''}\u0000${account ?? ''}` : DEFAULT_LOGIN;
@@ -852,7 +900,7 @@ class McpAuthentication {
         const current = this.current.get(DEFAULT_LOGIN);
         if (current) return authenticatedLoginStatus(current.config);
         try {
-            return authenticatedLoginStatus((await this.clients({})).config);
+            return authenticatedLoginStatus((await this.deployClients({})).config);
         } catch (error) {
             if (error instanceof CliError && error.code === 'missing_config') {
                 return { authenticated: false, status: 'not_started', message: 'No saved ZynoHosting login. Call login with action "start".' };
@@ -898,7 +946,13 @@ class McpAuthentication {
     private async resolve(choice: LoginChoice = {}): Promise<ResolvedConfig> {
         try {
             return await resolveConfig(
-                { ...this.options, ...(choice.tenant ? { tenant: choice.tenant } : {}), ...(choice.account ? { account: choice.account } : {}) },
+                {
+                    ...this.options,
+                    ...(choice.tenant ? { tenant: choice.tenant } : {}),
+                    ...(choice.account ? { account: choice.account } : {}),
+                    // Which tools a deploy token may serve is decided in clients() and deployClients().
+                    deployTokenAllowed: true
+                },
                 this.options.env ?? process.env
             );
         } catch (error) {
@@ -944,9 +998,15 @@ class McpAuthentication {
 
     private requireSwitchableCredentialSource(): void {
         const env = this.options.env ?? process.env;
-        if (this.options.apiKey || this.options.accessToken || env.ZYNOHOSTING_API_KEY || env.ZYNOHOSTING_ACCESS_TOKEN) {
+        if (
+            this.options.apiKey ||
+            this.options.accessToken ||
+            env.ZYNOHOSTING_API_KEY ||
+            env.ZYNOHOSTING_ACCESS_TOKEN ||
+            env.ZYNOHOSTING_DEPLOY_TOKEN
+        ) {
             throw new CliError(
-                'This MCP process uses an API key or access token supplied by its command or environment, so signing in or choosing a login cannot switch its active context. Remove or replace that credential and restart the MCP host.',
+                'This MCP process uses an API key, deploy token, or access token supplied by its command or environment, so signing in or choosing a login cannot switch its active context. Remove or replace that credential and restart the MCP host.',
                 2,
                 'fixed_credential_source'
             );
@@ -966,6 +1026,14 @@ function sameLoginRequest(a: LoginRequest, b: LoginRequest): boolean {
 }
 
 function authenticatedLoginStatus(config: ResolvedConfig): Record<string, unknown> {
+    if (config.credential.type === 'deploy-token') {
+        return {
+            authenticated: true,
+            status: 'deploy_token',
+            message:
+                'This process uses a deploy token. It can plan and apply a deployment, promote preview to production, and change the runtime and not-found handling of its own site (production tokens only for those two). Everything else, including forms, files, and signing in, is unavailable.'
+        };
+    }
     const login = config.login;
     return {
         authenticated: true,

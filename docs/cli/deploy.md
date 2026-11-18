@@ -158,22 +158,26 @@ Always inspect the dry-run plan before using `--allow-empty`.
 
 ## CI example
 
+CI uses a [deploy token](./deploy-tokens), not a tenant API key. A token that covers one site knows it, so the site argument is optional:
+
 ```bash
 set -euo pipefail
-export ZYNOHOSTING_API_KEY="$HOSTING_DEPLOY_KEY"
+export ZYNOHOSTING_DEPLOY_TOKEN="$HOSTING_DEPLOY_TOKEN"
 
-zynohosting --environment production deploy example.com ./dist \
+zynohosting --environment production deploy ./dist \
   --dry-run \
   --json
 
-zynohosting --environment production deploy example.com ./dist \
+zynohosting --environment production deploy ./dist \
   --yes \
   --json
 ```
+
+See [Deploy tokens](./deploy-tokens) for GitHub Actions and GitLab CI recipes.
 
 Deploy JSON is an event stream rather than one final document. See [JSON and errors](../reference/json-and-errors#deployment-event-stream).
 
 ## Permission
 
 Production deployments, preview deployments, and promotion require `hosting.deploy`. Promotion
-planning also reads site metadata with `hosting.sitesRead`. No additional login permission is needed.
+planning also reads site metadata with `hosting.sitesRead`. No additional login permission is needed. A deploy token needs no login permission: it carries its own access to one site.

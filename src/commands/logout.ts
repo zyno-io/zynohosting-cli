@@ -176,7 +176,7 @@ async function logoutEntry(
             }
             const next = withoutEntry(current, entry);
             // A profile that still holds a displaced login awaiting retirement is kept, so that login is never lost silently.
-            return hasStoredCredential(next) || next.pendingDeviceLogin || next.retiredLogins?.length ? next : undefined;
+            return hasStoredCredential(next) || next.pendingDeviceLogin || next.pendingKeyRequest || next.retiredLogins?.length ? next : undefined;
         },
         location
     );
@@ -205,7 +205,7 @@ async function dropPendingDeviceLogin(key: string, stored: StoredConfig, locatio
         key,
         current => {
             const { pendingDeviceLogin: _pending, ...rest } = current;
-            return hasStoredCredential(rest) || rest.retiredLogins?.length ? rest : undefined;
+            return hasStoredCredential(rest) || rest.pendingKeyRequest || rest.retiredLogins?.length ? rest : undefined;
         },
         location
     );

@@ -100,8 +100,13 @@ const tools = [
     { name: 'plan_promote', description: 'Plan preview promotion to production for review' },
     { name: 'apply_promote', description: 'Apply a reviewed preview promotion plan' },
     { name: 'set_not_found_handling', description: 'Set how a static site handles missing pages (404 or single-page app)' },
+    { name: 'set_runtime', description: 'Turn PHP on or off for a site' },
     { name: 'plan_download', description: 'Plan a full download for review' },
-    { name: 'apply_download', description: 'Apply a reviewed download plan' }
+    { name: 'apply_download', description: 'Apply a reviewed download plan' },
+    { name: 'request_deploy_token', description: 'Request a deploy token for CI (approved by a person in ZynoSuite)' },
+    { name: 'deploy_token_status', description: 'Check a deploy token request' },
+    { name: 'list_deploy_tokens', description: 'List deploy tokens' },
+    { name: 'revoke_deploy_token', description: 'Revoke a deploy token' }
 ];
 
 const manifest = {

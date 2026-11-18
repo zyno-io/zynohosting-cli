@@ -4,19 +4,19 @@ ZynoHosting and ZynoForms automation use tenant permissions at their APIs. Hosti
 
 ## Tenant permissions
 
-| Permission                  | Capability                                                                            |
-| --------------------------- | ------------------------------------------------------------------------------------- |
-| `hosting.sitesRead`         | List and inspect authorized sites.                                                    |
-| `hosting.filesRead`         | List files and download individual files.                                             |
-| `hosting.filesWrite`        | Create and replace individual files.                                                  |
-| `hosting.filesDelete`       | Delete individual files.                                                              |
-| `hosting.deploy`            | Deploy production/preview content, promote preview, and change missing-page handling. |
-| `hosting.download`          | Download the deployable snapshot.                                                     |
-| `hosting.downloadSensitive` | Include protected and user-generated content in a snapshot.                           |
-| `hosting.analyticsRead`     | Read hosting analytics.                                                               |
-| `hosting.analyticsManage`   | Change analytics configuration.                                                       |
-| `forms.create`              | Create and immediately publish a basic form.                                          |
-| `forms.edit`                | Change a form’s name, fields, Cap protection, and allowed CORS origins.               |
+| Permission                  | Capability                                                                                                                         |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `hosting.sitesRead`         | List and inspect authorized sites.                                                                                                 |
+| `hosting.filesRead`         | List files and download individual files.                                                                                          |
+| `hosting.filesWrite`        | Create and replace individual files.                                                                                               |
+| `hosting.filesDelete`       | Delete individual files.                                                                                                           |
+| `hosting.deploy`            | Deploy production/preview content, promote preview, change missing-page handling and runtime, and approve or revoke deploy tokens. |
+| `hosting.download`          | Download the deployable snapshot.                                                                                                  |
+| `hosting.downloadSensitive` | Include protected and user-generated content in a snapshot.                                                                        |
+| `hosting.analyticsRead`     | Read hosting analytics.                                                                                                            |
+| `hosting.analyticsManage`   | Change analytics configuration.                                                                                                    |
+| `forms.create`              | Create and immediately publish a basic form.                                                                                       |
+| `forms.edit`                | Change a form’s name, fields, Cap protection, and allowed CORS origins.                                                            |
 
 That table is the complete set of keys a CLI token can request. `zynohosting login --help` prints it and the MCP `login` tool enumerates it in its schema, so a plausible-looking invention such as `hosting.sitesWrite` fails locally—naming the closest real key—before any browser opens.
 
@@ -25,6 +25,22 @@ Browser login can issue a token only for permissions currently resolved for that
 Never request `msp.login`, `msp.impersonate`, `core.changePassword`, or `core.manageFingerprints`. Those capabilities cannot be delegated to scoped CLI tokens.
 
 Listing forms, describing their structure, and reading their integration details require an authenticated tenant identity. Authoring a form — creating or editing one — also requires a user identity: the Suite stamps every form mutation with the account that made it, so a workstation-only credential is refused. Expanding form origins from a ZynoHosting site additionally requires `hosting.sitesRead` because the tool reads that site’s primary, alias, vanity, and preview hostnames.
+
+## Deploy tokens
+
+A [deploy token](../cli/deploy-tokens) is not a tenant permission. It is a restricted API key whose site grants live in hosting. It holds only the bare `hosting` app permission, plus any you add with `deploy-tokens create --permission <key>`; the approver can remove those.
+
+| Call                                            | Allowed                                                                           |
+| ----------------------------------------------- | --------------------------------------------------------------------------------- |
+| Deploy access sessions (`deploy:*` scopes only) | Environments the token includes. On a PHP site the token must include production. |
+| Promote preview to production                   | Only if the token includes both environments.                                     |
+| Clear the site cache, read its own site         | Yes.                                                                              |
+| Runtime (PHP on or off) and not-found handling  | Only if the token includes production.                                            |
+| Whoami, status of its own reconciliations       | Yes.                                                                              |
+| Supported PHP versions                          | Yes.                                                                              |
+| Everything else                                 | No: other sites, files, downloads, forms, analytics.                              |
+
+Whoever approves a token needs `hosting.deploy`. Listing tokens needs `hosting.sitesRead`. Revoking one needs `hosting.deploy`. The token's own approval does not depend on the approver staying in the tenant.
 
 ## Cluster capability scopes
 
@@ -64,7 +80,8 @@ Grant:
 
 Add `hosting.filesRead` only if the same workflow must inspect or download individual files.
 
-This same permission set covers `deploy --preview`, `promote`, `sites set`, and their MCP tools.
+This same permission set covers `deploy --preview`, `promote`, `sites set`, `sites runtime`, and their MCP tools.
+For CI, use a [deploy token](../cli/deploy-tokens) instead of a login or a tenant API key.
 No new permission is introduced for preview or promotion.
 
 ### Backup automation

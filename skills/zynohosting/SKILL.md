@@ -1,6 +1,6 @@
 ---
 name: zynohosting
-description: Publish, update, inspect, back up, and preview websites hosted on ZynoHosting, and create, edit, and embed ZynoForms, using the `zynohosting` CLI. Use when the user wants to build a new website to host on ZynoHosting, deploy or publish a site to ZynoHosting, deploy to a preview site, promote preview to production (go live), change how a site handles missing pages (single-page-app fallback), check which sites they can access, edit, upload, or delete individual hosted files, download a hosted site, sign in to ZynoHosting, or add, change, or connect a ZynoForms form.
+description: Publish, update, inspect, back up, and preview websites hosted on ZynoHosting, and create, edit, and embed ZynoForms, using the `zynohosting` CLI. Use when the user wants to build a new website to host on ZynoHosting, deploy or publish a site to ZynoHosting, deploy to a preview site, promote preview to production (go live), change how a site handles missing pages (single-page-app fallback), turn PHP on or off, set up CI deployment (GitHub Actions or GitLab CI) with a deploy token, check which sites they can access, edit, upload, or delete individual hosted files, download a hosted site, sign in to ZynoHosting, or add, change, or connect a ZynoForms form.
 ---
 
 # ZynoHosting CLI
@@ -18,7 +18,7 @@ npx -y @zyno-io/zynohosting <command> --help   # authoritative options for the i
 
 The examples below write `zynohosting`. Substitute the `npx` form if needed.
 
-There is no TTY in an agent shell, so the CLI never prompts you. `deploy`, `promote`, and `sites set` need `--dry-run` or `--yes`, and `download` and `files rm` need `--yes`. Without them they exit with `confirmation_required`. `files put` has no confirmation and no dry run: it uploads the moment you run it.
+There is no TTY in an agent shell, so the CLI never prompts you. `deploy`, `promote`, `sites set`, and `sites runtime` need `--dry-run` or `--yes`, and `download` and `files rm` need `--yes`. Without them they exit with `confirmation_required`. `files put` has no confirmation and no dry run: it uploads the moment you run it.
 
 ## Rules
 
@@ -106,7 +106,35 @@ A person can belong to several organizations (tenants). A login is one account i
 
 A token cannot gain permissions later. On `login_expired`, a permission error (exit 3), or a need for more scope, run `zynohosting logout` and then `login` with the complete set. `zynohosting login --help` lists every valid permission. Invented keys are rejected.
 
-In CI, set `ZYNOHOSTING_API_KEY` instead of logging in.
+## CI and automation
+
+CI uses a **deploy token** only. Never create or use a tenant API key (`ZYNOHOSTING_API_KEY`) for CI, and never put one in a workflow file. Never ask the user to paste a token into the chat, and never print one.
+
+A deploy token deploys one site and nothing else. Create it from the user's own login and let the CLI hand it straight to their CI:
+
+```bash
+# Ask the user: which site, which environments (production, preview, or both), and which CI.
+zynohosting deploy-tokens create example.com --production --github acme/web --json
+zynohosting deploy-tokens create example.com --production --gitlab group/project --json
+```
+
+The CLI opens an approval page, or prints a link and a code. Give the user both and tell them to check the code, site, and environments before approving. Never approve it yourself. The token goes into the GitHub secret or masked GitLab variable on standard input and is never printed. If the CLI cannot reach `gh` or `glab`, it fails before asking for anything. Without `--github`, `--gitlab`, or `--file`, the user copies the token once from the approval page; do not ask them to send it to you.
+
+Where you cannot wait for the user, run `zynohosting deploy-tokens create ... --no-wait --json` (approval page only), tell the user the link and code, and finish with `zynohosting deploy-tokens create --resume --json` after they approve.
+
+In the workflow, set `ZYNOHOSTING_DEPLOY_TOKEN` from the CI secret and run `zynohosting deploy ./dist --yes --json`. A token that covers one site knows it, so the site argument is optional; with several sites, name it (`deploy_token_site_required`). It can run only `deploy`, `promote` (needs both environments), `whoami`, `sites set`, `sites runtime` (both need production), and `deploy-tokens revoke --self`; anything else fails with `deploy_token_not_allowed`. Use `--preview` tokens for pull requests, but only for static sites: a PHP site's token must include production (`deploy_token_requires_production`). See `docs/cli/deploy-tokens.md` for full GitHub Actions and GitLab CI examples.
+
+`zynohosting deploy-tokens list [site]` shows tokens; `deploy-tokens revoke <keyId>` revokes one. Ask the user before revoking. Tokens expire after 30 to 365 days (default 90). Add `--permission <key>` (repeatable, for example `hosting.sitesRead`) only if the user asks for an extra permission; ZynoAuth validates the key and the approver can remove it.
+
+| Code                                                                               | Do this                                                                                                                                  |
+| ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `deploy_token_expired`, `deploy_token_revoked`, `deploy_token_no_sites`            | Create a new token with `deploy-tokens create`.                                                                                          |
+| `deploy_token_wrong_site`, `deploy_token_wrong_environment`, `deploy_token_denied` | The token is for another site or environment. Create the right one.                                                                      |
+| `conflicting_credentials`                                                          | Unset all but one of `ZYNOHOSTING_DEPLOY_TOKEN`, `ZYNOHOSTING_API_KEY`, `ZYNOHOSTING_ACCESS_TOKEN`.                                      |
+| `handoff_unavailable`, `handoff_failed`                                            | `gh`, `glab`, or the file path could not take the token. Fix the sign-in or path and run again. A failed hand-off revokes the new token. |
+| `key_request_denied`, `key_request_expired`                                        | The user declined or the code ran out. Ask before trying again.                                                                          |
+
+If a tenant API key is used with `CI=true`, the CLI warns with `api_key_in_ci`. Replace it with a deploy token.
 
 ## Inspect a site
 
@@ -124,7 +152,7 @@ ZynoHosting serves static files, plus PHP 7.4–8.5 on sites that have PHP turne
 - **Without a build tool,** write plain HTML, CSS, and JavaScript files and deploy that folder.
 - **Use PHP only for real server-side code.** Contact and signup forms don't need it; use [ZynoForms](#zynoforms).
 - **Check the site type.** `sites get <domain>` shows `PHP: static` (JSON `phpVersion: null`) when PHP is off. Such a site answers 404 for every `.php` file. The user can turn PHP on in the ZynoHosting portal under the site's **Settings → Runtime**.
-- **Routing.** A static site serves `/path`, then `/path/index.html`, then `/404.html` with status 404, so a client-side router's deep links 404 on reload. Prefer pre-rendering every route, as Astro does. If a client-side router really needs a fallback, ask the user first, then run `zynohosting sites set <domain> --not-found single-page-application --dry-run` and, once they approve, the same with `--yes`. Static sites only (it is rejected on PHP). It takes effect on production and preview immediately, and serves `/index.html` with status 200 for any unknown path unless it ends in a listed asset extension (`.js`, `.css`, images, fonts, `.json`, `.txt`, ...); a missing `/app.js` still 404s. `sites get` shows the setting only on static sites. `sites get <domain>` shows `Not found:` (JSON `notFoundHandling`); `--not-found 404-page` turns it off. A PHP site sends unknown paths to `/index.php`, so a front controller works. nginx serves the site, so `.htaccess` files are ignored.
+- **Routing.** A static site serves `/path`, then `/path/index.html`, then `/404.html` with status 404, so a client-side router's deep links 404 on reload. Prefer pre-rendering every route, as Astro does. If a client-side router really needs a fallback, ask the user first, then run `zynohosting sites set <domain> --not-found single-page-application --dry-run` and, once they approve, the same with `--yes`. Static sites only (it is rejected on PHP). It takes effect on production and preview immediately, and serves `/index.html` with status 200 for any unknown path unless it ends in a listed asset extension (`.js`, `.css`, images, fonts, `.json`, `.txt`, ...); a missing `/app.js` still 404s. `sites get` shows the setting only on static sites. `sites get <domain>` shows `Not found:` (JSON `notFoundHandling`); `--not-found 404-page` turns it off. To turn PHP on or off, ask the user first (it changes live traffic), then run `zynohosting sites runtime <domain> php@8.3 --dry-run` (or `php`, `static`) and, once they approve, the same with `--yes`. A PHP site sends unknown paths to `/index.php`, so a front controller works. nginx serves the site, so `.htaccess` files are ignored.
 - **Everything deployed is public.** The deployed folder is the web root, and anything in it that isn't PHP can be downloaded. Never deploy `.env` files, credentials, or private source.
 - **The CLI cannot create sites.** Build and check the site locally first (`npm run preview` for Astro). Deploy only to an existing site the user names. If they don't have one yet, tell them to ask ZynoHosting support to set up a site for their domain.
 
@@ -187,7 +215,7 @@ The destination must be new or empty. `--sensitive` also includes `wp-config.php
 
 ## Machine-readable output
 
-Add `--json` to any command. `deploy`, `promote`, and `sites set` emit one JSON event per line: `progress`, `plan` or `promotion_plan` or `site_settings_plan`, then `dry_run_complete`, `result`, `promotion_result`, or `site_settings_result`. Errors go to stderr as `{"type":"error","code":...}`.
+Add `--json` to any command. `deploy`, `promote`, `sites set`, and `sites runtime` emit one JSON event per line: `progress`, `plan` or `promotion_plan` or `site_settings_plan` or `runtime_plan`, then `dry_run_complete`, `result`, `promotion_result`, `site_settings_result`, or `runtime_result`. Errors go to stderr as `{"type":"error","code":...}`.
 
 | Exit | Meaning                                                                                                                                                |
 | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |

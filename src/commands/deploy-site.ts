@@ -1,8 +1,10 @@
+import { stat } from 'node:fs/promises';
 import { domainToASCII } from 'node:url';
 
 import { AgentClient } from '../api/agent-client.js';
 import { ManagerClient } from '../api/manager-client.js';
 import { ConfigOverrides, ResolvedConfig, resolveConfig } from '../config.js';
+import { assertTokenHasSites, describeTokenSites, diagnoseDeployToken, tokenCoversSite, verifyDeployToken } from '../deploy-tokens/guard.js';
 import { createDeploymentArchive } from '../deploy/archive.js';
 import { coalesceOperations, DisplayOperation } from '../deploy/coalesce.js';
 import { hashInventoryFiles } from '../deploy/hash.js';
@@ -49,9 +51,101 @@ export interface PreparedDeployment {
     applyTimeoutMs: number;
 }
 
-export async function deploySite(fqdnInput: string, directory: string, options: DeploySiteOptions): Promise<void> {
+/** The overrides `deploy` passes to credential resolution. A deploy token is one of the credentials it accepts. */
+function deployConfigOverrides(options: DeploySiteOptions): ConfigOverrides {
+    return {
+        ...(options.apiUrl ? { apiUrl: options.apiUrl } : {}),
+        ...(options.authApiUrl ? { authApiUrl: options.authApiUrl } : {}),
+        ...(options.apiKey ? { apiKey: options.apiKey } : {}),
+        ...(options.tenant ? { tenant: options.tenant } : {}),
+        ...(options.account ? { account: options.account } : {}),
+        ...(options.environment ? { environment: options.environment } : {}),
+        deployTokenAllowed: true
+    };
+}
+
+function looksLikeSiteRef(value: string): boolean {
+    try {
+        normalizeSiteRef(value);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+function isExplicitPath(value: string): boolean {
+    return /^(\.{1,2}[\\/]|[\\/]|~|[A-Za-z]:[\\/])/.test(value) || /[\\/]/.test(value);
+}
+
+/**
+ * Works out which positional argument is the site and which the directory. Without a deploy token the site is required.
+ * With a token that covers one site, the site is optional: a single argument is the site when it names the token's site,
+ * otherwise the directory. A token that covers several sites always needs the site named.
+ */
+export async function resolveDeployArguments(
+    first: string | undefined,
+    second: string | undefined,
+    config: ResolvedConfig,
+    timeoutMs = 30_000
+): Promise<{ site: string; directory: string }> {
+    if (config.credential.type !== 'deploy-token') {
+        if (first === undefined) throw new CliError('Name the site to deploy: zynohosting deploy <site> [directory]', 2, 'invalid_input');
+        return { site: first, directory: second ?? '.' };
+    }
+    const manager = new ManagerClient(config.apiUrl, config.credential, timeoutMs);
+    let info;
+    try {
+        info = await manager.getDeployTokenInfo();
+    } catch (error) {
+        return diagnoseDeployToken(config, error);
+    }
+    assertTokenHasSites(info);
+    const covered = describeTokenSites(info);
+    const several = info.sites.length > 1;
+    const tokenSite = info.sites[0]!.site.fqdn;
+    const siteRequired = () =>
+        new CliError(
+            `This deploy token covers several sites (${covered}). Name the one to deploy: zynohosting deploy <site> [directory]`,
+            2,
+            'deploy_token_site_required'
+        );
+    if (first === undefined) {
+        if (several) throw siteRequired();
+        return { site: tokenSite, directory: '.' };
+    }
+    if (second !== undefined) return { site: first, directory: second };
+    const asSite = tokenCoversSite(info, first);
+    // A bare hostname or id that the token does not cover is a wrong site, even when a folder of that name exists: reading it as
+    // the directory would upload that folder to the token's own site. A path (`./site-b.com`, `/srv/site-b.com`) stays a directory.
+    if (!asSite && looksLikeSiteRef(first) && !isExplicitPath(first)) {
+        throw new CliError(
+            `"${first}" is not a site this deploy token covers (${covered}). To deploy a local folder with that name, write it as a path (./${first}) or give both arguments: zynohosting deploy <site> <directory>`,
+            2,
+            'deploy_token_wrong_site'
+        );
+    }
+    const asDirectory = await stat(first).then(
+        entry => entry.isDirectory(),
+        () => false
+    );
+    if (asSite && asDirectory) {
+        throw new CliError(
+            `"${first}" is both a site this deploy token covers and a local directory. Give both arguments: zynohosting deploy ${several ? '<site>' : tokenSite} <directory>`,
+            2,
+            'ambiguous_deploy_argument'
+        );
+    }
+    if (asSite) return { site: first, directory: '.' };
+    if (asDirectory && several) throw siteRequired();
+    if (asDirectory) return { site: tokenSite, directory: first };
+    throw new CliError(`"${first}" is neither a directory nor a site this deploy token covers (${covered}).`, 2, 'deploy_token_wrong_site');
+}
+
+export async function deploySite(siteArgument: string | undefined, directoryArgument: string | undefined, options: DeploySiteOptions): Promise<void> {
     const output = new Output(options.json ?? false);
-    const plan = await prepareDeployment(fqdnInput, directory, options, message => output.progress(message));
+    const config = await resolveConfig(deployConfigOverrides(options));
+    const { site: fqdnInput, directory } = await resolveDeployArguments(siteArgument, directoryArgument, config);
+    const plan = await prepareDeployment(fqdnInput, directory, options, message => output.progress(message), config);
     output.showPlan({
         target: plan.target,
         ...(plan.session.url ? { url: plan.session.url } : {}),
@@ -93,21 +187,19 @@ export async function prepareDeployment(
 ): Promise<PreparedDeployment> {
     const fqdn = normalizeSiteRef(siteRefInput);
     const timeoutMs = Math.max(1, options.timeoutSeconds ?? 600) * 1000;
-    const config =
-        resolvedConfig ??
-        (await resolveConfig({
-            ...(options.apiUrl ? { apiUrl: options.apiUrl } : {}),
-            ...(options.authApiUrl ? { authApiUrl: options.authApiUrl } : {}),
-            ...(options.apiKey ? { apiKey: options.apiKey } : {}),
-            ...(options.tenant ? { tenant: options.tenant } : {}),
-            ...(options.account ? { account: options.account } : {}),
-            ...(options.environment ? { environment: options.environment } : {})
-        }));
+    const config = resolvedConfig ?? (await resolveConfig(deployConfigOverrides(options)));
 
     progress('Authorizing deployment…');
     const manager = new ManagerClient(config.apiUrl, config.credential, Math.min(timeoutMs, 30_000));
     const target = options.preview ? 'preview' : 'production';
-    const session = await manager.createDeploymentSession(fqdn, target);
+    let session: DeploymentSession;
+    try {
+        // A deploy token is checked first, so a wrong site or environment fails before anything is uploaded.
+        if (config.credential.type === 'deploy-token') await verifyDeployToken(manager, { site: fqdn, environments: [target] });
+        session = await manager.createDeploymentSession(fqdn, target);
+    } catch (error) {
+        return diagnoseDeployToken(config, error);
+    }
     const agent = new AgentClient(session.baseUrl, session.accessToken, timeoutMs);
 
     progress('Loading cluster deployment capabilities…');

@@ -50,6 +50,7 @@ export default defineConfig({
                         { text: 'Sites', link: '/cli/sites' },
                         { text: 'Individual files', link: '/cli/files' },
                         { text: 'Full deployments', link: '/cli/deploy' },
+                        { text: 'Deploy tokens for CI', link: '/cli/deploy-tokens' },
                         { text: 'Complete downloads', link: '/cli/download' },
                         { text: 'ZynoForms', link: '/cli/forms' }
                     ]

@@ -19,9 +19,19 @@ import {
     parseReconciliation,
     parseAccessSession,
     parseAutomationSite,
-    parseAutomationSites
+    parseAutomationSites,
+    DeployTokenInfo,
+    PhpVersions,
+    parseDeployTokenInfo,
+    parsePhpVersions
 } from '../protocol.js';
 import { requestJson } from './http.js';
+
+export interface SiteChanges {
+    notFoundHandling?: NotFoundHandling;
+    /** A version to turn PHP on at, or null to make the site static. */
+    phpVersion?: string | null;
+}
 
 export class ManagerClient {
     constructor(
@@ -107,16 +117,45 @@ export class ManagerClient {
         return accepted;
     }
 
-    async updateSite(siteId: string, changes: { notFoundHandling: NotFoundHandling }): Promise<SiteMutationAccepted> {
+    /** Describes the deploy token making the call: its site, environments, and expiry. */
+    async getDeployTokenInfo(): Promise<DeployTokenInfo> {
+        return parseDeployTokenInfo(
+            await requestJson(`${this.apiUrl}/v1/deploy-token`, {
+                timeoutMs: this.timeoutMs,
+                headers: { ...(await authorizationHeaders(this.credential)), Accept: 'application/json' }
+            })
+        );
+    }
+
+    async getPhpVersions(): Promise<PhpVersions> {
+        return parsePhpVersions(
+            await requestJson(`${this.apiUrl}/v1/php-versions`, {
+                timeoutMs: this.timeoutMs,
+                headers: { ...(await authorizationHeaders(this.credential)), Accept: 'application/json' }
+            })
+        );
+    }
+
+    async updateSite(siteId: string, changes: SiteChanges): Promise<SiteMutationAccepted> {
+        if (changes.notFoundHandling === undefined && changes.phpVersion === undefined) {
+            throw new CliError('No site change was given', 2, 'invalid_input');
+        }
         const accepted = parseSiteMutationAccepted(
             await requestJson(`${this.apiUrl}/v1/sites/${encodeURIComponent(siteId)}`, {
                 method: 'PATCH',
                 timeoutMs: this.timeoutMs,
                 headers: { ...(await authorizationHeaders(this.credential)), 'Content-Type': 'application/json', Accept: 'application/json' },
-                body: JSON.stringify({ notFoundHandling: changes.notFoundHandling })
+                body: JSON.stringify({
+                    ...(changes.notFoundHandling === undefined ? {} : { notFoundHandling: changes.notFoundHandling }),
+                    ...(changes.phpVersion === undefined ? {} : { phpVersion: changes.phpVersion })
+                })
             })
         );
-        if (accepted.result.id !== siteId || accepted.result.notFoundHandling !== changes.notFoundHandling) {
+        if (
+            accepted.result.id !== siteId ||
+            (changes.notFoundHandling !== undefined && accepted.result.notFoundHandling !== changes.notFoundHandling) ||
+            (changes.phpVersion !== undefined && accepted.result.phpVersion !== changes.phpVersion)
+        ) {
             throw new CliError('Manager returned an unexpected site update result', 5, 'invalid_manager_response');
         }
         return accepted;
@@ -150,6 +189,12 @@ export async function authorizationHeaders(credential: ManagerCredential): Promi
     if (credential.type === 'api-key') {
         return { Authorization: `Basic ${Buffer.from(`api:${credential.apiKey}`, 'utf8').toString('base64')}` };
     }
+    if (credential.type === 'deploy-token') return { Authorization: basicAuthorization(credential.token) };
     rememberDeniedPermissions(credential.accessToken, credential.deniedPermissionKeys);
     return { Authorization: `Bearer ${credential.accessToken}` };
+}
+
+/** HTTP Basic for a key: user `api`, the key as the password. */
+export function basicAuthorization(key: string): string {
+    return `Basic ${Buffer.from(`api:${key}`, 'utf8').toString('base64')}`;
 }

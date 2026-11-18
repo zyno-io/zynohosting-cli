@@ -12,6 +12,7 @@ import {
     selectProfile
 } from '../config.js';
 import { CliError } from '../errors.js';
+import { describeDeployToken } from './deploy-tokens.js';
 
 export interface LoginsOptions {
     apiUrl?: string;
@@ -178,6 +179,11 @@ export async function whoami(
 ): Promise<LoginSummary | LoginSummary[]> {
     if (options.all) return listLogins(options, dependencies);
     const { env, location, key, write, now } = context(options, dependencies);
+    // A deploy token is the credential commands use, so say what it allows instead of listing saved logins.
+    if (env.ZYNOHOSTING_DEPLOY_TOKEN?.trim()) {
+        await describeDeployToken({ ...options }, { env, write });
+        return [];
+    }
     // An injected credential is what commands actually use, whatever is saved.
     const injected = options.apiKey
         ? { kind: 'api-key' as const, source: 'option' as const, name: '--api-key' }

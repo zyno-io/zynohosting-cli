@@ -177,6 +177,10 @@ export class FormsClient {
                 'missing_suite_api_url'
             );
         }
+        // A deploy token belongs to the hosting API alone; it must never be sent to ZynoSuite.
+        if (this.credential.type === 'deploy-token') {
+            throw new CliError('A deploy token cannot be used for ZynoForms.', 3, 'deploy_token_not_allowed');
+        }
         return requestJson(`${this.apiUrl}${path}`, {
             ...(options.method === undefined ? {} : { method: options.method }),
             timeoutMs: this.timeoutMs,

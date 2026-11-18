@@ -36,12 +36,50 @@ const MAX_INTERVAL_SECS = 60;
 const SLOW_DOWN_STEP_SECS = 5;
 const MAX_BACKOFF_MS = 60_000;
 
+/** One answer to a poll, whatever is being approved. */
+export type ApprovalPoll<T> =
+    | { status: 'pending' | 'slow_down'; interval?: number | undefined }
+    | { status: 'denied' | 'expired' | 'consumed' }
+    | { status: 'approved'; value: T };
+
+/** The errors a poll loop can end with, worded for what is being approved. */
+export interface ApprovalErrors {
+    cancelled(): CliError;
+    denied(): CliError;
+    /** Polling timed out and the code was cancelled. */
+    timeout(): CliError;
+    /** Polling timed out and the code was kept for a later `--resume`. */
+    pending(): CliError;
+    /** The code ran out before anyone approved it. */
+    codeExpired(): CliError;
+    /** The server said `expired` (or `consumed`) with no uncertain poll before it. */
+    expiredOrUsed(): CliError;
+    /** The server said `expired` after a poll that may have been the one that delivered the secret. */
+    lost(): CliError;
+}
+
+export interface ApprovalPollOptions<T> {
+    poll(): Promise<ApprovalPoll<T>>;
+    cancel(): Promise<void>;
+    errors: ApprovalErrors;
+    /** Seconds between polls, as the server asked. */
+    interval: number;
+    signal?: AbortSignal | undefined;
+    /** Epoch milliseconds. When it passes, polling stops with `timeout` (or `pending` when `keepPendingOnTimeout`). */
+    deadline?: number | undefined;
+    /** Epoch milliseconds after which an unanswered code is given up on, however the server keeps answering. */
+    giveUpAt: number;
+    keepPendingOnTimeout?: boolean | undefined;
+    uncertain?: boolean | undefined;
+    onUncertainChange?: ((uncertain: boolean) => void | Promise<void>) | undefined;
+}
+
 /**
- * Polls until the person approves, denies, or the code ends. The device code never leaves this function except in the
- * poll and cancel requests. A poll that fails in transit might have been the one that handed over the credential, so a
- * later `expired` after such a failure is reported as `device_credential_lost` rather than as an ordinary expiry.
+ * Polls until the person approves, denies, or the code ends. A poll that fails in transit might have been the one that
+ * handed over the credential, so a later `expired` after such a failure is reported as `lost` rather than as an
+ * ordinary expiry. Shared by the device sign-in and by key requests.
  */
-export async function pollDeviceApproval(options: DevicePollOptions): Promise<DeviceApproval> {
+export async function pollApproval<T>(options: ApprovalPollOptions<T>): Promise<T> {
     let interval = clampInterval(options.interval);
     let uncertain = options.uncertain ?? false;
     const setUncertain = async (value: boolean) => {
@@ -49,50 +87,36 @@ export async function pollDeviceApproval(options: DevicePollOptions): Promise<De
         uncertain = value;
         await Promise.resolve(options.onUncertainChange?.(value)).catch(() => {});
     };
-    const lost = () =>
-        new CliError(
-            'The connection dropped while the approved sign-in was being delivered, so the credential was lost. Run `zynohosting login` again.',
-            3,
-            'device_credential_lost'
-        );
     let failures = 0;
     let waitMs = interval * 1000;
 
     const stop = async (error: CliError, cancel: boolean): Promise<never> => {
-        if (cancel) await options.client.cancelDevice(options.deviceCode).catch(() => {});
+        if (cancel) await options.cancel().catch(() => {});
         throw error;
     };
-    const cancelled = () => new CliError('Sign-in was cancelled', 3, 'login_cancelled');
 
     for (;;) {
-        if (options.signal?.aborted) await stop(cancelled(), true);
+        if (options.signal?.aborted) await stop(options.errors.cancelled(), true);
         const now = Date.now();
         if (options.deadline !== undefined && now >= options.deadline) {
-            if (options.keepPendingOnTimeout) {
-                throw new CliError('Still waiting for approval. Run `zynohosting login --resume` to keep waiting.', 3, 'login_pending');
-            }
-            await stop(new CliError('Timed out waiting for sign-in approval', 3, 'login_timeout'), true);
+            if (options.keepPendingOnTimeout) throw options.errors.pending();
+            await stop(options.errors.timeout(), true);
         }
         if (now >= options.giveUpAt) {
-            await stop(
-                uncertain
-                    ? lost()
-                    : new CliError('The sign-in code expired before it was approved. Run `zynohosting login` again.', 3, 'device_code_expired'),
-                false
-            );
+            await stop(uncertain ? options.errors.lost() : options.errors.codeExpired(), false);
         }
 
         const limit = Math.min(options.deadline ?? Infinity, options.giveUpAt) - now;
         try {
             await sleep(Math.max(0, Math.min(waitMs, limit)), undefined, options.signal ? { signal: options.signal } : undefined);
         } catch {
-            await stop(cancelled(), true);
+            await stop(options.errors.cancelled(), true);
         }
         if (Date.now() >= (options.deadline ?? Infinity) || Date.now() >= options.giveUpAt) continue;
 
-        let poll: DevicePoll;
+        let poll: ApprovalPoll<T>;
         try {
-            poll = await options.client.pollDevice(options.deviceCode, options.expectation);
+            poll = await options.poll();
         } catch (error) {
             if (error instanceof HttpError && error.status === 429) {
                 interval = Math.min(MAX_INTERVAL_SECS, interval + SLOW_DOWN_STEP_SECS);
@@ -110,13 +134,12 @@ export async function pollDeviceApproval(options: DevicePollOptions): Promise<De
 
         switch (poll.status) {
             case 'approved':
-                return { credential: poll.credential, approvedBy: poll.approvedBy };
+                return poll.value;
             case 'denied':
-                throw new CliError('The sign-in request was denied.', 3, 'login_denied');
+                throw options.errors.denied();
             case 'expired':
-                throw uncertain
-                    ? lost()
-                    : new CliError('The sign-in code expired or was already used. Run `zynohosting login` again.', 3, 'device_code_expired');
+            case 'consumed':
+                throw uncertain ? options.errors.lost() : options.errors.expiredOrUsed();
             case 'slow_down':
                 interval = clampInterval(poll.interval ?? interval + SLOW_DOWN_STEP_SECS);
                 break;
@@ -128,6 +151,40 @@ export async function pollDeviceApproval(options: DevicePollOptions): Promise<De
         failures = 0;
         waitMs = interval * 1000;
     }
+}
+
+/** Polls a device sign-in. The device code never leaves this function except in the poll and cancel requests. */
+export async function pollDeviceApproval(options: DevicePollOptions): Promise<DeviceApproval> {
+    return pollApproval<DeviceApproval>({
+        poll: async () => {
+            const poll: DevicePoll = await options.client.pollDevice(options.deviceCode, options.expectation);
+            return poll.status === 'approved' ? { status: 'approved', value: { credential: poll.credential, approvedBy: poll.approvedBy } } : poll;
+        },
+        cancel: () => options.client.cancelDevice(options.deviceCode),
+        errors: {
+            cancelled: () => new CliError('Sign-in was cancelled', 3, 'login_cancelled'),
+            denied: () => new CliError('The sign-in request was denied.', 3, 'login_denied'),
+            timeout: () => new CliError('Timed out waiting for sign-in approval', 3, 'login_timeout'),
+            pending: () => new CliError('Still waiting for approval. Run `zynohosting login --resume` to keep waiting.', 3, 'login_pending'),
+            codeExpired: () =>
+                new CliError('The sign-in code expired before it was approved. Run `zynohosting login` again.', 3, 'device_code_expired'),
+            expiredOrUsed: () =>
+                new CliError('The sign-in code expired or was already used. Run `zynohosting login` again.', 3, 'device_code_expired'),
+            lost: () =>
+                new CliError(
+                    'The connection dropped while the approved sign-in was being delivered, so the credential was lost. Run `zynohosting login` again.',
+                    3,
+                    'device_credential_lost'
+                )
+        },
+        interval: options.interval,
+        signal: options.signal,
+        deadline: options.deadline,
+        giveUpAt: options.giveUpAt,
+        keepPendingOnTimeout: options.keepPendingOnTimeout,
+        uncertain: options.uncertain,
+        onUncertainChange: options.onUncertainChange
+    });
 }
 
 function clampInterval(seconds: number): number {

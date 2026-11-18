@@ -8,7 +8,7 @@ Agents reach ZynoHosting through one of two interfaces. Use the CLI with the Zyn
 | Muse Code, Cursor, and other local coding agents     | **CLI + skill**                                 | Same as above.                                            |
 | Grok Bot, ChatGPT dots                               | **CLI + skill**, run on their cloud computer    | Sign-in is a link and code the user approves anywhere.    |
 | Claude desktop app, Chat and Cowork tabs             | **Desktop extension** (`.mcpb`, the MCP server) | No shell, so a CLI is unusable there.                     |
-| CI and scripts                                       | **CLI** with `ZYNOHOSTING_API_KEY`              | No agent involved.                                        |
+| CI and scripts                                       | **CLI** with `ZYNOHOSTING_DEPLOY_TOKEN`         | No agent involved. A deploy token deploys one site only.  |
 
 ## Why the CLI is the default for coding agents
 

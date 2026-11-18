@@ -80,7 +80,7 @@ export interface AutomationSite {
     /** Absent on managers that predate the setting. Any string is accepted so a future mode cannot break unrelated commands. */
     notFoundHandling?: string;
     deployments?: SiteDeployments;
-    hostnames?: Array<{ name: string; type: string }>;
+    hostnames?: Array<{ name: string; type: string; subdomainDirectory?: string | null }>;
 }
 
 export interface AccessSession {
@@ -234,7 +234,11 @@ export function parseAutomationSite(value: unknown): AutomationSite {
                   const item = record(hostname, `hostnames[${index}]`);
                   return {
                       name: string(item.name, `hostnames[${index}].name`),
-                      type: string(item.type ?? item.kind, `hostnames[${index}].type`)
+                      type: string(item.type ?? item.kind, `hostnames[${index}].type`),
+                      // A subdomain hostname (served from a directory of another site) is not a name of the site itself.
+                      ...(item.subdomainDirectory === undefined || item.subdomainDirectory === null
+                          ? {}
+                          : { subdomainDirectory: string(item.subdomainDirectory, `hostnames[${index}].subdomainDirectory`) })
                   };
               });
     return {
@@ -288,6 +292,54 @@ export function parseReconciliation(value: unknown): ReconciliationOperation {
 export function parseSiteMutationAccepted(value: unknown, label = 'site update'): SiteMutationAccepted {
     const object = record(value, label);
     return { result: parseAutomationSite(object.result), operation: parseReconciliation(object.operation) };
+}
+
+/** One site a deploy token is granted, with the environments it may deploy to. */
+export interface DeployTokenSite {
+    siteId: string;
+    site: AutomationSite;
+    environments: DeploymentTarget[];
+}
+
+/**
+ * What `GET /v1/deploy-token` says about the token making the call. There is no expiry: hosting does not know it, and
+ * ZynoAuth reports it at `/identity/api-keys/self`. `sites` is empty when every granted site was deleted or transferred.
+ */
+export interface DeployTokenInfo {
+    keyId: string;
+    sites: DeployTokenSite[];
+}
+
+export function parseDeployTokenInfo(value: unknown): DeployTokenInfo {
+    const object = record(value, 'deploy token');
+    const sites = array(object.sites, 'sites').map((entry, index): DeployTokenSite => {
+        const item = record(entry, `sites[${index}]`);
+        const site = parseAutomationSite(item.site);
+        const siteId = uuid(item.siteId, 'siteId');
+        if (site.id.toLowerCase() !== siteId.toLowerCase()) {
+            throw new CliError('Manager returned a deploy token for another site', 5, 'invalid_manager_response');
+        }
+        const environments = array(item.environments, 'environments').map(deploymentTarget);
+        if (!environments.length) throw new CliError('Manager returned a deploy token with no environments', 5, 'invalid_manager_response');
+        return { siteId, site, environments: [...new Set(environments)] };
+    });
+    return { keyId: string(object.keyId, 'keyId'), sites };
+}
+
+export interface PhpVersions {
+    versions: string[];
+    /** Null when the platform has no PHP version deployed. */
+    default: string | null;
+}
+
+export function parsePhpVersions(value: unknown): PhpVersions {
+    const object = record(value, 'PHP versions');
+    const versions = array(object.versions, 'versions').map((version, index) => string(version, `versions[${index}]`));
+    const fallback = object.default === null ? null : string(object.default, 'default');
+    if (fallback !== null && !versions.includes(fallback)) {
+        throw new CliError('Manager returned a default PHP version it does not support', 5, 'invalid_manager_response');
+    }
+    return { versions, default: fallback };
 }
 
 export function parsePromotionAccepted(value: unknown): PromotionAccepted {
