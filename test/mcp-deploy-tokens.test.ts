@@ -54,7 +54,7 @@ test('request_deploy_token returns a link and code, never the token or the reque
         assert(!text.includes(SECRET));
         assert(!text.includes(REQUEST_CODE), 'the request code stays inside the server process');
         assert.equal(called.structuredContent?.userCode, 'ABCD-EFGH');
-        assert.match(String(called.structuredContent?.verificationUriComplete), /\/api-keys\/approve\?code=ABCD-EFGH$/);
+        assert.match(String(called.structuredContent?.verificationUriComplete), /\/cli\/api-key-requests\?code=ABCD-EFGH$/);
 
         const start = server.seen.find(entry => entry.url === '/identity/api-key-requests')!;
         assert.equal(start.body.delivery, 'display', 'the MCP asks for display delivery only');
