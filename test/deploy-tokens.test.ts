@@ -43,6 +43,8 @@ async function setup(responses: (call: Call) => Partial<ProcessResult> | undefin
     const opened: string[] = [];
     const dependencies = {
         env: { ZYNOHOSTING_CONFIG: file, ZYNOHOSTING_ACCESS_TOKEN: HUMAN_JWT } as NodeJS.ProcessEnv,
+        // Pinned so the browser flow is chosen on a headless Linux runner too (no DISPLAY there means the device flow).
+        platform: 'darwin' as NodeJS.Platform,
         write: (message: string) => output.push(message),
         emit: (event: Record<string, unknown>) => events.push(event),
         warn: (message: string) => warnings.push(message),
